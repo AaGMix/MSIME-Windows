@@ -184,7 +184,9 @@ $issPath = Join-Path $PSScriptRoot 'msime_setup.iss'
 $tsfResourcePath = Join-Path $repoRoot 'windows\src\IME\MetasequoiaIME.rc'
 $originalIss = [IO.File]::ReadAllBytes($issPath)
 $originalTsfResource = [IO.File]::ReadAllBytes($tsfResourcePath)
-$installerPath = Join-Path $PSScriptRoot "Output\MetasequoiaIME_Setup_v$Version.exe"
+$compiledInstallerPath = Join-Path $PSScriptRoot "Output\MetasequoiaIME_Setup_v$Version.exe"
+$installerSuffix = if ($IncludeSymbols) { '_with_pdb' } else { '' }
+$installerPath = Join-Path $PSScriptRoot "Output\MetasequoiaIME_Setup_v$Version$installerSuffix.exe"
 
 Push-Location $PSScriptRoot
 try {
@@ -224,8 +226,11 @@ try {
         -Certificate $certificate
 
     & (Join-Path $PSScriptRoot 'Compile-Installer.ps1') -IsccPath $IsccPath
-    if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
-        throw "Inno Setup 没有生成预期的安装包：$installerPath"
+    if (-not (Test-Path -LiteralPath $compiledInstallerPath -PathType Leaf)) {
+        throw "Inno Setup 没有生成预期的安装包：$compiledInstallerPath"
+    }
+    if ($IncludeSymbols) {
+        Move-Item -LiteralPath $compiledInstallerPath -Destination $installerPath -Force
     }
 
     Invoke-SimplySign -LiteralPath $installerPath -Certificate $certificate

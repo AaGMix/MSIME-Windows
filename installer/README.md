@@ -83,7 +83,8 @@ pwsh -File .\package-simplysign.ps1 1.2.3
 默认不把 PDB 放入安装包；需要与正式 CI 一致的符号包时加 `-IncludeSymbols`。如果 SimplySign
 同时暴露了多张有效的 Certum Code Signing 证书，脚本会列出它们并要求用
 `-CertificateThumbprint <指纹>` 明确选择。可用 `-Reconfigure` 强制重新配置 CMake，也可用
-`-IsccPath <路径>` 指定 Inno Setup 编译器。
+`-IsccPath <路径>` 指定 Inno Setup 编译器。带 PDB 的安装包会使用 `_with_pdb` 文件名后缀，
+例如 `Output\MetasequoiaIME_Setup_v1.2.3_with_pdb.exe`。
 
 也可以直接使用固定包含 PDB 的一键入口，不需要再写 `-IncludeSymbols`：
 
@@ -92,7 +93,7 @@ pwsh -File .\package-simplysign-symbols.ps1 1.2.3
 ```
 
 它是 `package-simplysign.ps1` 的薄包装，其他参数（例如 `-Reconfigure`、
-`-CertificateThumbprint` 和 `-IsccPath`）保持一致。
+`-CertificateThumbprint` 和 `-IsccPath`）保持一致，输出文件名固定带 `_with_pdb` 后缀。
 
 ### 三个入口的区别
 
