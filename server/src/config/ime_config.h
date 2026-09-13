@@ -18,6 +18,9 @@ struct VoiceInputConfig
     bool hotkey_hold_space_lock = true;
     // doubao | openai | siliconflow | groq
     std::string asr_provider = "doubao";
+    // Doubao console generation: api_key (new console, single API Key) | legacy (App ID + Access Token).
+    // Empty means "infer from asr_app_key", which keeps configs written before this setting working.
+    std::string doubao_auth_mode = "api_key";
     std::string asr_app_key;
     std::string asr_token;
     // Per-provider tokens so switching ASR/polish providers restores the matching key.

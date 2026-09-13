@@ -69,6 +69,22 @@ std::string NormalizeProviderId(std::string_view provider)
     return Lower(provider);
 }
 
+std::string NormalizeDoubaoAuthMode(std::string_view mode, std::string_view app_key)
+{
+    const std::string id = Lower(mode);
+    if (id == kDoubaoAuthLegacy || id == kDoubaoAuthApiKey)
+        return id;
+    // No usable setting: configs predating doubao_auth_mode only signalled the legacy console by
+    // carrying a real App ID. The shipped placeholder must not count, or a fresh install would send
+    // legacy headers with "<YOUR_OWN_DOUBAO_APP_ID>" and fail authentication against a new-console key.
+    return IsPlaceholderToken(app_key) ? std::string(kDoubaoAuthApiKey) : std::string(kDoubaoAuthLegacy);
+}
+
+bool UsesDoubaoLegacyAuth(const VoiceInputConfig &config)
+{
+    return NormalizeDoubaoAuthMode(config.doubao_auth_mode, config.asr_app_key) == kDoubaoAuthLegacy;
+}
+
 bool IsPlaceholderToken(std::string_view token)
 {
     if (token.empty())

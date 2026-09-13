@@ -429,6 +429,7 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
             {"hotkey_rctrl_ralt", voice.hotkey_rctrl_ralt},
             {"hotkey_hold_space_lock", voice.hotkey_hold_space_lock},
             {"asr_provider", voice.asr_provider},
+            {"doubao_auth_mode", voice.doubao_auth_mode},
             {"asr_app_key", voice.asr_app_key},
             {"asr_token", voice.asr_token},
             {"asr_tokens", voice.asr_tokens},

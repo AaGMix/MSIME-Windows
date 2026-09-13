@@ -153,6 +153,26 @@ struct ParsedResponse
     std::string text;
 };
 
+// bigmodel_async returns "result" as an object; bigmodel_nostream documents it as a list of
+// segments. Accept either shape so one parser covers both endpoints.
+std::string ExtractTranscript(const nlohmann::json &body)
+{
+    if (!body.is_object() || !body.contains("result"))
+        return {};
+    const auto &result = body["result"];
+    if (result.is_object())
+        return result.value("text", std::string());
+    if (!result.is_array())
+        return {};
+    std::string text;
+    for (const auto &segment : result)
+    {
+        if (segment.is_object())
+            text += segment.value("text", std::string());
+    }
+    return text;
+}
+
 ParsedResponse ParseResponse(const std::vector<std::uint8_t> &message)
 {
     ParsedResponse response;
@@ -201,14 +221,9 @@ ParsedResponse ParseResponse(const std::vector<std::uint8_t> &message)
     try
     {
         const auto json = nlohmann::json::parse(payload.begin(), payload.end());
-        if (json.contains("result") && json["result"].is_object())
-            response.text = json["result"].value("text", std::string());
-        else if (json.contains("payload_msg") && json["payload_msg"].is_object())
-        {
-            const auto &body = json["payload_msg"];
-            if (body.contains("result") && body["result"].is_object())
-                response.text = body["result"].value("text", std::string());
-        }
+        response.text = ExtractTranscript(json);
+        if (response.text.empty() && json.contains("payload_msg"))
+            response.text = ExtractTranscript(json["payload_msg"]);
     }
     catch (...)
     {
@@ -238,8 +253,9 @@ bool ReceiveMessage(HINTERNET websocket, std::vector<std::uint8_t> &message)
     }
 }
 
-HINTERNET ConnectWebSocket(const std::string &endpoint, const std::string &app_key, const std::string &access_key,
-                           const std::string &resource_id, WinHttpHandle &session, WinHttpHandle &connection)
+HINTERNET ConnectWebSocket(const std::string &endpoint, bool legacy_auth, const std::string &app_key,
+                           const std::string &access_key, const std::string &resource_id, WinHttpHandle &session,
+                           WinHttpHandle &connection)
 {
     std::string crackable_endpoint = endpoint;
     if (crackable_endpoint.rfind("wss://", 0) == 0)
@@ -271,16 +287,16 @@ HINTERNET ConnectWebSocket(const std::string &endpoint, const std::string &app_k
     if (!WinHttpSetOption(request.value, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, nullptr, 0))
         return nullptr;
     std::wstring headers;
-    if (app_key.empty())
-    {
-        // New console: one API Key.
-        headers = L"X-Api-Key: " + Utf8ToWide(access_key) + L"\r\n";
-    }
-    else
+    if (legacy_auth)
     {
         // Legacy console: App ID/App Key plus Access Token. Secret Key is not used.
         headers = L"X-Api-App-Key: " + Utf8ToWide(app_key) + L"\r\n" + L"X-Api-Access-Key: " + Utf8ToWide(access_key) +
                   L"\r\n";
+    }
+    else
+    {
+        // New console: one API Key, no App ID. Any stale app_key in the config is deliberately ignored.
+        headers = L"X-Api-Key: " + Utf8ToWide(access_key) + L"\r\n";
     }
     headers += L"X-Api-Resource-Id: " + Utf8ToWide(resource_id) + L"\r\n" + L"X-Api-Request-Id: " +
                Utf8ToWide(MakeRequestId()) + L"\r\n";
@@ -293,12 +309,13 @@ HINTERNET ConnectWebSocket(const std::string &endpoint, const std::string &app_k
 }
 } // namespace
 
-DoubaoAsrClient::DoubaoAsrClient(std::string endpoint, std::string app_key, std::string access_key,
+DoubaoAsrClient::DoubaoAsrClient(std::string endpoint, bool legacy_auth, std::string app_key, std::string access_key,
                                  std::string resource_id, bool enable_itn, bool enable_punc, bool enable_ddc,
                                  std::string boosting_table_id, TranscriptCallback transcript_callback)
-    : endpoint_(std::move(endpoint)), app_key_(std::move(app_key)), access_key_(std::move(access_key)),
-      resource_id_(std::move(resource_id)), enable_itn_(enable_itn), enable_punc_(enable_punc), enable_ddc_(enable_ddc),
-      boosting_table_id_(std::move(boosting_table_id)), transcript_callback_(std::move(transcript_callback))
+    : endpoint_(std::move(endpoint)), legacy_auth_(legacy_auth), app_key_(std::move(app_key)),
+      access_key_(std::move(access_key)), resource_id_(std::move(resource_id)), enable_itn_(enable_itn),
+      enable_punc_(enable_punc), enable_ddc_(enable_ddc), boosting_table_id_(std::move(boosting_table_id)),
+      transcript_callback_(std::move(transcript_callback))
 {
 }
 
@@ -371,10 +388,12 @@ void DoubaoAsrClient::Run()
 {
     WinHttpHandle session;
     WinHttpHandle connection;
-    WinHttpHandle websocket(ConnectWebSocket(endpoint_, app_key_, access_key_, resource_id_, session, connection));
+    WinHttpHandle websocket(
+        ConnectWebSocket(endpoint_, legacy_auth_, app_key_, access_key_, resource_id_, session, connection));
     if (!websocket.value)
     {
-        error_ = "无法连接豆包语音识别。请检查 App ID、Access Token 和接口地址。";
+        error_ = legacy_auth_ ? "无法连接豆包语音识别。请检查 App ID、Access Token 和接口地址。"
+                              : "无法连接豆包语音识别。请检查 API Key 和接口地址。";
         return;
     }
 

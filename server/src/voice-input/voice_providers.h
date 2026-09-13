@@ -15,8 +15,24 @@ struct PolishPromptPreset
     std::string_view prompt;
 };
 
+// Doubao console generations. The new console issues a single API Key sent as X-Api-Key;
+// the legacy console issues App ID + Access Token sent as X-Api-App-Key + X-Api-Access-Key.
+// Both are accepted by the same endpoints, so this only selects which headers to send.
+inline constexpr std::string_view kDoubaoAuthApiKey = "api_key";
+inline constexpr std::string_view kDoubaoAuthLegacy = "legacy";
+
+// Streaming endpoints. bigmodel_nostream streams audio up but returns whole-sentence
+// results; Volcengine documents it as more accurate and recommends it for IME input.
+inline constexpr std::string_view kDoubaoEndpointNostream =
+    "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream";
+inline constexpr std::string_view kDoubaoEndpointAsync = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
+
 bool IsDoubaoAsrProvider(std::string_view provider);
 std::string NormalizeProviderId(std::string_view provider);
+// Resolves an explicit doubao_auth_mode, falling back to inferring the legacy console from a
+// usable App ID when the key is absent (configs written before the setting existed).
+std::string NormalizeDoubaoAuthMode(std::string_view mode, std::string_view app_key);
+bool UsesDoubaoLegacyAuth(const VoiceInputConfig &config);
 bool IsPlaceholderToken(std::string_view token);
 std::string UsableToken(std::string_view token);
 std::string AsrTokenSlotKey(std::string_view provider);

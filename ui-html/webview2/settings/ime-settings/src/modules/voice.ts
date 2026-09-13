@@ -112,6 +112,7 @@ const POLISH_PROVIDERS = ['siliconflow', 'openai', 'deepseek', 'groq'] as const;
 let asrTokens: Record<string, string> = {};
 let polishTokens: Record<string, string> = {};
 let currentAsrProvider = 'doubao';
+let currentDoubaoAuthMode = 'api_key';
 let currentPolishProvider = 'siliconflow';
 let polishPresets: PolishPreset[] = FALLBACK_PRESETS.slice();
 let selectedPromptId = 'cleanup';
@@ -186,12 +187,35 @@ function switchPolishProvider(provider: string): void {
 
 function syncAsrProviderUi(provider: string): void {
   const doubao = provider === 'doubao';
-  setHidden('voiceAsrAppKeyField', !doubao);
+  setHidden('voiceDoubaoAuthModeField', !doubao);
+  // The new console issues a single API Key, so App ID only applies to the legacy console.
+  setHidden('voiceAsrAppKeyField', !doubao || currentDoubaoAuthMode !== 'legacy');
   setHidden('voiceAsrModelField', doubao);
   setHidden('voiceDoubaoOptions', !doubao);
   const model = document.getElementById('voiceAsrModel') as HTMLInputElement | null;
   const defaults = ASR_DEFAULTS[provider];
   if (model && defaults?.model) model.placeholder = defaults.model;
+  const tokenLabel = document.querySelector<HTMLElement>('label[for="voiceAsrToken"]');
+  if (tokenLabel) {
+    tokenLabel.textContent = doubao && currentDoubaoAuthMode !== 'legacy' ? 'API Key' : 'Access Token / API Key';
+  }
+}
+
+function switchDoubaoAuthMode(mode: string): void {
+  currentDoubaoAuthMode = mode === 'legacy' ? 'legacy' : 'api_key';
+  syncAsrProviderUi(currentAsrProvider);
+}
+
+// The endpoint stays a free-text field, so mirror whatever it holds back onto the picker.
+function syncDoubaoEndpointUi(): void {
+  const endpoint = (document.getElementById('voiceAsrEndpoint') as HTMLInputElement | null)?.value.trim();
+  if (endpoint) applyDropdownValue('voiceDoubaoEndpointBtn', 'voiceDoubaoEndpointMenu', endpoint);
+}
+
+function switchDoubaoEndpoint(endpoint: string): void {
+  const input = document.getElementById('voiceAsrEndpoint') as HTMLInputElement | null;
+  if (input) input.value = endpoint;
+  updateConfig('voice_input.asr_endpoint', endpoint);
 }
 
 function applyAsrProviderDefaults(provider: string): void {
@@ -341,10 +365,17 @@ export function setupVoiceInput(): void {
   setupDropdownMenu('voiceCommitModeBtn', 'voiceCommitModeMenu', 'changeVoiceCommitMode', true,
     'voice_input.commit_mode');
   setupDropdownMenu('voiceAsrProviderBtn', 'voiceAsrProviderMenu', 'changeVoiceAsrProvider', true);
+  setupDropdownMenu('voiceDoubaoAuthModeBtn', 'voiceDoubaoAuthModeMenu', 'changeVoiceDoubaoAuthMode', true,
+    'voice_input.doubao_auth_mode');
+  // The endpoint is written by switchDoubaoEndpoint so the free-text field stays in sync.
+  setupDropdownMenu('voiceDoubaoEndpointBtn', 'voiceDoubaoEndpointMenu', 'changeVoiceDoubaoEndpoint', true);
   setupDropdownMenu('voicePolishProviderBtn', 'voicePolishProviderMenu', 'changeVoicePolishProvider', true);
   setupDropdownMenu('voicePolishPromptBtn', 'voicePolishPromptMenu', 'changeVoicePolishPrompt', true,
     'voice_input.polish_prompt_id');
   listenMenuSelection('voiceAsrProviderMenu', switchAsrProvider);
+  listenMenuSelection('voiceDoubaoAuthModeMenu', switchDoubaoAuthMode);
+  listenMenuSelection('voiceDoubaoEndpointMenu', switchDoubaoEndpoint);
+  document.getElementById('voiceAsrEndpoint')?.addEventListener('change', syncDoubaoEndpointUi);
   listenMenuSelection('voicePolishProviderMenu', switchPolishProvider);
   listenMenuSelection('voicePolishPromptMenu', onPromptPresetSelected);
   document.getElementById('voicePolishPromptReset')?.addEventListener('click', () => {
@@ -435,6 +466,9 @@ export function applyVoiceConfig(config: Record<string, unknown>): void {
     if (typeof slot === 'string' && slot) asrTokens[provider] = slot;
   });
   applyDropdownValue('voiceAsrProviderBtn', 'voiceAsrProviderMenu', asrProvider);
+  currentDoubaoAuthMode = config.doubao_auth_mode === 'legacy' ? 'legacy' : 'api_key';
+  applyDropdownValue('voiceDoubaoAuthModeBtn', 'voiceDoubaoAuthModeMenu', currentDoubaoAuthMode);
+  syncDoubaoEndpointUi();
   syncAsrProviderUi(asrProvider);
   applyDropdownValue(
     'voicePolishProviderBtn',
