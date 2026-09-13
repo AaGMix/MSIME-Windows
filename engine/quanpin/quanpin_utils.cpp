@@ -189,7 +189,23 @@ bool looks_like_syllable_with_jianpin_tail(const std::string &pinyin)
         }
         pos += matched;
     }
-    return pos > 0 && pinyin.size() - pos <= 1;
+    if (pos == 0 || pinyin.size() - pos > 1)
+    {
+        return false;
+    }
+    if (pinyin.size() == pos)
+    {
+        // Fully reduced to legal syllables: a legitimate spelling, not a typo.
+        return true;
+    }
+    // Exactly one trailing letter. It reads as jianpin intent only when it is a
+    // plausible jianpin initial -- an initial consonant, as in "zheg" = zhe + g.
+    // A bare vowel can never begin a jianpin syllable, so a complete syllable
+    // followed by a lone vowel ("gau" = ga + u) is far more likely a
+    // transposition typo (gua) than jianpin intent; let it reach correction.
+    const char tail = pinyin.back();
+    const bool tail_is_vowel = tail == 'a' || tail == 'e' || tail == 'i' || tail == 'o' || tail == 'u' || tail == 'v';
+    return !tail_is_vowel;
 }
 
 SyllableGraph build_syllable_graph(const std::string &pinyin)
