@@ -1106,7 +1106,10 @@ HRESULT CMetasequoiaIME::_HandleCompositionPunctuation(TfEditCookie ec, _In_ ITf
         punctuationStr = _ResolveSmartPunctuation(wch, preceding);
     }
 
-    const bool pairedPunctuationEnabled = Global::PairedPunctuationEnabled.load(std::memory_order_relaxed);
+    // 宿主级排除优先于开关：被排除的宿主里既不补全右半边，也不做跨越式闭合，
+    // 标点回落到原有的左右轮换行为。
+    const bool pairedPunctuationEnabled = Global::PairedPunctuationEnabled.load(std::memory_order_relaxed) &&
+                                          !Global::IsPairedPunctuationExcludedProcess(Global::current_process_name);
     if (pairedPunctuationEnabled && !_IsComposing() && _candidateMode == CANDIDATE_NONE)
     {
         // A pair whose closing half is still waiting on the right of the caret
