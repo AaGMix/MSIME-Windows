@@ -751,6 +751,15 @@ void test_quanpin_autocorrect_switches_and_guard()
            "Pure-consonant jianpin must stay correctable at the predicate level.");
     expect(!quanpin::looks_like_syllable_with_jianpin_tail("bqng"),
            "3+ letter all-consonant strings stay correctable by design (no multi-letter jianpin).");
+    // A complete syllable plus a lone trailing VOWEL is not jianpin (no vowel is
+    // a jianpin initial); it reads as a transposition typo, so the guard must
+    // let it through to correction ("gau" = ga + u -> gua).
+    expect(!quanpin::looks_like_syllable_with_jianpin_tail("gau"),
+           "'gau' (ga + trailing vowel u) must stay correctable, not be read as jianpin.");
+    expect(!quanpin::looks_like_syllable_with_jianpin_tail("hau"),
+           "'hau' (ha + trailing vowel u) must stay correctable, not be read as jianpin.");
+    expect(quanpin::join_segments(quanpin::autocorrect_cut("gau", transposition_only)) == "gua",
+           "'gau' must correct to 'gua' via transposition once the guard lets it through.");
     expect(quanpin::join_segments(quanpin::autocorrect_cut("bqng", neighbor_only)) == "bang",
            "'bqng' -> bang must remain a valid neighbor correction.");
     expect(quanpin::autocorrect_cut("zheg", both).empty(),
