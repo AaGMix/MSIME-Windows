@@ -3,6 +3,7 @@
 #include "global/globals.h"
 #include "resource/resource.h"
 #include "settings/settings_launcher.h"
+#include "settings/api_credential_test.h"
 #include "settings/settings_splash.h"
 #include "settings/dictionary_manager.h"
 #include "settings/serial_task_queue.h"
@@ -931,6 +932,41 @@ void HandleWebMessage(HWND hwnd, ICoreWebView2WebMessageReceivedEventArgs *args)
                     completion();
                     if (!saved)
                         MessageBoxW(g_settings_hwnd, L"设置保存失败，请重试。", L"水杉输入法", MB_OK | MB_ICONWARNING);
+                };
+            });
+        }
+        else if (type == "apiCredentialTest")
+        {
+            const auto &data = value.at("data").as_object();
+            const std::string request_id = json::value_to<std::string>(data.at("requestId"));
+            ApiCredentialTest::Request request;
+            request.service = json::value_to<std::string>(data.at("service"));
+            for (const auto &[key, item] : data.at("config").as_object())
+            {
+                if (item.is_string())
+                    request.config.emplace(std::string(key), json::value_to<std::string>(item));
+            }
+            g_worker->Submit([request_id, request = std::move(request)]() -> SerialTaskQueue::Completion {
+                ApiCredentialTest::Result result;
+                try
+                {
+                    result = ApiCredentialTest::Run(request);
+                }
+                catch (...)
+                {
+                    result = {false, "测试失败：内部错误。"};
+                }
+                json::value response = {{"type", "apiCredentialTestResult"},
+                                        {"requestId", request_id},
+                                        {"ok", result.ok},
+                                        {"message", result.message},
+                                        {"protocolVersion", metasequoia::webview::Version}};
+                if (!metasequoia::webview::Validate(response, "server"))
+                    throw std::runtime_error("Invalid API credential test response");
+                auto message = string_to_wstring(json::serialize(response));
+                return [message = std::move(message)] {
+                    if (g_webview)
+                        g_webview->PostWebMessageAsJson(message.c_str());
                 };
             });
         }

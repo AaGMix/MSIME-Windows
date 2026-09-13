@@ -1,5 +1,6 @@
 import { applyDropdownValue, applyToggleState, setupDropdownMenu, setupToggleButton } from './shared';
 import { updateConfig } from './config-sync';
+import { setupCredentialTest } from './credential-test';
 
 type ProviderDefaults = { endpoint: string; model: string };
 type PolishPreset = { id: string; name: string; prompt: string };
@@ -113,6 +114,7 @@ let asrTokens: Record<string, string> = {};
 let polishTokens: Record<string, string> = {};
 let currentAsrProvider = 'doubao';
 let currentDoubaoAuthMode = 'api_key';
+let currentAsrResourceId = 'volc.seedasr.sauc.duration';
 let currentPolishProvider = 'siliconflow';
 let polishPresets: PolishPreset[] = FALLBACK_PRESETS.slice();
 let selectedPromptId = 'cleanup';
@@ -142,6 +144,33 @@ function setHidden(id: string, hidden: boolean): void {
 
 function tokenInput(id: string): HTMLInputElement | null {
   return document.getElementById(id) as HTMLInputElement | null;
+}
+
+function fieldValue(id: string): string {
+  return tokenInput(id)?.value.trim() ?? '';
+}
+
+function asrTestConfig(): Record<string, string> {
+  const defaults = ASR_DEFAULTS[currentAsrProvider];
+  return {
+    provider: currentAsrProvider,
+    authMode: currentDoubaoAuthMode,
+    appId: fieldValue('voiceAsrAppKey'),
+    token: fieldValue('voiceAsrToken'),
+    endpoint: fieldValue('voiceAsrEndpoint') || defaults?.endpoint || '',
+    model: fieldValue('voiceAsrModel') || defaults?.model || '',
+    resourceId: currentAsrResourceId
+  };
+}
+
+function polishTestConfig(): Record<string, string> {
+  const defaults = POLISH_DEFAULTS[currentPolishProvider];
+  return {
+    provider: currentPolishProvider,
+    token: fieldValue('voicePolishToken'),
+    endpoint: fieldValue('voicePolishEndpoint') || defaults?.endpoint || '',
+    model: fieldValue('voicePolishModel') || defaults?.model || ''
+  };
 }
 
 function readTokenMap(
@@ -326,6 +355,8 @@ export function setupVoiceInput(): void {
   setupToggleButton('voiceDoubaoEnableDdc', value => updateConfig('voice_input.doubao_enable_ddc', value));
   setupTokenVisibilityToggle('voiceAsrToken', 'voiceAsrTokenVisibility', 'Access Token / API Key');
   setupTokenVisibilityToggle('voicePolishToken', 'voicePolishTokenVisibility', 'API Token');
+  setupCredentialTest('voiceAsrTestButton', 'voiceAsrTestStatus', () => 'voice.asr', asrTestConfig);
+  setupCredentialTest('voicePolishTestButton', 'voicePolishTestStatus', () => 'voice.polish', polishTestConfig);
   setupToggleButton('voiceSoundEnabled', value => {
     applyToggleState('voiceStartSound', value);
     applyToggleState('voiceEndSound', value);
@@ -467,6 +498,9 @@ export function applyVoiceConfig(config: Record<string, unknown>): void {
   });
   applyDropdownValue('voiceAsrProviderBtn', 'voiceAsrProviderMenu', asrProvider);
   currentDoubaoAuthMode = config.doubao_auth_mode === 'legacy' ? 'legacy' : 'api_key';
+  currentAsrResourceId = typeof config.asr_resource_id === 'string'
+    ? config.asr_resource_id
+    : 'volc.seedasr.sauc.duration';
   applyDropdownValue('voiceDoubaoAuthModeBtn', 'voiceDoubaoAuthModeMenu', currentDoubaoAuthMode);
   syncDoubaoEndpointUi();
   syncAsrProviderUi(asrProvider);

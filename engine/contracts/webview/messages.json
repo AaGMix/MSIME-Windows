@@ -172,6 +172,42 @@
         "additionalProperties": false
       }
     },
+    "apiCredentialTest": {
+      "surfaces": [
+        "settings"
+      ],
+      "data": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string",
+            "enum": [
+              "translation.tencent",
+              "translation.niutrans",
+              "translation.custom",
+              "voice.asr",
+              "voice.polish",
+              "ai.assistant"
+            ]
+          },
+          "config": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "requestId",
+          "service",
+          "config"
+        ],
+        "additionalProperties": false
+      }
+    },
     "dictionaryRequest": {
       "surfaces": [
         "settings"
@@ -628,6 +664,25 @@
         ],
         "additionalProperties": false
       }
+    },
+    "apiCredentialTestResult": {
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "ok",
+        "message"
+      ],
+      "additionalProperties": false
     },
     "dictionaryResponse": {
       "properties": {

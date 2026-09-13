@@ -2,6 +2,7 @@ import { serializeHostMessage } from '../../../../shared/messages';
 import { applyDropdownValue, applyToggleState, setFuzzyRuleOptionsDisabled, setupDropdownMenu, setupToggleButton } from './shared';
 import { updateConfig } from './config-sync';
 import { updateCandidatePreviewHelpcode } from './appearance';
+import { setupCredentialTest } from './credential-test';
 
 type InputScheme = 'quanpin' | 'shuangpin' | 'wubi';
 type InputMode = 'chinese' | 'japanese';
@@ -96,6 +97,21 @@ function activeTranslationProvider(): TranslationProvider {
   if (niutransTranslationEnabled) return 'niutrans';
   if (customTranslationEnabled) return 'custom';
   return 'tencent';
+}
+
+function inputValue(id: string): string {
+  return (document.getElementById(id) as HTMLInputElement | null)?.value.trim() ?? '';
+}
+
+function translationTestConfig(): Record<string, string> {
+  const provider = activeTranslationProvider();
+  if (provider === 'niutrans') {
+    return { appId: inputValue('niutransAppId'), apiKey: inputValue('niutransApiKey') };
+  }
+  if (provider === 'custom') {
+    return { endpoint: inputValue('customTranslationEndpoint'), apiKey: inputValue('customTranslationApiKey') };
+  }
+  return { secretId: inputValue('tencentTmtSecretId'), secretKey: inputValue('tencentTmtSecretKey') };
 }
 
 function syncCandidateTranslationWarning(): void {
@@ -309,6 +325,12 @@ export function setupInput(): void {
   setupSecretVisibility('tencentTmtSecretKey', 'tencentTmtSecretKeyVisibility', 'SecretKey');
   setupSecretVisibility('niutransApiKey', 'niutransApiKeyVisibility', 'API Key');
   setupSecretVisibility('customTranslationApiKey', 'customTranslationApiKeyVisibility', 'API Key');
+  setupCredentialTest(
+    'candidateTranslationTestButton',
+    'candidateTranslationTestStatus',
+    () => `translation.${activeTranslationProvider()}`,
+    translationTestConfig
+  );
   setupDropdownMenu(
     'zhEnTriggerLengthBtn',
     'zhEnTriggerLengthMenu',

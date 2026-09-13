@@ -217,7 +217,7 @@
   margin: 8px 0;
 }
 .fallback-font-select {
-  width: 100px;
+  width: 150px;
 }
 .fallback-font-select > .font-search-input {
   flex: 1;
@@ -236,7 +236,7 @@
 }
 .fallback-font-add {
   margin-left: 8px;
-  width: 100px;
+  width: 50px;
   justify-content: center;
   padding-right: 12px;
 }

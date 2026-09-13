@@ -33,6 +33,9 @@ class DoubaoAsrClient
     std::string LastError() const;
     void Cancel();
 
+    static std::string TestCredentials(const std::string &endpoint, bool legacy_auth, const std::string &app_key,
+                                       const std::string &access_key, const std::string &resource_id);
+
   private:
     void Run();
 

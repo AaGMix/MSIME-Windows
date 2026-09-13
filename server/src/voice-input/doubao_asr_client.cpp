@@ -384,6 +384,18 @@ void DoubaoAsrClient::Cancel()
         worker_.join();
 }
 
+std::string DoubaoAsrClient::TestCredentials(const std::string &endpoint, bool legacy_auth, const std::string &app_key,
+                                             const std::string &access_key, const std::string &resource_id)
+{
+    DoubaoAsrClient client(endpoint, legacy_auth, app_key, access_key, resource_id, true, true, false, "");
+    if (!client.Start())
+        return "凭据或接口地址不完整。";
+    std::vector<float> silence(16000, 0.0f);
+    client.PushFloatSamples(silence.data(), silence.size());
+    client.Finish();
+    return client.LastError();
+}
+
 void DoubaoAsrClient::Run()
 {
     WinHttpHandle session;
