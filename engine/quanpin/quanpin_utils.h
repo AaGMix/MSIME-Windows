@@ -92,10 +92,24 @@ struct AutocorrectCutSegment
 struct AutocorrectCut
 {
     std::vector<AutocorrectCutSegment> segments;
+    // Edit cost of this cut, matching the k-best ranking key: number of
+    // corrected edges first, then the summed correction weights. Two cuts have
+    // the same cost iff both fields are equal. The query layer uses this to keep
+    // frequency disambiguation within a single cost tier -- a strictly cheaper
+    // reading (transposition gau -> gua, weight 10) must lead a costlier one
+    // (neighbor gau -> gai, weight 13) regardless of dictionary frequency.
+    size_t edge_count = 0;
+    int weight = 0;
 
     bool empty() const
     {
         return segments.empty();
+    }
+
+    // Same edit cost = same tier for frequency disambiguation.
+    bool same_cost_as(const AutocorrectCut &other) const
+    {
+        return edge_count == other.edge_count && weight == other.weight;
     }
 };
 

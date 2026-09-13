@@ -25,10 +25,18 @@ struct SeriesQueryResolution
     std::string segmentation;
     std::string cache_key;
     quanpin::Segments corrected_segments;
-    // cuts[1..] of the k-best correction search: parallel readings of the same
-    // typo kept for merge_alternative_segmentations; empty whenever the input
-    // has exactly one correction reading (phase-2 behaviour unchanged).
+    // Alternative k-best readings that share the primary cut's edit cost (same
+    // corrected-edge count and summed weight). These are genuinely ambiguous
+    // among equally-likely corrections, so they frequency-compete with the
+    // primary in merge_alternative_segmentations (the uanli -> {quan,cuan,...}
+    // disambiguation). Empty when the primary reading is unique at its cost.
     std::vector<quanpin::Segments> alternative_corrected_cuts;
+    // Readings that are strictly costlier than the primary (e.g. a neighbor
+    // reading gau -> gai, weight 13, when the primary is the transposition
+    // gau -> gua, weight 10). They stay visible but must never outrank the
+    // cheaper tier by dictionary frequency, so they are appended after the
+    // primary tier rather than merged into it.
+    std::vector<quanpin::Segments> costlier_corrected_cuts;
     bool corrected_input = false;
 };
 

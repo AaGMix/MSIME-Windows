@@ -113,10 +113,22 @@ SeriesQueryResolution resolve_series_query(const std::string &raw_input, const s
         result.corrected_input = !cuts.empty();
         if (result.corrected_input)
         {
-            result.corrected_segments = cut_syllables(cuts.front());
+            // cuts are ranked cheapest-first (edge count, then weight). The
+            // primary defines the cost tier: same-cost readings are ambiguous
+            // corrections that frequency-competes with it, costlier readings
+            // stay behind it (see the two vectors' contracts in the header).
+            const auto &primary_cut = cuts.front();
+            result.corrected_segments = cut_syllables(primary_cut);
             for (std::size_t i = 1; i < cuts.size(); ++i)
             {
-                result.alternative_corrected_cuts.push_back(cut_syllables(cuts[i]));
+                if (cuts[i].same_cost_as(primary_cut))
+                {
+                    result.alternative_corrected_cuts.push_back(cut_syllables(cuts[i]));
+                }
+                else
+                {
+                    result.costlier_corrected_cuts.push_back(cut_syllables(cuts[i]));
+                }
             }
         }
     }
@@ -214,6 +226,12 @@ std::vector<WordItem> QuanpinDictionary::query_exact(const std::string &raw_inpu
     {
         pinyin_alternative_segmentations_.push_back(quanpin::join_segments(alternative));
     }
+    // Costlier readings are still corrections, so they must be marked as such
+    // even though they rank below the primary tier (see the tail append below).
+    for (const auto &alternative : resolution.costlier_corrected_cuts)
+    {
+        pinyin_alternative_segmentations_.push_back(quanpin::join_segments(alternative));
+    }
 
     // Autocorrected results get their own cache slot so they never leak the
     // fallback tail into plain (correct) spellings sharing the same key.
@@ -229,6 +247,14 @@ std::vector<WordItem> QuanpinDictionary::query_exact(const std::string &raw_inpu
 
     std::vector<quanpin::Segments> alternative_segmentations;
     std::unordered_set<std::string> seen_segmentations = {pinyin_segmentation_};
+    // Keep costlier readings out of the frequency-competing merge tier; they are
+    // appended after it below so dictionary frequency never lifts a dearer
+    // correction above the cheaper primary. Seeding "seen" here also blocks the
+    // greedy correction paths from re-introducing them into the merge tier.
+    for (const auto &costlier : resolution.costlier_corrected_cuts)
+    {
+        seen_segmentations.insert(quanpin::join_segments(costlier));
+    }
     const auto append_alternative = [&](const quanpin::Segments &candidate) {
         const std::string key = quanpin::join_segments(candidate);
         if (!key.empty() && seen_segmentations.insert(key).second &&
@@ -284,6 +310,13 @@ std::vector<WordItem> QuanpinDictionary::query_exact(const std::string &raw_inpu
         {
             result = merge_alternative_segmentations(raw_input, pinyin_segmentation_, resolution.corrected_segments,
                                                      alternative_segmentations, std::move(result));
+        }
+        // Costlier readings sit below the whole primary cost tier: append them
+        // last so a high-frequency dearer correction (gau -> gai, weight 13)
+        // can never precede the cheaper one (gau -> gua, weight 10).
+        for (const auto &costlier : resolution.costlier_corrected_cuts)
+        {
+            append_unique_words(result, query_series(raw_input, quanpin::join_segments(costlier), costlier));
         }
     }
     else
