@@ -109,26 +109,80 @@ SeriesQueryResolution resolve_series_query(const std::string &raw_input, const s
                           !quanpin::looks_like_syllable_with_jianpin_tail(raw_input);
     if (eligible)
     {
-        const auto cuts = quanpin::autocorrect_cut_kbest(raw_input, autocorrect_types, kAutocorrectCutKBest);
-        result.corrected_input = !cuts.empty();
-        if (result.corrected_input)
-        {
-            // cuts are ranked cheapest-first (edge count, then weight). The
-            // primary defines the cost tier: same-cost readings are ambiguous
-            // corrections that frequency-competes with it, costlier readings
-            // stay behind it (see the two vectors' contracts in the header).
+        // Fill corrected_segments and the two alternative tiers from cost-ranked
+        // cuts, optionally appending a trailing jianpin segment (used by the
+        // head-correction + jianpin-tail composition below). cuts are ranked
+        // cheapest-first (edge count, then weight): the primary defines the cost
+        // tier, same-cost readings frequency-compete with it, costlier readings
+        // stay behind it (see the two vectors' contracts in the header).
+        const auto populate_from_cuts = [&](const std::vector<quanpin::AutocorrectCut> &cuts,
+                                            const std::string &jianpin_tail) {
+            const auto to_segments = [&](const quanpin::AutocorrectCut &cut) {
+                quanpin::Segments segs = cut_syllables(cut);
+                if (!jianpin_tail.empty())
+                {
+                    segs.push_back(jianpin_tail);
+                }
+                return segs;
+            };
             const auto &primary_cut = cuts.front();
-            result.corrected_segments = cut_syllables(primary_cut);
+            result.corrected_segments = to_segments(primary_cut);
             for (std::size_t i = 1; i < cuts.size(); ++i)
             {
                 if (cuts[i].same_cost_as(primary_cut))
                 {
-                    result.alternative_corrected_cuts.push_back(cut_syllables(cuts[i]));
+                    result.alternative_corrected_cuts.push_back(to_segments(cuts[i]));
                 }
                 else
                 {
-                    result.costlier_corrected_cuts.push_back(cut_syllables(cuts[i]));
+                    result.costlier_corrected_cuts.push_back(to_segments(cuts[i]));
                 }
+            }
+        };
+
+        const auto cuts = quanpin::autocorrect_cut_kbest(raw_input, autocorrect_types, kAutocorrectCutKBest);
+        if (!cuts.empty())
+        {
+            result.corrected_input = true;
+            populate_from_cuts(cuts, "");
+        }
+        else
+        {
+            // Compose a correction with a trailing jianpin tail. The k-best search
+            // only reaches the end when every segment is a complete syllable, so an
+            // input like "hauzh" (hau typo + zh jianpin) or "hauz" fails outright.
+            // Retry on the head with the trailing incomplete-syllable prefix removed;
+            // query_series then handles the tail exactly as it does for the correctly
+            // spelled "huazh" (hua + zh). Shortest tail first, so the correction
+            // explains as much of the input as possible.
+            //
+            // Neighbor corrections are excluded from the head: they carry the widest
+            // false-positive surface (largest table), and this path already relaxes
+            // the "whole input is a legal cut" constraint by trusting a speculative
+            // jianpin boundary. Stacking the two turns deletion-shaped input into
+            // noise (e.g. "shng" -> "sun" + "g" -> 笋干). Structural typos
+            // (transposition / deletion / insertion) are confident enough to compose.
+            const unsigned head_types = autocorrect_types & ~quanpin::kAutocorrectNeighbor;
+            const auto &prefixes = quanpin::prefix_pinyin_set();
+            const auto &intact = quanpin::intact_pinyin_set();
+            for (std::size_t tail_len = 1; head_types != 0 && tail_len <= 2 && tail_len < raw_input.size(); ++tail_len)
+            {
+                const std::string tail = raw_input.substr(raw_input.size() - tail_len);
+                // A jianpin tail is an incomplete syllable: a valid pinyin prefix
+                // that is not itself a complete syllable (e.g. "zh", "z", "h").
+                if (prefixes.count(tail) == 0 || intact.count(tail) != 0)
+                {
+                    continue;
+                }
+                const std::string head = raw_input.substr(0, raw_input.size() - tail_len);
+                const auto head_cuts = quanpin::autocorrect_cut_kbest(head, head_types, kAutocorrectCutKBest);
+                if (head_cuts.empty())
+                {
+                    continue;
+                }
+                result.corrected_input = true;
+                populate_from_cuts(head_cuts, tail);
+                break;
             }
         }
     }

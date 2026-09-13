@@ -933,6 +933,30 @@ void test_quanpin_autocorrect_switches_and_guard()
         (void)dictionary.query("zheg", "", both);
         expect(dictionary.get_pinyin_segmentation() != "zu'ge",
                "A jianpin-shaped input must not resolve through a corrected key.");
+
+        // Correction composes with a trailing jianpin tail: the k-best search
+        // fails on the whole input (the tail is an incomplete syllable), so the
+        // head is corrected and the tail carried through to the jianpin query.
+        (void)dictionary.query("hauzh", "", both);
+        expect(dictionary.get_pinyin_segmentation() == "hua'zh",
+               "A correctable head plus a jianpin tail must compose: hauzh -> hua'zh.");
+        (void)dictionary.query("hauz", "", both);
+        expect(dictionary.get_pinyin_segmentation() == "hua'z",
+               "The jianpin tail may be a single initial: hauz -> hua'z.");
+        // A correctly spelled head with the same jianpin tail is untouched.
+        (void)dictionary.query("huazh", "", both);
+        expect(dictionary.get_pinyin_segmentation() == "hua'zh",
+               "A correctly spelled jianpin input keeps its plain segmentation.");
+        // With autocorrection off, the mistyped head must not compose either.
+        (void)dictionary.query("hauzh", "", none);
+        expect(dictionary.get_pinyin_segmentation() != "hua'zh",
+               "With autocorrection off, hauzh must not resolve through a corrected key.");
+        // Neighbor corrections are excluded from the composition head: without
+        // that guard a deletion-shaped input becomes noise via a low-confidence
+        // neighbor head plus a speculative jianpin tail (shng -> sun'g).
+        (void)dictionary.query("shng", "sh'n'g", both);
+        expect(dictionary.get_pinyin_segmentation() != "sun'g",
+               "A neighbor head must not compose with a jianpin tail (shng must not become sun'g).");
     }
     std::error_code cleanup_ec;
     fs::remove(db_path, cleanup_ec);
