@@ -187,6 +187,8 @@ set(SRC_FILES
     "./src/resource/resource.rc"
     "./src/settings/settings_launcher.cpp"
     "./src/settings/settings_launcher.h"
+    "./src/settings/api_credential_test.cpp"
+    "./src/settings/api_credential_test.h"
     "./src/skin/candidate_skin_catalog.cpp"
     "./src/skin/candidate_skin_catalog.h"
     "./src/session/engine_input_session.cpp"
@@ -375,6 +377,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 set(SETTINGS_EXECUTABLE_NAME "MetasequoiaImeSettings")
 add_executable(${SETTINGS_EXECUTABLE_NAME} WIN32
     "./src/settings/settings_app.cpp"
+    "./src/settings/api_credential_test.cpp"
+    "./src/settings/api_credential_test.h"
     "./src/settings/settings_splash.cpp"
     "./src/settings/settings_splash.h"
     "./src/settings/settings_launcher.cpp"
@@ -387,6 +391,16 @@ add_executable(${SETTINGS_EXECUTABLE_NAME} WIN32
     "./src/settings/dictionary_validation.h"
     "./src/config/ime_config.cpp"
     "./src/config/ime_config.h"
+    "./src/cloud/custom_translation.cpp"
+    "./src/cloud/custom_translation.h"
+    "./src/cloud/niutrans_translation.cpp"
+    "./src/cloud/niutrans_translation.h"
+    "./src/cloud/tencent_tmt.cpp"
+    "./src/cloud/tencent_tmt.h"
+    "./src/cloud/translation_gloss.cpp"
+    "./src/cloud/translation_gloss.h"
+    "./src/voice-input/doubao_asr_client.cpp"
+    "./src/voice-input/doubao_asr_client.h"
     "./src/voice-input/voice_providers.cpp"
     "./src/voice-input/voice_providers.h"
     "./src/clipboard/clipboard_history.cpp"
@@ -409,6 +423,10 @@ target_link_libraries(${SETTINGS_EXECUTABLE_NAME} PRIVATE
     unofficial::sqlite3::sqlite3
     spdlog::spdlog
     cpp-pinyin::cpp-pinyin
+    CURL::libcurl
+    ZLIB::ZLIB
+    bcrypt
+    winhttp
     dwmapi
     dcomp
     d2d1

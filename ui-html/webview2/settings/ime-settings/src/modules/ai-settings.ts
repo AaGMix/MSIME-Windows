@@ -1,5 +1,6 @@
 import { applyDropdownValue, applyToggleState, setupDropdownMenu, setupToggleButton } from './shared';
 import { updateConfig } from './config-sync';
+import { setupCredentialTest } from './credential-test';
 
 type ProviderDefaults = { endpoint: string; model: string };
 
@@ -90,6 +91,17 @@ function switchPrompt(id: string): void {
 export function setupAiSettings(): void {
   setupToggleButton('aiEnabled', value => updateConfig('ai_assistant.enabled', value));
   setupTokenVisibilityToggle();
+  setupCredentialTest('aiCredentialTestButton', 'aiCredentialTestStatus', () => 'ai.assistant', () => {
+    const defaults = PROVIDER_DEFAULTS[currentProvider];
+    const value = (id: string) =>
+      (document.getElementById(id) as HTMLInputElement | null)?.value.trim() ?? '';
+    return {
+      provider: currentProvider,
+      token: value('aiToken'),
+      endpoint: value('aiEndpoint') || defaults?.endpoint || '',
+      model: value('aiModel') || defaults?.model || ''
+    };
+  });
   setupDropdownMenu('aiProviderBtn', 'aiProviderMenu', 'changeAiProvider', true);
   setupDropdownMenu('aiPromptSlotBtn', 'aiPromptSlotMenu', 'changeAiPromptSlot', true,
     'ai_assistant.prompt_id');

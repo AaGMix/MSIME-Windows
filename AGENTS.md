@@ -55,6 +55,21 @@ cmake -S ui      -B ui/build -A x64                # GUI 框架
 
 `scripts/format.sh` 覆盖 `server/`、`windows/`、`ui/`、`log/` 和 `engine/`（排除引擎里的第三方副本和生成的头文件），CI 用 `--check` 卡格式。
 
+**格式化会卡 CI，提交前务必自查，注意两个坑：**
+
+- **版本必须是 clang-format `18.1.8`**。`format.sh` 把版本钉死在这个值并从 PyPI 装，不同版本的默认排版不一致，用系统自带的 clang-format 本地过了、CI 仍可能红。`quality.yml` 的 `Check formatting` 步骤只跑 C++（`server`/`windows`/`ui`/`log`/`engine`），**不覆盖 `ui-html/` 的 TS/CSS**——那边只有 `pnpm build`（`tsc`）和 `pnpm test` 把关，没有 prettier/eslint 格式门禁。
+- **`format.sh` 在 Windows 上跑不起来**：它假设 venv 是 Unix 布局（`bin/pip`、`bin/clang-format`），而 Windows 的 `python -m venv` 生成的是 `Scripts/`，脚本会以 `No such file or directory` 退出。在 Windows 上改了 C++ 就直接调 18.1.8 的 clang-format 自查，绕过这个脚本：
+
+  ```powershell
+  # 确认版本是 18.1.8（可用 pip 装：pip install clang-format==18.1.8）
+  clang-format --version
+  # 对本次改动的 C++ 文件做等价于 CI 的 --check
+  clang-format --dry-run --Werror --style=file <改动的 .cpp/.h 文件...>
+  # 要就地修复去掉 --dry-run --Werror，加 -i
+  ```
+
+  `--style=file` 会就近找每个子树自己的 `.clang-format`（`server/`、`engine/voice/` 等各有一份，列宽等规则不同），别用固定 `--style` 覆盖。
+
 ## 产品输入清单
 
 `product-lock.json` 只记录仍来自仓外的东西，现在只剩一项：词库 Release 的 tag、source commit 和每个产物的 SHA256。**引擎、Server、页面、GUI 框架和安装器都不在清单里**——它们是本仓的目录，本仓的一个 commit 就已经把它们钉住了。辅助码在 `engine/helpcode/`，同理。
