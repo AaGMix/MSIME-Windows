@@ -1115,6 +1115,10 @@ void CCompositionProcessorEngine::SetIMEMode(_In_ ITfThreadMgr *pThreadMgr, TfCl
     {
         ReleaseConfiguredImeModeDefense();
         SetKeyboardOpenCompartment(pThreadMgr, tfClientId, bOpen);
+        if (_pTextService != nullptr)
+        {
+            _pTextService->_ClearPairedPunctuationStack();
+        }
     }
 }
 
@@ -1189,6 +1193,13 @@ void CCompositionProcessorEngine::SetPunctuationMode(_In_ ITfThreadMgr *pThreadM
     if (isOpen != bOpen)
     {
         CompartmentPunctuation._SetCompartmentBOOL(bOpen);
+        if (_pTextService != nullptr)
+        {
+            // The closing halves already on screen can no longer be stepped
+            // over by the key that produced them once the mode decides a
+            // different character for it.
+            _pTextService->_ClearPairedPunctuationStack();
+        }
     }
 }
 

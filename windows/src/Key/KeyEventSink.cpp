@@ -353,7 +353,7 @@ LRESULT CALLBACK CMetasequoiaIME::_BareShiftKeyboardHookProc(int code, WPARAM wP
 {
     CMetasequoiaIME *owner = _bareShiftHookOwner;
     if (code == HC_ACTION && owner != nullptr &&
-        static_cast<ULONG_PTR>(GetMessageExtraInfo()) != SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO)
+        !IsSelfGeneratedSendInputExtraInfo(static_cast<ULONG_PTR>(GetMessageExtraInfo())))
     {
         const UINT virtualKey = static_cast<UINT>(wParam);
         const bool isShift = IsShiftVk(virtualKey);
@@ -1383,7 +1383,7 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
     {
         return E_INVALIDARG;
     }
-    if (static_cast<ULONG_PTR>(GetMessageExtraInfo()) == SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO)
+    if (IsSelfGeneratedSendInputExtraInfo(static_cast<ULONG_PTR>(GetMessageExtraInfo())))
     {
         *pIsEaten = FALSE;
         return S_OK;
@@ -1940,7 +1940,7 @@ STDAPI CMetasequoiaIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lP
     {
         return E_INVALIDARG;
     }
-    if (static_cast<ULONG_PTR>(GetMessageExtraInfo()) == SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO)
+    if (IsSelfGeneratedSendInputExtraInfo(static_cast<ULONG_PTR>(GetMessageExtraInfo())))
     {
         *pIsEaten = FALSE;
         return S_OK;
@@ -2339,7 +2339,7 @@ STDAPI CMetasequoiaIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM 
     {
         return E_INVALIDARG;
     }
-    if (static_cast<ULONG_PTR>(GetMessageExtraInfo()) == SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO)
+    if (IsSelfGeneratedSendInputExtraInfo(static_cast<ULONG_PTR>(GetMessageExtraInfo())))
     {
         *pIsEaten = FALSE;
         return S_OK;
@@ -2419,7 +2419,7 @@ STDAPI CMetasequoiaIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPar
     {
         return E_INVALIDARG;
     }
-    if (static_cast<ULONG_PTR>(GetMessageExtraInfo()) == SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO)
+    if (IsSelfGeneratedSendInputExtraInfo(static_cast<ULONG_PTR>(GetMessageExtraInfo())))
     {
         *pIsEaten = FALSE;
         return S_OK;
