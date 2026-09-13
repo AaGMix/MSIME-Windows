@@ -839,6 +839,19 @@ void test_quanpin_autocorrect_switches_and_guard()
     const auto sahng_cuts = quanpin::autocorrect_cut_kbest("sahng", all);
     expect(sahng_cuts.size() >= 2 && cut_reading(sahng_cuts[0]) == "shang" && cut_reading(sahng_cuts[1]) == "sa'hang",
            "Within one edge the transposition weight (10) must outrank the split deletion (11).");
+    // Cost tiers must be reported on the cut so the query layer keeps frequency
+    // disambiguation inside one tier: gau -> gua (transposition, weight 10) is
+    // strictly cheaper than gau -> gai (neighbor, weight 13), so gua leads and
+    // the two land in different tiers regardless of dictionary frequency.
+    const auto gau_cuts = quanpin::autocorrect_cut_kbest("gau", both);
+    expect(gau_cuts.size() >= 2 && cut_reading(gau_cuts[0]) == "gua",
+           "'gau' must rank the transposition reading gua first.");
+    const auto gau_gai = std::find_if(gau_cuts.begin(), gau_cuts.end(),
+                                      [&](const quanpin::AutocorrectCut &cut) { return cut_reading(cut) == "gai"; });
+    expect(gau_gai != gau_cuts.end(), "'gau' must keep the neighbor reading gai as an alternative.");
+    expect(gau_gai != gau_cuts.end() && !gau_cuts.front().same_cost_as(*gau_gai) &&
+               gau_cuts.front().weight < gau_gai->weight,
+           "gua (weight 10) and gai (weight 13) must be reported as different cost tiers.");
     // Ambiguous insertion keys keep parallel readings (query-time
     // disambiguation): baio -> {biao via transposition, bai, bao via
     // insertion}. Same edge count, so weight orders them: 10 < 12.

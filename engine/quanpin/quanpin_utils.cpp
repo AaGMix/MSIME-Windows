@@ -770,6 +770,8 @@ std::vector<AutocorrectCut> autocorrect_cut_kbest(const std::string &pinyin, con
     for (const auto &hypothesis : best[length])
     {
         AutocorrectCut cut;
+        cut.edge_count = hypothesis.edge_count;
+        cut.weight = hypothesis.weight;
         size_t position = length;
         const SearchHypothesis *current = &hypothesis;
         while (current->prev_index != kNoPredecessor)
