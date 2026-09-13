@@ -680,6 +680,23 @@ const WCHAR *CCompositionProcessorEngine::GetPunctuation(WCHAR wch)
     return 0;
 }
 
+void CCompositionProcessorEngine::BalanceNestPairAfterAutoClose(WCHAR openingCode)
+{
+    for (UINT k = 0; k < _PunctuationNestPair.Count(); k++)
+    {
+        CPunctuationNestPair *pPuncNestPair = _PunctuationNestPair.GetAt(k);
+
+        if (pPuncNestPair->_punctuation_begin._Code == openingCode)
+        {
+            if (pPuncNestPair->_nestCount > 0)
+            {
+                --pPuncNestPair->_nestCount;
+            }
+            return;
+        }
+    }
+}
+
 BOOL CCompositionProcessorEngine::IsSmartAsciiPunctuationKey(WCHAR wch)
 {
     // Matches rime-ice punctuator/digit_separators: ",.:"

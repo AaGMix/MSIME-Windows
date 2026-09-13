@@ -1177,6 +1177,11 @@ HRESULT CMetasequoiaIME::_HandleCompositionPunctuation(TfEditCookie ec, _In_ ITf
     }
     if (pairedClosing != 0)
     {
+        // The closing half was emitted here, not by a closing keystroke, so the
+        // nest-pair depth that resolving the opening advanced would never be
+        // paid back (the '>' is consumed by step-over). Balance it now, or the
+        // next 《》 degrades into 〈〉.
+        pCompositionProcessorEngine->BalanceNestPairAfterAutoClose(wch);
         _InvalidateSmartPunctuationShadow();
         _PushPairedPunctuation(pairedOpening, pairedClosing);
         _QueuePairedPunctuationCaretMove(-1);
