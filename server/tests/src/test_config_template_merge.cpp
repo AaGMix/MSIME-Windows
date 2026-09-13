@@ -183,3 +183,76 @@ TEST_CASE(shipped_translation_settings_survive_template_upgrade)
         REQUIRE_EQ(merged["tencent_tmt"]["target_language"].value_or(std::string()), std::string("ja"));
     }
 }
+
+// 模板漂移：新模板意外漏掉了某个 token 键。用户填过的真 token 不能因此被丢弃，
+// 必须被重新写回它所属的分节。
+TEST_CASE(config_merge_reappends_real_credentials_absent_from_template)
+{
+    const std::string template_text = "[ai_assistant]\nprovider = \"deepseek\"\nmodel = \"v2\"\n";
+    const std::string user_text =
+        "[ai_assistant]\nprovider = \"deepseek\"\ntoken = \"sk-real-secret\"\ntoken_openai = \"sk-openai-real\"\n";
+    const auto merged = toml::parse(MergeConfigIntoTemplate(template_text, user_text, std::string()));
+    REQUIRE_EQ(merged["ai_assistant"]["token"].value_or(std::string()), std::string("sk-real-secret"));
+    REQUIRE_EQ(merged["ai_assistant"]["token_openai"].value_or(std::string()), std::string("sk-openai-real"));
+}
+
+// 用户从没填过这个 token（还是占位符）：升级不该把旧占位符粘住，让新模板的默认占位符生效即可。
+TEST_CASE(config_merge_keeps_new_placeholder_for_untouched_credential)
+{
+    const std::string template_text = "[ai_assistant]\ntoken = \"<YOUR_AI_TOKEN_DEEPSEEK>\"\n";
+    const std::string user_text = "[ai_assistant]\ntoken = \"<YOUR_OLD_TOKEN>\"\n";
+    const std::string baseline_text = "[ai_assistant]\ntoken = \"<YOUR_OLD_TOKEN>\"\n";
+    REQUIRE_EQ(MergeConfigIntoTemplate(template_text, user_text, baseline_text),
+               "[ai_assistant]\ntoken = \"<YOUR_AI_TOKEN_DEEPSEEK>\"\n");
+}
+
+// 抢救路径的核心：一份解析不过的 config.toml（这里结尾留了半行）仍能逐行捞回前面的真 token，
+// 重放到新模板上。SyncConfigWithInstalledTemplate 的 unparseable 分支走的正是这条 Merge。
+TEST_CASE(config_salvage_recovers_credentials_from_unparseable_config)
+{
+    const std::string corrupt = "[ai_assistant]\ntoken = \"sk-real-secret\"\nmodel = \"v1\"\nbroken = \n";
+    bool corrupt_parses = true;
+    try
+    {
+        (void)toml::parse(corrupt);
+    }
+    catch (const toml::parse_error &)
+    {
+        corrupt_parses = false;
+    }
+    REQUIRE(!corrupt_parses);
+
+    const std::string template_text = "[ai_assistant]\ntoken = \"<YOUR_AI_TOKEN_DEEPSEEK>\"\nmodel = \"v2\"\n";
+    const auto salvaged = toml::parse(MergeConfigIntoTemplate(template_text, corrupt, std::string()));
+    REQUIRE_EQ(salvaged["ai_assistant"]["token"].value_or(std::string()), std::string("sk-real-secret"));
+}
+
+// 读取安装器真正分发的模板，逐个分节确认所有凭证类键都能挺过升级——无论有没有基线。
+TEST_CASE(shipped_credentials_survive_template_upgrade)
+{
+    std::ifstream input(MSIME_DEFAULT_CONFIG_PATH, std::ios::binary);
+    REQUIRE(static_cast<bool>(input));
+    const std::string installed((std::istreambuf_iterator<char>(input)), {});
+
+    const std::string configured = "[tencent_tmt]\nsecret_id = \"real-secret-id\"\nsecret_key = \"real-secret-key\"\n"
+                                   "[custom_translation]\napi_key = \"real-api-key\"\n"
+                                   "[niutrans]\napp_id = \"real-app-id\"\napikey = \"real-apikey\"\n"
+                                   "[voice_input]\nasr_token = \"real-asr\"\nasr_token_doubao = \"real-doubao\"\n"
+                                   "polish_token_deepseek = \"real-polish\"\n"
+                                   "[ai_assistant]\ntoken = \"real-ai\"\ntoken_openai = \"real-ai-openai\"\n";
+
+    for (const auto &baseline : {std::string(), installed})
+    {
+        const auto merged = toml::parse(MergeConfigIntoTemplate(installed, configured, baseline));
+        REQUIRE_EQ(merged["tencent_tmt"]["secret_id"].value_or(std::string()), std::string("real-secret-id"));
+        REQUIRE_EQ(merged["tencent_tmt"]["secret_key"].value_or(std::string()), std::string("real-secret-key"));
+        REQUIRE_EQ(merged["custom_translation"]["api_key"].value_or(std::string()), std::string("real-api-key"));
+        REQUIRE_EQ(merged["niutrans"]["app_id"].value_or(std::string()), std::string("real-app-id"));
+        REQUIRE_EQ(merged["niutrans"]["apikey"].value_or(std::string()), std::string("real-apikey"));
+        REQUIRE_EQ(merged["voice_input"]["asr_token"].value_or(std::string()), std::string("real-asr"));
+        REQUIRE_EQ(merged["voice_input"]["asr_token_doubao"].value_or(std::string()), std::string("real-doubao"));
+        REQUIRE_EQ(merged["voice_input"]["polish_token_deepseek"].value_or(std::string()), std::string("real-polish"));
+        REQUIRE_EQ(merged["ai_assistant"]["token"].value_or(std::string()), std::string("real-ai"));
+        REQUIRE_EQ(merged["ai_assistant"]["token_openai"].value_or(std::string()), std::string("real-ai-openai"));
+    }
+}

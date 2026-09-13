@@ -623,6 +623,66 @@ std::map<std::string, std::string> ParseTomlAssignments(const std::string &text)
     return values;
 }
 
+// 凭证类键：token / api_key / secret 等，以及每个提供商单独保存的 token 槽位
+// （token_<provider> / asr_token[_<provider>] / polish_token[_<provider>]）。这类值一旦丢失，
+// 用户就得重新去各家控制台申请再填一遍，是升级里代价最高的配置，所以单独兜底：不管模板怎么漂移、
+// 文件是否损坏，只要用户填过真值就一条都不能丢。
+bool IsCredentialKey(const std::string &key)
+{
+    static const std::set<std::string> exact = {"token",  "api_key",     "apikey",    "secret_id",   "secret_key",
+                                                "app_id", "asr_app_key", "asr_token", "polish_token"};
+    if (exact.count(key) != 0)
+    {
+        return true;
+    }
+    return key.rfind("token_", 0) == 0 || key.rfind("asr_token_", 0) == 0 || key.rfind("polish_token_", 0) == 0;
+}
+
+// 剥掉单行 TOML 字符串两侧的引号。凭证值从不跨行，够用了。
+std::string UnquoteTomlScalar(const std::string &value)
+{
+    if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') && value.back() == value.front())
+    {
+        return value.substr(1, value.size() - 2);
+    }
+    return value;
+}
+
+// 用户是否真的填过这个凭证：区别于出厂占位符（<YOUR_...> / FAKESECRET_ / 空）。assignment_id 为
+// MakeTomlAssignmentId 生成的 "section\x01key"。
+bool AssignmentHoldsRealCredential(const std::string &assignment_id, const std::string &raw_value)
+{
+    const size_t separator = assignment_id.find('\x01');
+    const std::string key = separator == std::string::npos ? assignment_id : assignment_id.substr(separator + 1);
+    if (!IsCredentialKey(key))
+    {
+        return false;
+    }
+    return !VoiceInput::IsPlaceholderToken(UnquoteTomlScalar(raw_value));
+}
+
+// 把用户填过真值的凭证逐条重放到 text 上：有键改值，无键则在其分节里插入。幂等——重放已经等于
+// 目标值的凭证不改变结果。既给正常合并兜底（新模板漏掉某个凭证键的模板漂移），也给损坏配置的抢救
+// 路径兜底（整体合并失败、只能回退到出厂模板时，仍保住 token）。
+std::string ReapplyRealCredentials(std::string text, const std::map<std::string, std::string> &user_values)
+{
+    for (const auto &entry : user_values)
+    {
+        if (!AssignmentHoldsRealCredential(entry.first, entry.second))
+        {
+            continue;
+        }
+        const size_t separator = entry.first.find('\x01');
+        const std::string section = separator == std::string::npos ? std::string() : entry.first.substr(0, separator);
+        const std::string key = separator == std::string::npos ? entry.first : entry.first.substr(separator + 1);
+        if (!ReplaceTomlValuePreservingFormatting(text, section, key, entry.second))
+        {
+            InsertTomlValuePreservingFormatting(text, section, key, entry.second);
+        }
+    }
+    return text;
+}
+
 // 以新模板为骨架（注释、分节顺序、新增项都来自新版），只把用户改过的值填回去。
 std::string MergeTomlIntoTemplate(const std::string &template_text, std::map<std::string, std::string> user_values,
                                   const std::map<std::string, std::string> &baseline_values)
@@ -666,7 +726,7 @@ std::string MergeTomlIntoTemplate(const std::string &template_text, std::map<std
     {
         merged.replace(patch->begin, patch->end - patch->begin, patch->value);
     }
-    return merged;
+    return ReapplyRealCredentials(std::move(merged), user_values);
 }
 
 std::filesystem::path AcpDecodedUtf8Path(const std::filesystem::path &wide_path)
@@ -735,6 +795,17 @@ void RecoverLegacyAcpMangledConfig()
     }
 }
 
+// 把一份解析不过的 config.toml 原样留证到 config.toml.corrupt-<时间戳>，方便事后排查到底是什么
+// 字符破坏了 TOML，也给用户一个手工找回的机会。备份失败不影响后续流程。
+void BackupCorruptConfig(const std::string &corrupt_text)
+{
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    const std::wstring name = fmt::format(L"config.toml.corrupt-{:04}{:02}{:02}-{:02}{:02}{:02}", now.wYear, now.wMonth,
+                                          now.wDay, now.wHour, now.wMinute, now.wSecond);
+    WriteFileBytes(g_config_path.parent_path() / name, corrupt_text);
+}
+
 void SyncConfigWithInstalledTemplate()
 {
     const std::filesystem::path data_dir = g_config_path.parent_path();
@@ -761,7 +832,32 @@ void SyncConfigWithInstalledTemplate()
     {
         if (config_exists && config_size > 0 && user_text.empty())
         {
+            // 文件在、非空，却读出空串：多半是读取失败而非真的空，绝不能拿模板覆盖。
             return;
+        }
+        // 走到这里：config.toml 存在、非空，但解析不过（上次写入被打断留下半截文件，或某个值里混入了
+        // 破坏 TOML 的字符）。旧逻辑直接拿模板覆盖，等于把用户全部配置——尤其是 API token——清零，
+        // 这正是「更新后 token 又要重填」的根因。改为：先备份坏文件留证，再逐行抢救出可识别的赋值重放
+        // 到新模板上；即便整体抢救结果仍解析不过，也只回退到「模板 + 重放凭证」，保住最难重填的 token。
+        if (config_exists && config_size > 0)
+        {
+            BackupCorruptConfig(user_text);
+            const std::map<std::string, std::string> salvaged_values = ParseTomlAssignments(user_text);
+            const std::string salvaged = MergeTomlIntoTemplate(template_text, salvaged_values, {});
+            if (TomlTextIsParseable(salvaged))
+            {
+                if (WriteFileTextAtomically(g_config_path, salvaged))
+                {
+                    WriteFileTextAtomically(baseline_path, template_text);
+                }
+                return;
+            }
+            const std::string fallback = ReapplyRealCredentials(template_text, salvaged_values);
+            if (TomlTextIsParseable(fallback) && WriteFileTextAtomically(g_config_path, fallback))
+            {
+                WriteFileTextAtomically(baseline_path, template_text);
+                return;
+            }
         }
         if (WriteFileTextAtomically(g_config_path, template_text))
         {
