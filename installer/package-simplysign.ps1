@@ -52,6 +52,31 @@ function Find-SignTool {
     return $candidate
 }
 
+function Test-CodeSigningEku {
+    param([Parameter(Mandatory)]$Certificate)
+
+    foreach ($usage in @($Certificate.EnhancedKeyUsageList)) {
+        # PowerShell 7 exposes System.Security.Cryptography.Oid objects here (Value), while Windows
+        # PowerShell may expose EnhancedKeyUsageRepresentation objects (ObjectId). Support both so
+        # certificate discovery does not fail merely because the script host changed.
+        $valueProperty = $usage.PSObject.Properties['Value']
+        if ($valueProperty -and $valueProperty.Value -eq $CodeSigningEku) {
+            return $true
+        }
+
+        $objectIdProperty = $usage.PSObject.Properties['ObjectId']
+        if ($objectIdProperty) {
+            $objectId = $objectIdProperty.Value
+            if (($objectId -is [System.Security.Cryptography.Oid] -and
+                    $objectId.Value -eq $CodeSigningEku) -or
+                $objectId -eq $CodeSigningEku) {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
 function Get-SimplySignCertificate {
     param([string]$Thumbprint)
 
@@ -63,7 +88,7 @@ function Get-SimplySignCertificate {
                 $_.HasPrivateKey -and
                 $_.NotBefore -le $now -and
                 $_.NotAfter -gt $now -and
-                ($_.EnhancedKeyUsageList.ObjectId -contains $CodeSigningEku) -and
+                (Test-CodeSigningEku -Certificate $_) -and
                 $_.Subject -ne $LocalTestCertificateSubject -and
                 $_.Issuer -match '(?i)Certum'
             }
