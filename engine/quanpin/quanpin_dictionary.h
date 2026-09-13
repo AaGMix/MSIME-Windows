@@ -15,6 +15,23 @@
 #include <vector>
 #include <optional>
 
+// Result of the autocorrect k-best search for one query: the primary corrected
+// segmentation plus the ranked alternative readings. Purely a function of
+// (raw_input, segmentation, autocorrect_types) and the static correction tables
+// -- independent of dictionary contents -- so it is safe to memoize without
+// tying it to the database-version invalidation the other caches use.
+struct SeriesQueryResolution
+{
+    std::string segmentation;
+    std::string cache_key;
+    quanpin::Segments corrected_segments;
+    // cuts[1..] of the k-best correction search: parallel readings of the same
+    // typo kept for merge_alternative_segmentations; empty whenever the input
+    // has exactly one correction reading (phase-2 behaviour unchanged).
+    std::vector<quanpin::Segments> alternative_corrected_cuts;
+    bool corrected_input = false;
+};
+
 class QuanpinDictionary
 {
   public:
@@ -106,6 +123,11 @@ class QuanpinDictionary
     CircularBuffer<std::string, std::vector<WordItem>> cache_;
     CircularBuffer<std::string, std::vector<WordItem>> series_cache_;
     CircularBuffer<std::string, quanpin::Segments> segmentation_cache_;
+    // Memoizes the k-best correction search keyed on its full input tuple so a
+    // repeated keystroke (backspace / re-type) never re-runs the k=9 beam. Not
+    // cleared with the dictionary caches: its value depends only on the input
+    // and the static correction tables, never on dictionary rows.
+    CircularBuffer<std::string, SeriesQueryResolution> resolution_cache_;
     sqlite3 *db_ = nullptr;
     sqlite3_int64 data_version_ = -1;
     metasequoia::RuntimePaths paths_;

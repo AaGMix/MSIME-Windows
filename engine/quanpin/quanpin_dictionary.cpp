@@ -81,18 +81,6 @@ std::string fold_autocorrect_letters(const std::string &text)
 // k=9 lifts R@1/R@3 across the deletion and mixed models with no p95 change.
 constexpr std::size_t kAutocorrectCutKBest = 9;
 
-struct SeriesQueryResolution
-{
-    std::string segmentation;
-    std::string cache_key;
-    quanpin::Segments corrected_segments;
-    // cuts[1..] of the k-best correction search: parallel readings of the same
-    // typo kept for merge_alternative_segmentations; empty whenever the input
-    // has exactly one correction reading (phase-2 behaviour unchanged).
-    std::vector<quanpin::Segments> alternative_corrected_cuts;
-    bool corrected_input = false;
-};
-
 quanpin::Segments cut_syllables(const quanpin::AutocorrectCut &cut)
 {
     quanpin::Segments syllables;
@@ -154,7 +142,7 @@ std::string escape_sql_text(std::string text)
 } // namespace
 
 QuanpinDictionary::QuanpinDictionary(std::string db_path, metasequoia::RuntimePaths paths)
-    : cache_(128), series_cache_(128), segmentation_cache_(128), paths_(std::move(paths)),
+    : cache_(128), series_cache_(128), segmentation_cache_(128), resolution_cache_(128), paths_(std::move(paths)),
       decoder_(paths_.resource(metasequoia::assets::pinyin_model),
                paths_.user(metasequoia::assets::pinyin_user_dictionary)),
       db_path_(db_path.empty() ? metasequoia::path_to_utf8(paths_.dictionary(metasequoia::assets::main_dictionary))
@@ -204,7 +192,20 @@ std::vector<WordItem> QuanpinDictionary::query_exact(const std::string &raw_inpu
     // segmentation becomes the primary key so that selection and weight
     // updates land on the right dictionary entries, and the original
     // (garbage-leaning) candidates stay behind as a fallback tail.
-    const auto resolution = resolve_series_query(raw_input, segmentation, segments, autocorrect_types);
+    // Memoize the k-best correction search: it is the expensive part of every
+    // keystroke, yet a pure function of this input tuple, so a re-typed or
+    // backspaced prefix should reuse it instead of re-running the k=9 beam.
+    const std::string resolution_key = std::to_string(autocorrect_types) + '\x1f' + raw_input + '\x1f' + segmentation;
+    SeriesQueryResolution resolution;
+    if (const auto cached_resolution = resolution_cache_.get(resolution_key))
+    {
+        resolution = cached_resolution.value();
+    }
+    else
+    {
+        resolution = resolve_series_query(raw_input, segmentation, segments, autocorrect_types);
+        resolution_cache_.insert(resolution_key, resolution);
+    }
     pinyin_segmentation_ = resolution.segmentation;
     // The alternative readings must be published even on the cache-hit path:
     // mark_autocorrect_candidates runs after every query, cached or not.
@@ -718,8 +719,14 @@ void QuanpinDictionary::mark_autocorrect_candidates(std::vector<WordItem> &candi
             continue;
         }
         const std::string item_letters = fold_autocorrect_letters(item.pinyin);
+        // Match only against readings that actually differ from the typed
+        // letters. An alternative cut can fold back to exactly raw_letters
+        // (e.g. a v/u-normalizing fold that erases the corrected difference);
+        // matching that set would stamp corrected_from onto a candidate the
+        // user spelled correctly. The all-equal gate above only guards the case
+        // where EVERY set equals raw_letters, so this per-set filter is needed.
         if (std::any_of(corrected_letter_sets.begin(), corrected_letter_sets.end(),
-                        [&](const std::string &letters) { return item_letters == letters; }))
+                        [&](const std::string &letters) { return letters != raw_letters && item_letters == letters; }))
         {
             item.corrected_from = raw_letters;
         }
