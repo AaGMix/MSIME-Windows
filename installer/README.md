@@ -64,6 +64,36 @@ pwsh -File .\test.ps1
 
 也可以按上面的顺序逐步运行。
 
+## SimplySign 真签名打包
+
+需要在本机用 Certum SimplySign 中的真实 Code Signing 证书制作可分发安装包时，先启动
+SimplySign Desktop、用手机 OTP 连接虚拟卡，然后执行：
+
+```powershell
+cd path\to\MSIME-Windows\installer
+pwsh -File .\package-simplysign.ps1 1.2.3
+```
+
+命令行版本会同时写入本轮 TSF DLL 的版本资源和安装包元数据（脚本结束后恢复源码模板）。脚本会
+增量编译 TSF、Server 和设置页，制作完整包，用 `http://time.certum.pl` 的 RFC 3161 时间戳签名
+`MetasequoiaImeServer.exe`（使 `uiAccess=true` 生效），编译 Inno Setup 安装包，再签名并校验
+最终安装包。产物位于 `Output\MetasequoiaIME_Setup_v1.2.3.exe`；脚本只产出文件，不会自动启动
+安装程序。
+
+默认不把 PDB 放入安装包；需要与正式 CI 一致的符号包时加 `-IncludeSymbols`。如果 SimplySign
+同时暴露了多张有效的 Certum Code Signing 证书，脚本会列出它们并要求用
+`-CertificateThumbprint <指纹>` 明确选择。可用 `-Reconfigure` 强制重新配置 CMake，也可用
+`-IsccPath <路径>` 指定 Inno Setup 编译器。
+
+也可以直接使用固定包含 PDB 的一键入口，不需要再写 `-IncludeSymbols`：
+
+```powershell
+pwsh -File .\package-simplysign-symbols.ps1 1.2.3
+```
+
+它是 `package-simplysign.ps1` 的薄包装，其他参数（例如 `-Reconfigure`、
+`-CertificateThumbprint` 和 `-IsccPath`）保持一致。
+
 ### 三个入口的区别
 
 三个入口都是 `Invoke-LocalTest.ps1` 的薄包装，只是开关不同：

@@ -7,8 +7,9 @@ release-please's generic updater. The release workflow runs this before configur
 
 The fourth field of the quad stays 0; only MAJOR.MINOR.PATCH are release-managed.
 
-    python scripts/apply_version.py            # stamp from version.txt
-    python scripts/apply_version.py --check    # exit 1 if the resource is out of date
+    python scripts/apply_version.py                    # stamp from version.txt
+    python scripts/apply_version.py --check            # exit 1 if the resource is out of date
+    python scripts/apply_version.py --version 1.2.3    # stamp an explicit local package version
 """
 
 from __future__ import annotations
@@ -33,13 +34,18 @@ SUBSTITUTIONS = (
 )
 
 
-def read_version() -> tuple[str, str, str]:
-    if not VERSION_FILE.is_file():
-        raise SystemExit(f"error: {VERSION_FILE} is missing")
-    raw = VERSION_FILE.read_text(encoding="utf-8").strip()
+def read_version(explicit_version: str | None = None) -> tuple[str, str, str]:
+    if explicit_version is None:
+        if not VERSION_FILE.is_file():
+            raise SystemExit(f"error: {VERSION_FILE} is missing")
+        raw = VERSION_FILE.read_text(encoding="utf-8").strip()
+        source = "version.txt"
+    else:
+        raw = explicit_version.strip()
+        source = "--version"
     match = SEMVER.match(raw)
     if not match:
-        raise SystemExit(f"error: version.txt must hold MAJOR.MINOR.PATCH, got {raw!r}")
+        raise SystemExit(f"error: {source} must hold MAJOR.MINOR.PATCH, got {raw!r}")
     return match.groups()
 
 
@@ -75,9 +81,15 @@ def write_resource(text: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check", action="store_true", help="report drift instead of rewriting the resource")
+    parser.add_argument(
+        "--version",
+        metavar="MAJOR.MINOR.PATCH",
+        help="use an explicit version instead of reading version.txt (for local packaging)",
+    )
     args = parser.parse_args()
 
-    version = read_version()
+    version = read_version(args.version)
+    version_source = "--version" if args.version is not None else "version.txt"
     quad, dotted = render(version)
 
     original = read_resource()
@@ -85,9 +97,9 @@ def main() -> int:
 
     if args.check:
         if updated != original:
-            print(f"{RESOURCE_FILE.relative_to(REPO_ROOT)} does not match version.txt ({dotted})")
+            print(f"{RESOURCE_FILE.relative_to(REPO_ROOT)} does not match {version_source} ({dotted})")
             return 1
-        print(f"{RESOURCE_FILE.relative_to(REPO_ROOT)} matches version.txt ({dotted})")
+        print(f"{RESOURCE_FILE.relative_to(REPO_ROOT)} matches {version_source} ({dotted})")
         return 0
 
     if updated == original:
