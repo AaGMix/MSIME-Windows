@@ -1578,6 +1578,10 @@ STDAPI CMetasequoiaIME::Deactivate()
         KillTimer(_msgWndHandle, TIMER_REFRESH_LANG_BAR_THEME);
         KillTimer(_msgWndHandle, TIMER_DEFERRED_FOCUS_LOSS);
         KillTimer(_msgWndHandle, TIMER_FOCUS_STATUS_RESEND);
+        // 不同于上面几个：成对标点的重试定时器还带着 _pairedCaretRetryTimerActive
+        // 这一份状态，只 KillTimer 会让标志停在 true，消息窗口重建后就再也装不上
+        // 定时器了，所以走完整的取消路径。
+        _CancelPairedPunctuationCaretMove();
         DestroyWindow(_msgWndHandle);
         if (Global::msgWndHandle == _msgWndHandle)
         {
@@ -2339,6 +2343,13 @@ LRESULT CALLBACK CMetasequoiaIME_WindowProc(HWND hWnd, UINT message, WPARAM wPar
             SendCurrentImeStatusSnapshot(pIME, true);
             break;
         }
+        if (wParam == TIMER_PAIRED_PUNCTUATION_CARET)
+        {
+            // _RunPairedPunctuationCaretMove kills this timer itself once the
+            // modifier chord is released, the deadline passes, or focus moves.
+            pIME->_RunPairedPunctuationCaretMove();
+            break;
+        }
         if (wParam == TIMER_CONNECT_ALL_NAMEDPIPE)
         {
             // 如果用户已经切换走了，就不用继续重试
@@ -2705,21 +2716,17 @@ LRESULT CALLBACK CMetasequoiaIME_WindowProc(HWND hWnd, UINT message, WPARAM wPar
         SendCurrentImeStatusSnapshot(pIME);
         break;
     }
-    case WM_PairedPunctuationMoveLeft: {
+    case WM_PairedPunctuationCaretMove: {
         const uint64_t focusToken = static_cast<uint64_t>(static_cast<uint32_t>(wParam)) |
                                     (static_cast<uint64_t>(static_cast<uint32_t>(lParam)) << 32);
-        if (focusToken == 0 || !pIME->_IsFocusSessionCurrent(focusToken))
+        if (focusToken == 0 || focusToken != pIME->_pendingPairedCaretFocusToken)
         {
+            // A newer request already superseded this one, or the move was
+            // cancelled between the post and the dispatch.
             break;
         }
 
-        INPUT inputs[2] = {};
-        inputs[0].type = INPUT_KEYBOARD;
-        inputs[0].ki.wVk = VK_LEFT;
-        inputs[1] = inputs[0];
-        inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
-
-        SendInput(ARRAYSIZE(inputs), inputs, sizeof(INPUT));
+        pIME->_RunPairedPunctuationCaretMove();
         break;
     }
     case WM_ReplaceRepeatedSmartPunctuation: {

@@ -17,32 +17,25 @@ namespace
 {
 thread_local std::wstring g_toggleImeFallbackBuffer;
 
-WCHAR GetPairedPunctuationClosing(const std::wstring &text)
+// The closing half the pressed key would step over, or 0 when the key cannot
+// close a tracked pair. Quotes are keyed symmetrically: '"' resolves to either
+// half depending on the legacy left/right toggle, so the resolved character
+// says nothing about intent and the key itself has to answer.
+WCHAR GetPairedPunctuationStepOverCandidate(WCHAR wch, const std::wstring &resolved)
 {
-    if (text.empty())
+    if (resolved.size() != 1)
     {
         return 0;
     }
-
-    switch (text.back())
+    if (wch == L'"')
     {
-    case L'“':
         return L'”';
-    case L'‘':
-        return L'’';
-    case L'【':
-        return L'】';
-    case L'{':
-        return L'}';
-    case L'《':
-        return L'》';
-    case L'〈':
-        return L'〉';
-    case L'（':
-        return L'）';
-    default:
-        return 0;
     }
+    if (wch == L'\'')
+    {
+        return L'’';
+    }
+    return resolved[0];
 }
 
 DWORD_PTR MapRawCaretToPreedit(const CStringRange &raw, DWORD_PTR rawCaret, const std::wstring &preedit,
@@ -1114,6 +1107,19 @@ HRESULT CMetasequoiaIME::_HandleCompositionPunctuation(TfEditCookie ec, _In_ ITf
     }
 
     const bool pairedPunctuationEnabled = Global::PairedPunctuationEnabled.load(std::memory_order_relaxed);
+    if (pairedPunctuationEnabled && !_IsComposing() && _candidateMode == CANDIDATE_NONE)
+    {
+        // A pair whose closing half is still waiting on the right of the caret
+        // is closed by stepping over it. Without this the closing key inserts a
+        // second one （内容）） and, because of the pinning below, the right
+        // quote could never be typed at all.
+        const WCHAR stepOver = GetPairedPunctuationStepOverCandidate(wch, punctuationStr);
+        if (_TryStepOverPairedPunctuation(ec, pContext, stepOver))
+        {
+            return S_OK;
+        }
+    }
+
     if (pairedPunctuationEnabled && !punctuationStr.empty())
     {
         // Quotes share one physical key for both sides. In paired mode every
@@ -1129,7 +1135,8 @@ HRESULT CMetasequoiaIME::_HandleCompositionPunctuation(TfEditCookie ec, _In_ ITf
         }
     }
 
-    const WCHAR pairedClosing = pairedPunctuationEnabled ? GetPairedPunctuationClosing(punctuationStr) : 0;
+    const WCHAR pairedOpening = punctuationStr.empty() ? 0 : punctuationStr.back();
+    const WCHAR pairedClosing = pairedPunctuationEnabled ? _GetPairedPunctuationClosingFor(pairedOpening) : 0;
     if (pairedClosing != 0)
     {
         punctuationStr.push_back(pairedClosing);
@@ -1171,13 +1178,8 @@ HRESULT CMetasequoiaIME::_HandleCompositionPunctuation(TfEditCookie ec, _In_ ITf
     if (pairedClosing != 0)
     {
         _InvalidateSmartPunctuationShadow();
-
-        const uint64_t focusToken = _CaptureFocusSessionToken();
-        if (_msgWndHandle != nullptr)
-        {
-            PostMessage(_msgWndHandle, WM_PairedPunctuationMoveLeft, static_cast<WPARAM>(focusToken & 0xFFFFFFFFULL),
-                        static_cast<LPARAM>((focusToken >> 32) & 0xFFFFFFFFULL));
-        }
+        _PushPairedPunctuation(pairedOpening, pairedClosing);
+        _QueuePairedPunctuationCaretMove(-1);
     }
 
     return S_OK;

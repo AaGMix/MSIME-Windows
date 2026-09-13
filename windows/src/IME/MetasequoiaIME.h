@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 class CLangBarItemButton;
 class CCandidateListUIPresenter;
@@ -37,7 +38,7 @@ const DWORD WM_IpcSessionDirty = WM_USER + 17;
 const DWORD WM_DrainDeferredKeyDown = WM_USER + 18;
 const DWORD WM_InsertText = WM_USER + 19;
 const DWORD WM_RefreshLanguageBarTheme = WM_USER + 20;
-const DWORD WM_PairedPunctuationMoveLeft = WM_USER + 21;
+const DWORD WM_PairedPunctuationCaretMove = WM_USER + 21;
 const DWORD WM_ReplaceRepeatedSmartPunctuation = WM_USER + 22;
 const DWORD WM_BareShiftRelease = WM_USER + 23;
 const DWORD WM_UpdateVoiceComposition = WM_USER + 24;
@@ -45,12 +46,33 @@ const DWORD WM_CommitVoiceComposition = WM_USER + 25;
 const DWORD WM_CancelVoiceComposition = WM_USER + 26;
 const DWORD WM_ApplyPunctuationLock = WM_USER + 27;
 constexpr ULONG_PTR SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO = 0x4D535050u;
+// The paired-punctuation caret move is synthesized the same way. Both markers
+// mean "this tip generated the event": the key sinks and the bare-Shift hook
+// must pass them straight through, or the synthetic arrow re-enters our own
+// direction-key handling instead of reaching the application.
+constexpr ULONG_PTR PAIRED_PUNCTUATION_SENDINPUT_EXTRA_INFO = 0x4D535051u;
+constexpr bool IsSelfGeneratedSendInputExtraInfo(ULONG_PTR extraInfo)
+{
+    return extraInfo == SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO || extraInfo == PAIRED_PUNCTUATION_SENDINPUT_EXTRA_INFO;
+}
 constexpr ULONGLONG SMART_PUNCTUATION_REPEAT_INTERVAL_MS = 2000;
 constexpr UINT_PTR TIMER_CONNECT_ALL_NAMEDPIPE = 1;
 constexpr UINT_PTR TIMER_CONNECT_TO_TSF_NAMEDPIPE = 2;
 constexpr UINT_PTR TIMER_REFRESH_LANG_BAR_THEME = 3;
 constexpr UINT_PTR TIMER_DEFERRED_FOCUS_LOSS = 4;
 constexpr UINT_PTR TIMER_FOCUS_STATUS_RESEND = 5;
+constexpr UINT_PTR TIMER_PAIRED_PUNCTUATION_CARET = 6;
+// （〈《“‘ and their closing halves are all Shift chords. An arrow key that
+// arrives while Shift is still physically down reads as Shift+Arrow, so the
+// host extends the selection over the closing punctuation instead of stepping
+// past it. The move waits for the chord to be released, re-checking this often.
+constexpr UINT PAIRED_PUNCTUATION_CARET_RETRY_MS = 15;
+// A key held down forever must not leave a timer running or fire a caret move
+// into text the user has since typed by other means.
+constexpr ULONGLONG PAIRED_PUNCTUATION_CARET_TIMEOUT_MS = 2000;
+// Bounds the burst emitted after a long deferral.
+constexpr int PAIRED_PUNCTUATION_CARET_MAX_STEPS = 8;
+constexpr size_t PAIRED_PUNCTUATION_MAX_DEPTH = 16;
 constexpr UINT FOCUS_LOSS_DEFER_MS = 300;
 // Chromium hosts fire a burst of OnSetFocus per window switch; coalesce them
 // into one resend instead of one packet per callback.
@@ -178,8 +200,24 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
                                           uint64_t requestId, const std::wstring &prefetchedText);
     // Character immediately before the caret / composition start (0 if unavailable).
     WCHAR _GetPrecedingDocumentChar(TfEditCookie ec, _In_ ITfContext *pContext);
+    // Character immediately after the caret (0 if unavailable). Only meaningful
+    // outside a composition.
+    WCHAR _GetFollowingDocumentChar(TfEditCookie ec, _In_ ITfContext *pContext);
     // Shadow first, document read as the fallback. See _smartPunctuationShadowChar.
     WCHAR _GetPrecedingCharForSmartPunctuation(TfEditCookie ec, _In_ ITfContext *pContext);
+
+    // Paired punctuation: the closing half is committed together with the
+    // opening half and the caret then steps back between them, so every pair
+    // still waiting to be closed is tracked. Pressing the closing half steps
+    // over the existing one instead of typing a second.
+    static WCHAR _GetPairedPunctuationClosingFor(WCHAR opening);
+    void _PushPairedPunctuation(WCHAR opening, WCHAR closing);
+    void _ClearPairedPunctuationStack();
+    bool _TryStepOverPairedPunctuation(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR closing);
+    void _NoteKeyForPairedPunctuation(UINT code);
+    void _QueuePairedPunctuationCaretMove(int delta);
+    void _RunPairedPunctuationCaretMove();
+    void _CancelPairedPunctuationCaretMove();
 
     // Smart punctuation: backspacing the ASCII punctuation we just committed
     // means that form was unwanted, so the spot stays on Chinese punctuation.
@@ -528,6 +566,22 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     // document read is used only while this is invalid.
     WCHAR _smartPunctuationShadowChar = 0;
     bool _smartPunctuationShadowValid = false;
+
+    // Pairs whose closing half was auto-inserted and still sits immediately to
+    // the right of the caret, innermost last.
+    struct PairedPunctuationEntry
+    {
+        WCHAR opening = 0;
+        WCHAR closing = 0;
+        uint64_t focusToken = 0;
+    };
+    std::vector<PairedPunctuationEntry> _pairedPunctuationStack;
+    // Caret steps owed to the paired-punctuation feature: negative is VK_LEFT
+    // (a pair was just opened), positive is VK_RIGHT (a pair was stepped over).
+    int _pendingPairedCaretDelta = 0;
+    uint64_t _pendingPairedCaretFocusToken = 0;
+    ULONGLONG _pendingPairedCaretDeadline = 0;
+    bool _pairedCaretRetryTimerActive = false;
 
     ITfDocumentMgr *_pDocMgrLastFocused;
 
