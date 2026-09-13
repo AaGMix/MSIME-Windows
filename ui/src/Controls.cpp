@@ -2764,7 +2764,21 @@ RectF CandidateList::ItemRect(size_t index) const
     RectF rect = itemGeometry_[index].bounds;
     rect.x += bounds_.x;
     rect.y += bounds_.y;
+    // 竖排：每行都应铺满列表实际宽度（列表已被拉伸到卡片内宽），使选中高亮与命中区域
+    // 覆盖整行。这里直接用列表的最终布局宽度 bounds_，而非候选项自然宽度，从而不受测量/
+    // 布局缓存影响（绘制前 Present 可能以不同可用宽度重新测量，把每项宽度还原为自然宽度）。
+    // 右侧留白由外层卡片内边距提供，与左侧保持一致。
+    if (orientation_ == Orientation::Vertical)
+    {
+        rect.x = bounds_.x;
+        rect.width = bounds_.width;
+    }
     return rect;
+}
+
+RectF CandidateList::GetItemBounds(size_t index) const
+{
+    return ItemRect(index);
 }
 
 SizeF CandidateList::Measure(const SizeF &availableSize)
