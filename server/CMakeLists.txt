@@ -155,6 +155,8 @@ set(SRC_FILES
     "./src/cloud/cloud_translation.h"
     "./src/cloud/custom_translation.cpp"
     "./src/cloud/custom_translation.h"
+    "./src/cloud/niutrans_translation.cpp"
+    "./src/cloud/niutrans_translation.h"
     "./src/cloud/tencent_tmt.cpp"
     "./src/cloud/tencent_tmt.h"
     "./src/cloud/translation_gloss.cpp"

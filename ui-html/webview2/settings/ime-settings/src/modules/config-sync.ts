@@ -293,6 +293,7 @@ function applyConfigData(data: Record<string, any>, target?: string): void {
         data?.general?.cn_en_mixed_input_min_chars
       );
       module.applyTencentTmtConfig(data?.tencent_tmt);
+      module.applyNiuTransConfig(data?.niutrans);
       module.applyCustomTranslationConfig(data?.custom_translation);
     });
   }

@@ -6,8 +6,11 @@ import { updateCandidatePreviewHelpcode } from './appearance';
 type InputScheme = 'quanpin' | 'shuangpin' | 'wubi';
 type InputMode = 'chinese' | 'japanese';
 
+type TranslationProvider = 'tencent' | 'niutrans' | 'custom';
+
 let applyingInputConfig = false;
-let usingCustomTranslation = false;
+let customTranslationEnabled = false;
+let niutransTranslationEnabled = false;
 
 function updateInputConfig(path: string, value: string): void {
   window.chrome?.webview?.postMessage(serializeHostMessage({
@@ -89,14 +92,28 @@ function syncCandidateTranslationOptions(enabled: boolean): void {
   document.getElementById('candidateTranslationApiOptions')?.classList.toggle('is-disabled', !enabled);
 }
 
+function activeTranslationProvider(): TranslationProvider {
+  if (niutransTranslationEnabled) return 'niutrans';
+  if (customTranslationEnabled) return 'custom';
+  return 'tencent';
+}
+
 function syncCandidateTranslationWarning(): void {
   const warning = document.getElementById('candidateTranslationApiWarning');
   if (!warning) return;
-  if (usingCustomTranslation) {
+  const provider = activeTranslationProvider();
+  if (provider === 'custom') {
     const endpoint = (document.getElementById('customTranslationEndpoint') as HTMLInputElement | null)?.value.trim();
     const valid = /^https?:\/\/\S+$/i.test(endpoint ?? '');
     warning.textContent = '请填写以 http:// 或 https:// 开头的完整接口地址';
     warning.classList.toggle('is-hidden', valid);
+    return;
+  }
+  if (provider === 'niutrans') {
+    const appId = (document.getElementById('niutransAppId') as HTMLInputElement | null)?.value.trim();
+    const apiKey = (document.getElementById('niutransApiKey') as HTMLInputElement | null)?.value.trim();
+    warning.textContent = '请填写 APP ID 和 API Key 后使用小牛翻译';
+    warning.classList.toggle('is-hidden', Boolean(appId && apiKey));
     return;
   }
   const secretId = (document.getElementById('tencentTmtSecretId') as HTMLInputElement | null)?.value.trim();
@@ -105,13 +122,20 @@ function syncCandidateTranslationWarning(): void {
   warning.classList.toggle('is-hidden', Boolean(secretId && secretKey));
 }
 
-function syncTranslationProviderView(useCustom: boolean): void {
-  usingCustomTranslation = useCustom;
+function syncTranslationProviderView(provider: TranslationProvider): void {
   const tencentFields = document.getElementById('tencentTranslationFields');
+  const niutransFields = document.getElementById('niutransTranslationFields');
   const customFields = document.getElementById('customTranslationFields');
-  if (tencentFields) tencentFields.hidden = useCustom;
-  if (customFields) customFields.hidden = !useCustom;
+  if (tencentFields) tencentFields.hidden = provider !== 'tencent';
+  if (niutransFields) niutransFields.hidden = provider !== 'niutrans';
+  if (customFields) customFields.hidden = provider !== 'custom';
   syncCandidateTranslationWarning();
+}
+
+function refreshTranslationProvider(): void {
+  const provider = activeTranslationProvider();
+  applyDropdownValue('translationProviderBtn', 'translationProviderMenu', provider);
+  syncTranslationProviderView(provider);
 }
 
 export function applyTencentTmtConfig(config: Record<string, unknown> | undefined): void {
@@ -128,13 +152,21 @@ export function applyTencentTmtConfig(config: Record<string, unknown> | undefine
 }
 
 export function applyCustomTranslationConfig(config: Record<string, unknown> | undefined): void {
-  const useCustom = config?.enabled === true;
-  applyDropdownValue('translationProviderBtn', 'translationProviderMenu', useCustom ? 'custom' : 'tencent');
+  customTranslationEnabled = config?.enabled === true;
   const endpoint = document.getElementById('customTranslationEndpoint') as HTMLInputElement | null;
   const apiKey = document.getElementById('customTranslationApiKey') as HTMLInputElement | null;
   if (endpoint && typeof config?.endpoint === 'string') endpoint.value = config.endpoint;
   if (apiKey && typeof config?.api_key === 'string') apiKey.value = config.api_key;
-  syncTranslationProviderView(useCustom);
+  refreshTranslationProvider();
+}
+
+export function applyNiuTransConfig(config: Record<string, unknown> | undefined): void {
+  niutransTranslationEnabled = config?.enabled === true;
+  const appId = document.getElementById('niutransAppId') as HTMLInputElement | null;
+  const apiKey = document.getElementById('niutransApiKey') as HTMLInputElement | null;
+  if (appId && typeof config?.app_id === 'string') appId.value = config.app_id;
+  if (apiKey && typeof config?.apikey === 'string') apiKey.value = config.apikey;
+  refreshTranslationProvider();
 }
 
 function setupSecretVisibility(inputId: string, buttonId: string, name: string): void {
@@ -246,13 +278,23 @@ export function setupInput(): void {
   document.getElementById('translationProviderMenu')?.addEventListener('click', (event: Event) => {
     const item = (event.target as HTMLElement | null)?.closest<HTMLElement>('.dropdown-item');
     if (!item) return;
-    const useCustom = item.dataset.value === 'custom';
-    syncTranslationProviderView(useCustom);
-    updateConfig('custom_translation.enabled', useCustom);
+    const provider: TranslationProvider = item.dataset.value === 'niutrans'
+      ? 'niutrans'
+      : item.dataset.value === 'custom'
+        ? 'custom'
+        : 'tencent';
+    niutransTranslationEnabled = provider === 'niutrans';
+    customTranslationEnabled = provider === 'custom';
+    syncTranslationProviderView(provider);
+    // Only one provider is active; keep the mutually-exclusive flags in sync.
+    updateConfig('niutrans.enabled', niutransTranslationEnabled);
+    updateConfig('custom_translation.enabled', customTranslationEnabled);
   });
   const translationFields: Record<string, string> = {
     tencentTmtSecretId: 'tencent_tmt.secret_id',
     tencentTmtSecretKey: 'tencent_tmt.secret_key',
+    niutransAppId: 'niutrans.app_id',
+    niutransApiKey: 'niutrans.apikey',
     customTranslationEndpoint: 'custom_translation.endpoint',
     customTranslationApiKey: 'custom_translation.api_key'
   };
@@ -265,6 +307,7 @@ export function setupInput(): void {
     });
   });
   setupSecretVisibility('tencentTmtSecretKey', 'tencentTmtSecretKeyVisibility', 'SecretKey');
+  setupSecretVisibility('niutransApiKey', 'niutransApiKeyVisibility', 'API Key');
   setupSecretVisibility('customTranslationApiKey', 'customTranslationApiKeyVisibility', 'API Key');
   setupDropdownMenu(
     'zhEnTriggerLengthBtn',
