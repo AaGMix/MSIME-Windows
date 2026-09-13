@@ -169,6 +169,168 @@ bool same_candidate_words(const metasequoia::InputSession &left, const metasequo
     return std::equal(left.candidates().begin(), left.candidates().end(), right.candidates().begin(),
                       [](const auto &left_item, const auto &right_item) { return left_item.word == right_item.word; });
 }
+
+// 同 candidate_index，但未命中返回 candidates().size() 而不是拖出：供「不得出现」断言用。
+std::size_t find_candidate_index(const metasequoia::InputSession &session, const std::string &word)
+{
+    const auto found = std::find_if(session.candidates().begin(), session.candidates().end(),
+                                    [&](const WordItem &item) { return item.word == word; });
+    return static_cast<std::size_t>(std::distance(session.candidates().begin(), found));
+}
+
+// ü 系拼写别名归一与轻标记的会话级回归（AC1–AC6）。自建隔离词库，不依赖主 fixture：
+// 词库正键全部用标准拼写，另放真实音节 nu/lu 供隔离断言。打标与开关无关，掩码取
+// both 仅代表真实前端配置。
+void run_umlaut_alias_session_tests(const std::filesystem::path &data_directory)
+{
+    const std::filesystem::path directory = data_directory / "umlaut-alias";
+    std::filesystem::create_directories(directory);
+    {
+        Database database(directory / "msime.db");
+        database.execute("CREATE TABLE tbl_1_n(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                         "INSERT INTO tbl_1_n VALUES('nve', 'n', '虐', 100);"
+                         "INSERT INTO tbl_1_n VALUES('nv', 'n', '女', 90);"
+                         "INSERT INTO tbl_1_n VALUES('nu', 'n', '怒', 80);");
+        database.execute("CREATE TABLE tbl_1_l(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                         "INSERT INTO tbl_1_l VALUES('lve', 'l', '略', 100);"
+                         "INSERT INTO tbl_1_l VALUES('lv', 'l', '绿', 90);"
+                         "INSERT INTO tbl_1_l VALUES('lu', 'l', '路', 80);");
+        database.execute("CREATE TABLE tbl_1_j(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                         "INSERT INTO tbl_1_j VALUES('jue', 'j', '决', 100);");
+        database.execute("CREATE TABLE tbl_1_e(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                         "INSERT INTO tbl_1_e VALUES('e', 'e', '鹅', 50);");
+        database.execute("CREATE TABLE tbl_2_n(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                         "INSERT INTO tbl_2_n VALUES('nu''e', 'ne', '怒鹅', 30);");
+    }
+
+    metasequoia::RuntimePaths paths;
+    paths.resources = directory;
+    paths.user_data = directory;
+    paths.cache = directory;
+    paths.dictionaries = directory;
+    const unsigned both = quanpin::kAutocorrectTransposition | quanpin::kAutocorrectNeighbor;
+
+    // AC1 + preedit 非回归：nue 命中 nve 行并带标记，preedit 仍画原样字母。
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, both, true, true, true, paths);
+        type(session, "nue");
+        require(session.get_pinyin_segmentation_with_cases() == "nue",
+                "The preedit for 'nue' must keep the typed letters, not the alias rewrite.");
+        require(session.preedit() == "nue", "The engine preedit for 'nue' must stay unrewritten.");
+        const auto found = find_candidate_index(session, "虐");
+        require(found < session.candidates().size() && session.candidates()[found].corrected_from == "nue",
+                "The 'nue' candidate for 虐 must carry corrected_from='nue'.");
+        require(found < session.candidates().size() && session.candidates()[found].pinyin == "nve",
+                "The 'nue' candidate must carry the canonical pinyin 'nve'.");
+    }
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, both, true, true, true, paths);
+        type(session, "nve");
+        const auto found = find_candidate_index(session, "虐");
+        require(found < session.candidates().size() && session.candidates()[found].corrected_from.empty(),
+                "The standard spelling 'nve' must stay unmarked.");
+    }
+
+    // AC2：lue/lve 同理。
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, both, true, true, true, paths);
+        type(session, "lue");
+        const auto found = find_candidate_index(session, "略");
+        require(found < session.candidates().size() && session.candidates()[found].corrected_from == "lue",
+                "The 'lue' candidate for 略 must carry corrected_from='lue'.");
+    }
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, both, true, true, true, paths);
+        type(session, "lve");
+        const auto found = find_candidate_index(session, "略");
+        require(found < session.candidates().size() && session.candidates()[found].corrected_from.empty(),
+                "The standard spelling 'lve' must stay unmarked.");
+    }
+
+    // AC3：jqxy 系既有归一从无标变带标（行为变更），标准拼法无标。
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, both, true, true, true, paths);
+        type(session, "jve");
+        require(session.get_pinyin_segmentation_with_cases() == "jve",
+                "The preedit for 'jve' must keep the typed letters.");
+        const auto found = find_candidate_index(session, "决");
+        require(found < session.candidates().size() && session.candidates()[found].corrected_from == "jve",
+                "The 'jve' candidate for 决 must carry corrected_from='jve'.");
+    }
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, both, true, true, true, paths);
+        type(session, "jue");
+        const auto found = find_candidate_index(session, "决");
+        require(found < session.candidates().size() && session.candidates()[found].corrected_from.empty(),
+                "The standard spelling 'jue' must stay unmarked.");
+    }
+
+    // AC4：nu/nv/lu/lv 真实音节互不串，标准拼法均无标记。
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, both, true, true, true, paths);
+        type(session, "nu");
+        require(find_candidate_index(session, "怒") < session.candidates().size() &&
+                    find_candidate_index(session, "女") == session.candidates().size() &&
+                    find_candidate_index(session, "虐") == session.candidates().size(),
+                "'nu' must only offer 怒, never 女/虐.");
+    }
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, both, true, true, true, paths);
+        type(session, "nv");
+        const auto found = find_candidate_index(session, "女");
+        require(found < session.candidates().size() &&
+                    find_candidate_index(session, "怒") == session.candidates().size() &&
+                    find_candidate_index(session, "虐") == session.candidates().size() &&
+                    session.candidates()[found].corrected_from.empty(),
+                "'nv' must only offer unmarked 女, never 怒/虐.");
+    }
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, both, true, true, true, paths);
+        type(session, "lu");
+        require(find_candidate_index(session, "路") < session.candidates().size() &&
+                    find_candidate_index(session, "绿") == session.candidates().size() &&
+                    find_candidate_index(session, "略") == session.candidates().size(),
+                "'lu' must only offer 路, never 绿/略.");
+    }
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, both, true, true, true, paths);
+        type(session, "lv");
+        const auto found = find_candidate_index(session, "绿");
+        require(found < session.candidates().size() &&
+                    find_candidate_index(session, "路") == session.candidates().size() &&
+                    find_candidate_index(session, "略") == session.candidates().size() &&
+                    session.candidates()[found].corrected_from.empty(),
+                "'lv' must only offer unmarked 绿, never 路/略.");
+    }
+
+    // AC5：手动分隔符 nu'e 切分为 怒+鹅，不触发别名（虐不可见），无标记。
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, both, true, true, true, paths);
+        type(session, "nu'e");
+        require(find_candidate_index(session, "怒鹅") < session.candidates().size() &&
+                    find_candidate_index(session, "怒") < session.candidates().size() &&
+                    find_candidate_index(session, "虐") == session.candidates().size(),
+                "'nu'e' must split as 怒+鹅 and never trigger the nue alias.");
+        require(std::none_of(session.candidates().begin(), session.candidates().end(),
+                             [](const WordItem &item) { return !item.corrected_from.empty(); }),
+                "'nu'e' must produce no marked candidates.");
+    }
+
+    // AC6：别名命中的候选上屏后，调频数据落在标准拼法键 nve 上。
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, both, true, true, true, paths);
+        type(session, "nue");
+        (void)session.select_candidate(find_candidate_index(session, "虐"));
+        require(!session.has_composition(), "Selecting the only candidate must finish the composition.");
+        Database database(directory / "msime.db");
+        require(database.query_integer("SELECT weight FROM tbl_1_n WHERE key='nve' AND value='虐'") == 101,
+                "Selecting 虐 from 'nue' must update the canonical 'nve' row.");
+        require(database.query_integer("SELECT COUNT(*) FROM tbl_1_n WHERE key='nue'") == 0,
+                "No user data may accumulate under the alias key 'nue'.");
+    }
+
+    std::filesystem::remove_all(directory);
+}
 } // namespace
 
 int run_test()
@@ -642,6 +804,8 @@ int run_test()
 
         require(!session.handle_character('\'').handled, "An idle apostrophe was swallowed.");
     }
+
+    run_umlaut_alias_session_tests(data_directory);
 #endif
 
 #ifndef METASEQUOIA_SKIP_FREQUENCY_TESTS

@@ -1144,6 +1144,168 @@ TEST_CASE(QuanpinDictionaryAutocorrectLeavesLegalInputsUntouched)
 }
 
 namespace
+{ // ü 系别名的字典级 fixture：词库正键全部用标准拼写（v 系 nve/lve/nv/lv、省鱼眼系 jue），
+// 同表另放真实音节 nu/lu 供隔离断言。
+std::filesystem::path CreateUmlautAliasDatabase()
+{
+    const auto path = std::filesystem::temp_directory_path() / "msime-quanpin-umlaut-alias-test.db";
+    std::filesystem::remove(path);
+    sqlite3 *db = nullptr;
+    if (sqlite3_open(test::Utf8(path).c_str(), &db) != SQLITE_OK)
+    {
+        throw std::runtime_error("Failed to create temporary umlaut alias database.");
+    }
+    const char *sql = "CREATE TABLE tbl_1_n(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                      "CREATE TABLE tbl_1_l(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                      "CREATE TABLE tbl_1_j(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                      "CREATE TABLE tbl_1_e(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                      "CREATE TABLE tbl_2_n(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                      "INSERT INTO tbl_1_n VALUES('nve','n','虐',100);"
+                      "INSERT INTO tbl_1_n VALUES('nv','n','女',90);"
+                      "INSERT INTO tbl_1_n VALUES('nu','n','怒',80);"
+                      "INSERT INTO tbl_1_l VALUES('lve','l','略',100);"
+                      "INSERT INTO tbl_1_l VALUES('lv','l','绿',90);"
+                      "INSERT INTO tbl_1_l VALUES('lu','l','路',80);"
+                      "INSERT INTO tbl_1_j VALUES('jue','j','决',100);"
+                      "INSERT INTO tbl_1_e VALUES('e','e','鹅',50);"
+                      "INSERT INTO tbl_2_n VALUES('nu''e','ne','怒鹅',30);";
+    const int result = sqlite3_exec(db, sql, nullptr, nullptr, nullptr);
+    sqlite3_close(db);
+    if (result != SQLITE_OK)
+    {
+        std::filesystem::remove(path);
+        throw std::runtime_error("Failed to initialize temporary umlaut alias database.");
+    }
+    return path;
+}
+
+std::int64_t NveRowWeight(const std::filesystem::path &db_path)
+{
+    sqlite3 *db = nullptr;
+    if (sqlite3_open(test::Utf8(db_path).c_str(), &db) != SQLITE_OK)
+    {
+        throw std::runtime_error("Failed to open the umlaut alias database.");
+    }
+    sqlite3_stmt *stmt = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT weight FROM tbl_1_n WHERE key='nve' AND value='虐'", -1, &stmt, nullptr) !=
+            SQLITE_OK ||
+        sqlite3_step(stmt) != SQLITE_ROW)
+    {
+        sqlite3_finalize(stmt);
+        sqlite3_close(db);
+        throw std::runtime_error("Failed to read the nve row weight.");
+    }
+    const std::int64_t weight = sqlite3_column_int64(stmt, 0);
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return weight;
+}
+
+const WordItem *FindWord(const std::vector<WordItem> &candidates, const std::string &word)
+{
+    const auto found =
+        std::find_if(candidates.begin(), candidates.end(), [&](const WordItem &item) { return item.word == word; });
+    return found == candidates.end() ? nullptr : &*found;
+}
+} // namespace
+
+TEST_CASE(QuanpinDictionaryUmlautAliasNormalisesQueryAndMarksNonStandardSpelling)
+{
+    const auto db_path = CreateUmlautAliasDatabase();
+    {
+        QuanpinDictionary dictionary(test::Utf8(db_path));
+
+        // AC1：混拼 nue 命中 nve 行并带轻标记，候选 pinyin 落标准键；标准拼法无标记。
+        const auto nue = dictionary.query("nue");
+        const auto *nue_row = FindWord(nue, "虐");
+        REQUIRE(nue_row != nullptr);
+        REQUIRE_EQ(nue_row->corrected_from, std::string("nue"));
+        REQUIRE_EQ(nue_row->pinyin, std::string("nve"));
+
+        const auto nve = dictionary.query("nve");
+        const auto *nve_row = FindWord(nve, "虐");
+        REQUIRE(nve_row != nullptr);
+        REQUIRE(nve_row->corrected_from.empty());
+        REQUIRE_EQ(nve_row->pinyin, std::string("nve"));
+
+        // AC2：lue/lve 同理。
+        const auto lue = dictionary.query("lue");
+        const auto *lue_row = FindWord(lue, "略");
+        REQUIRE(lue_row != nullptr);
+        REQUIRE_EQ(lue_row->corrected_from, std::string("lue"));
+
+        const auto lve = dictionary.query("lve");
+        const auto *lve_row = FindWord(lve, "略");
+        REQUIRE(lve_row != nullptr);
+        REQUIRE(lve_row->corrected_from.empty());
+
+        // AC3：jqxy 系 v→u 既有归一保持，标记行为从无标变带标；标准拼法无标。
+        const auto jve = dictionary.query("jve");
+        const auto *jve_row = FindWord(jve, "决");
+        REQUIRE(jve_row != nullptr);
+        REQUIRE_EQ(jve_row->corrected_from, std::string("jve"));
+
+        const auto jue = dictionary.query("jue");
+        const auto *jue_row = FindWord(jue, "决");
+        REQUIRE(jue_row != nullptr);
+        REQUIRE(jue_row->corrected_from.empty());
+
+        // AC4：nu/nv/lu/lv 是真实音节，任何输入互不串。
+        const auto nu = dictionary.query("nu");
+        REQUIRE(FindWord(nu, "怒") != nullptr);
+        REQUIRE(FindWord(nu, "女") == nullptr);
+        REQUIRE(FindWord(nu, "虐") == nullptr);
+        const auto nv = dictionary.query("nv");
+        const auto *nv_row = FindWord(nv, "女");
+        REQUIRE(nv_row != nullptr);
+        REQUIRE(FindWord(nv, "怒") == nullptr);
+        REQUIRE(FindWord(nv, "虐") == nullptr);
+        REQUIRE(nv_row->corrected_from.empty());
+        const auto lu = dictionary.query("lu");
+        REQUIRE(FindWord(lu, "路") != nullptr);
+        REQUIRE(FindWord(lu, "绿") == nullptr);
+        REQUIRE(FindWord(lu, "略") == nullptr);
+        const auto lv = dictionary.query("lv");
+        const auto *lv_row = FindWord(lv, "绿");
+        REQUIRE(lv_row != nullptr);
+        REQUIRE(FindWord(lv, "路") == nullptr);
+        REQUIRE(FindWord(lv, "略") == nullptr);
+        REQUIRE(lv_row->corrected_from.empty());
+
+        // AC4（模糊音全开）：归一只精确匹配 [nl]ue 段，与模糊音正交，真实音节仍互不串。
+        metasequoia::FuzzyPinyinOptions fuzzy_all;
+        fuzzy_all.rules = 0xFFFFFFFFu;
+        const auto nu_fuzzy = dictionary.query("nu", "", 0, fuzzy_all);
+        REQUIRE(FindWord(nu_fuzzy, "怒") != nullptr);
+        REQUIRE(FindWord(nu_fuzzy, "女") == nullptr);
+        REQUIRE(FindWord(nu_fuzzy, "虐") == nullptr);
+        const auto nv_fuzzy = dictionary.query("nv", "", 0, fuzzy_all);
+        REQUIRE(FindWord(nv_fuzzy, "女") != nullptr);
+        REQUIRE(FindWord(nv_fuzzy, "怒") == nullptr);
+        REQUIRE(FindWord(nv_fuzzy, "虐") == nullptr);
+
+        // AC5：手动分隔符 nu'e 切分为 怒+鹅，不触发别名（虐不可见），无标记。
+        const auto nue_delimited = dictionary.query("nu'e");
+        REQUIRE(FindWord(nue_delimited, "怒鹅") != nullptr);
+        REQUIRE(FindWord(nue_delimited, "怒") != nullptr);
+        REQUIRE(FindWord(nue_delimited, "虐") == nullptr);
+        REQUIRE(std::none_of(nue_delimited.begin(), nue_delimited.end(),
+                             [](const WordItem &item) { return !item.corrected_from.empty(); }));
+
+        // AC6：别名命中的调频数据落在标准拼法键。会话主路径（pinyin_segmentation_
+        // 已是标准键）与显式别名键直调都不得在 nue 行积累数据。
+        REQUIRE_EQ(NveRowWeight(db_path), 100);
+        (void)dictionary.query("nue");
+        REQUIRE_EQ(dictionary.update_weight_by_word("虐"), QuanpinDictionary::OK);
+        REQUIRE_EQ(NveRowWeight(db_path), 101);
+
+        REQUIRE_EQ(dictionary.update_weight_by_pinyin_and_word("nue", "虐"), QuanpinDictionary::OK);
+        REQUIRE_EQ(NveRowWeight(db_path), 102);
+    }
+    std::filesystem::remove(db_path);
+}
+
+namespace
 {
 struct HelpcodeSample
 {

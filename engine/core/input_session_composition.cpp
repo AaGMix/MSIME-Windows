@@ -179,10 +179,14 @@ std::string QuanpinLettersWithoutDelimiters(const std::string &text)
     return letters;
 }
 
-// Folds letters for autocorrect comparisons: lowercases and strips manual
-// delimiters, and maps the u-umlaut style 'v' spelling onto 'u'. The jv/nv
-// normalisation is not a correction, so it must never make the scheme
-// segmentation look rewritten.
+// Folds letters for autocorrect display comparisons: lowercases and strips
+// manual delimiters, and maps the u-umlaut style 'v' spelling onto 'u'. This
+// equivalence is what classifies length-preserving spelling aliases (jv->ju,
+// nue->nve) as "explainable by the cut" so the preedit can be rebuilt with
+// separators; removing it would drop separators for alias-typed input. It only
+// ever compares two internally derived strings, never gates a user-facing
+// mark — the dictionary-side corrected_from contract lives in
+// quanpin_dictionary.cpp and treats v/u as distinct letters on purpose.
 std::string FoldQuanpinAutocorrectLetters(const std::string &text)
 {
     std::string folded;
