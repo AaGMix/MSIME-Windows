@@ -33,13 +33,24 @@ std::string remove_delimiters(const std::string &segmented)
     return normalized;
 }
 
+// 正字法别名归一：把非标准 ü 拼写改写成词库标准键，输出即进入查询管线的权威拼写
+// （查库键、pinyin_segmentation_、调频/造词键因此全部落在标准拼法上）。标准拼音约定：
+// ü 保留鱼眼的音节（n/l 系）键写 v（nv/nve/lv/lve），省略鱼眼的（j/q/x/y 系）键写 u
+// （ju/jue/qu/.../yue）。nu/lu 是真实音节（怒/路），所以 n/l 系只按段精确匹配 nue/lue，
+// 绝不改写 nv/lv/nu/lu。
 quanpin::Segments normalize_umlaut_aliases(quanpin::Segments segments)
 {
     for (auto &segment : segments)
     {
-        if (segment.size() >= 2 && segment[1] == 'v' &&
-            (segment[0] == 'j' || segment[0] == 'q' || segment[0] == 'x' || segment[0] == 'y'))
+        if (segment.size() == 3 && segment[1] == 'u' && segment[2] == 'e' && (segment[0] == 'n' || segment[0] == 'l'))
         {
+            // nue/lue → nve/lve：词库正键用 v，混拼 u 是它的别名。
+            segment[1] = 'v';
+        }
+        else if (segment.size() >= 2 && segment[1] == 'v' &&
+                 (segment[0] == 'j' || segment[0] == 'q' || segment[0] == 'x' || segment[0] == 'y'))
+        {
+            // j/q/x/y 系没有保留鱼眼的合法音节，v 一律是 u 的别名。
             segment[1] = 'u';
         }
     }
@@ -53,9 +64,11 @@ std::string series_cache_key(const std::string &raw_input, const std::string &se
 }
 
 // Folds letters for autocorrect comparisons: lowercases and strips manual
-// delimiters, and maps the ü-style 'v' spelling onto 'u' on both sides. The
-// jv/nv normalisation is not a correction, so it must never make the primary
-// segmentation look rewritten (jv displays as typed and stays unmarked).
+// delimiters. v and u must compare as distinct letters — the ü-style alias
+// rewrite is a first-class marking source (the trailing star badge), so
+// 'nve' (primary segmentation) differing from typed 'nue' is exactly what
+// produces the corrected_from label. The old contract ("aliases never look
+// rewritten, hence never marked") was flipped by product decision.
 std::string fold_autocorrect_letters(const std::string &text)
 {
     std::string folded;
@@ -66,8 +79,7 @@ std::string fold_autocorrect_letters(const std::string &text)
         {
             continue;
         }
-        const char lower = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        folded.push_back(lower == 'v' ? 'u' : lower);
+        folded.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
     }
     return folded;
 }
@@ -92,8 +104,8 @@ quanpin::Segments cut_syllables(const quanpin::AutocorrectCut &cut)
     return syllables;
 }
 
-SeriesQueryResolution resolve_series_query(const std::string &raw_input, const std::string &segmentation,
-                                           const quanpin::Segments &segments, unsigned autocorrect_types)
+SeriesQueryResolution resolve_series_query(const std::string &raw_input, const quanpin::Segments &segments,
+                                           unsigned autocorrect_types)
 {
     SeriesQueryResolution result;
     // Guard order matters: the jianpin-shape predicate runs before autocorrect_cut
@@ -132,10 +144,14 @@ SeriesQueryResolution resolve_series_query(const std::string &raw_input, const s
             }
         }
     }
-    result.segmentation =
-        result.corrected_input
-            ? quanpin::join_segments(result.corrected_segments)
-            : (segmentation.empty() ? (segments.empty() ? raw_input : quanpin::join_segments(segments)) : segmentation);
+    // Both branches rebuild the segmentation string from segments: they already
+    // carry the canonical (alias-normalised) spelling, while a caller-passed
+    // explicit string could keep the alias spelling — the query would succeed
+    // yet nothing would look rewritten, so alias inputs with manual delimiters
+    // ("nue'hao") could never get marked. Delimiters sit on syllable boundaries,
+    // so split/join round-trips them unchanged ("nu'e" stays "nu'e").
+    result.segmentation = result.corrected_input ? quanpin::join_segments(result.corrected_segments)
+                                                 : (segments.empty() ? raw_input : quanpin::join_segments(segments));
     result.cache_key = (result.corrected_input ? "C:" : "") + series_cache_key(raw_input, result.segmentation);
     return result;
 }
@@ -215,7 +231,7 @@ std::vector<WordItem> QuanpinDictionary::query_exact(const std::string &raw_inpu
     }
     else
     {
-        resolution = resolve_series_query(raw_input, segmentation, segments, autocorrect_types);
+        resolution = resolve_series_query(raw_input, segments, autocorrect_types);
         resolution_cache_.insert(resolution_key, resolution);
     }
     pinyin_segmentation_ = resolution.segmentation;
@@ -488,12 +504,12 @@ std::vector<WordItem> QuanpinDictionary::query_single_path(const std::string &ra
 
 quanpin::Segments QuanpinDictionary::resolve_segments(const std::string &raw_input, const std::string &segmentation)
 {
-    if (!segmentation.empty())
-    {
-        return quanpin::split_segments(segmentation);
-    }
-
-    return get_or_compute_segments(raw_input);
+    // 单一归一咽喉点：显式 segmentation 与自动切分两条路径都过这里，进入查询
+    // 管线的 segments 由此保证已归一恰一次。查库、调频、造词各调用点因此
+    // 不必各自处理别名。
+    quanpin::Segments segments =
+        segmentation.empty() ? get_or_compute_segments(raw_input) : quanpin::split_segments(segmentation);
+    return normalize_umlaut_aliases(std::move(segments));
 }
 
 quanpin::Segments QuanpinDictionary::get_or_compute_segments(const std::string &raw_input)
@@ -572,8 +588,8 @@ std::vector<WordItem> QuanpinDictionary::query_database(const quanpin::Segments 
             return result;
         }
 
-        const auto lookup_segments = normalize_umlaut_aliases(segments);
-        const auto flat_items = quanpin::query_segments_keyed_flat(lookup_segments, db_, statement_cache_, INT_MAX);
+        // segments 已在 resolve_segments 归一，直接按标准键查库。
+        const auto flat_items = quanpin::query_segments_keyed_flat(segments, db_, statement_cache_, INT_MAX);
         std::vector<WordItem> result;
         result.reserve(flat_items.size());
         const std::string code = segmentation.empty() ? quanpin::join_segments(segments) : segmentation;
@@ -724,10 +740,11 @@ void QuanpinDictionary::mark_autocorrect_candidates(std::vector<WordItem> &candi
     // alternative) while those differ from the typed letters. The letters-only
     // comparison alone would also sweep up prefix candidates (keneng -> ke,
     // single-letter jianpin expansions) that the user spelled correctly; both
-    // rules together keep those unmarked. Deliberately switch-independent: the
-    // scheme alias layer rewrites letters regardless of the autocorrect
-    // switches, so an alias-corrected candidate is labelled as such even with
-    // autocorrection off.
+    // rules together keep those unmarked. The ü-style alias rewrite (nue->nve,
+    // jv->ju) is a first-class marking source: it runs in resolve_segments
+    // regardless of the autocorrect switches, so an alias-rewritten query marks
+    // its candidates with the typed spelling, while a standard spelling exits
+    // at the all-equal gate because every set equals the typed letters.
     std::vector<std::string> corrected_letter_sets;
     corrected_letter_sets.reserve(1 + pinyin_alternative_segmentations_.size());
     corrected_letter_sets.push_back(fold_autocorrect_letters(pinyin_segmentation_));
@@ -754,10 +771,10 @@ void QuanpinDictionary::mark_autocorrect_candidates(std::vector<WordItem> &candi
         const std::string item_letters = fold_autocorrect_letters(item.pinyin);
         // Match only against readings that actually differ from the typed
         // letters. An alternative cut can fold back to exactly raw_letters
-        // (e.g. a v/u-normalizing fold that erases the corrected difference);
-        // matching that set would stamp corrected_from onto a candidate the
-        // user spelled correctly. The all-equal gate above only guards the case
-        // where EVERY set equals raw_letters, so this per-set filter is needed.
+        // (letters removed by the fold but rewritten by the cut); matching that
+        // set would stamp corrected_from onto a candidate the user spelled
+        // correctly. The all-equal gate above only guards the case where EVERY
+        // set equals raw_letters, so this per-set filter is needed.
         if (std::any_of(corrected_letter_sets.begin(), corrected_letter_sets.end(),
                         [&](const std::string &letters) { return letters != raw_letters && item_letters == letters; }))
         {
@@ -841,6 +858,9 @@ int QuanpinDictionary::update_weight_by_pinyin_and_word(std::string pinyin, std:
     if (cuts.empty())
         return ERROR_CODE;
     auto segments = cuts.front();
+    // 别名拼写（nue/lue 等词库不存在的键）不得承载用户调频数据：改写为标准键，
+    // 保证权重更新落在标准字典行上（PRD R3）。
+    segments = normalize_umlaut_aliases(std::move(segments));
     const size_t han_count = HelpcodeUtils::count_han_chars(word);
     if (segments.size() > han_count)
         segments.resize(han_count);
@@ -894,7 +914,7 @@ int QuanpinDictionary::insert_word_to_series_cache(const std::string &raw_input,
     }
 
     const auto segments = resolve_segments(raw_input, segmentation);
-    const auto resolution = resolve_series_query(raw_input, segmentation, segments, autocorrect_types);
+    const auto resolution = resolve_series_query(raw_input, segments, autocorrect_types);
     return insert_word_to_series_cache_key(resolution.cache_key, raw_input, word, source);
 }
 
