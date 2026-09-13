@@ -261,6 +261,7 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
     const AiAssistantConfig &ai = GetConfiguredAiAssistant();
     const TencentTmtConfig &tencent_tmt = GetConfiguredTencentTmt();
     const CustomTranslationConfig &custom_translation = GetConfiguredCustomTranslation();
+    const NiuTransConfig &niutrans = GetConfiguredNiuTrans();
     const FrequencyAdjustmentConfig &frequency = GetConfiguredFrequencyAdjustment();
     const FloatingToolbarItemsConfig &toolbar = GetConfiguredFloatingToolbarItems();
     const std::filesystem::path skins_root =
@@ -480,6 +481,7 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
            {{"enabled", custom_translation.enabled},
             {"endpoint", custom_translation.endpoint},
             {"api_key", custom_translation.api_key}}},
+          {"niutrans", {{"enabled", niutrans.enabled}, {"app_id", niutrans.app_id}, {"apikey", niutrans.apikey}}},
           {"helpcode",
            {{"shuangpin_helpcode", GetConfiguredShuangpinHelpcodeEnabled()},
             {"shuangpin_helpcode_schema", GetConfiguredShuangpinHelpcodeSchema()},
@@ -750,6 +752,14 @@ bool ApplyConfigUpdate(const json::object &data)
         return value.is_string() &&
                SetConfiguredCustomTranslationString(path.substr(std::string("custom_translation.").size()),
                                                     json::value_to<std::string>(value));
+    }
+    if (path == "niutrans.enabled")
+        return SetConfiguredNiuTransBool("enabled", json::value_to<bool>(data.at("value")));
+    if (path.rfind("niutrans.", 0) == 0)
+    {
+        const json::value &value = data.at("value");
+        return value.is_string() && SetConfiguredNiuTransString(path.substr(std::string("niutrans.").size()),
+                                                                json::value_to<std::string>(value));
     }
     if (path == "helpcode.show_sp_helpcode_in_candidate_window")
         return SetConfiguredShowShuangpinHelpcodeInCandidateWindow(json::value_to<bool>(data.at("value")));

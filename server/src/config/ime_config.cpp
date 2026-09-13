@@ -167,6 +167,7 @@ bool g_persist_polish_token_slot = false;
 AiAssistantConfig g_ai_assistant;
 TencentTmtConfig g_tencent_tmt;
 CustomTranslationConfig g_custom_translation;
+NiuTransConfig g_niutrans;
 FrequencyAdjustmentConfig g_frequency_adjustment;
 std::filesystem::path g_config_path;
 std::optional<std::filesystem::file_time_type> g_config_last_write_time;
@@ -1214,6 +1215,9 @@ bool LoadImeConfig()
         g_custom_translation.enabled = tbl["custom_translation"]["enabled"].value_or(false);
         g_custom_translation.endpoint = tbl["custom_translation"]["endpoint"].value_or(std::string());
         g_custom_translation.api_key = tbl["custom_translation"]["api_key"].value_or(std::string());
+        g_niutrans.enabled = tbl["niutrans"]["enabled"].value_or(false);
+        g_niutrans.app_id = tbl["niutrans"]["app_id"].value_or(std::string());
+        g_niutrans.apikey = tbl["niutrans"]["apikey"].value_or(std::string());
         RememberConfigWriteTime();
         return true;
     }
@@ -3429,6 +3433,32 @@ bool SetConfiguredCustomTranslationString(const std::string &key, const std::str
     else if (key == "api_key")
         target = &g_custom_translation.api_key;
     if (!target || !WriteConfiguredValue("custom_translation", key, EscapeTomlBasicString(value)))
+        return false;
+    *target = value;
+    return true;
+}
+
+const NiuTransConfig &GetConfiguredNiuTrans()
+{
+    return g_niutrans;
+}
+
+bool SetConfiguredNiuTransBool(const std::string &key, bool value)
+{
+    if (key != "enabled" || !WriteConfiguredValue("niutrans", key, value ? "true" : "false"))
+        return false;
+    g_niutrans.enabled = value;
+    return true;
+}
+
+bool SetConfiguredNiuTransString(const std::string &key, const std::string &value)
+{
+    std::string *target = nullptr;
+    if (key == "app_id")
+        target = &g_niutrans.app_id;
+    else if (key == "apikey")
+        target = &g_niutrans.apikey;
+    if (!target || !WriteConfiguredValue("niutrans", key, EscapeTomlBasicString(value)))
         return false;
     *target = value;
     return true;

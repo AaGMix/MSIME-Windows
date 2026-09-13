@@ -116,6 +116,14 @@ struct CustomTranslationConfig
     std::string api_key;
 };
 
+struct NiuTransConfig
+{
+    bool enabled = false;
+    // 控制台->API应用 中的应用唯一标识与 apikey。
+    std::string app_id;
+    std::string apikey;
+};
+
 struct FrequencyAdjustmentConfig
 {
     std::string mode = "promote"; // disabled | pin | halve | linear | promote
@@ -363,6 +371,9 @@ bool SetConfiguredTencentTmtString(const std::string &key, const std::string &va
 const CustomTranslationConfig &GetConfiguredCustomTranslation();
 bool SetConfiguredCustomTranslationBool(const std::string &key, bool value);
 bool SetConfiguredCustomTranslationString(const std::string &key, const std::string &value);
+const NiuTransConfig &GetConfiguredNiuTrans();
+bool SetConfiguredNiuTransBool(const std::string &key, bool value);
+bool SetConfiguredNiuTransString(const std::string &key, const std::string &value);
 const FrequencyAdjustmentConfig &GetConfiguredFrequencyAdjustment();
 bool SetConfiguredFrequencyAdjustmentString(const std::string &key, const std::string &value);
 bool SetConfiguredFrequencyAdjustmentInt(const std::string &key, int value);
