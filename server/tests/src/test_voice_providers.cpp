@@ -45,6 +45,35 @@ TEST_CASE(voice_providers_resolve_openai_compatible_defaults)
     REQUIRE_EQ(VoiceInput::DefaultPolishModel("openai"), "gpt-4o-mini");
 }
 
+// The new console issues one API Key sent as X-Api-Key; the legacy console needs App ID +
+// Access Token. Picking the wrong header set fails authentication, so the fallback for configs
+// written before doubao_auth_mode existed has to key off a *usable* App ID, not a placeholder.
+TEST_CASE(voice_providers_select_doubao_auth_mode)
+{
+    REQUIRE_EQ(VoiceInput::NormalizeDoubaoAuthMode("api_key", "real-app-id"), "api_key");
+    REQUIRE_EQ(VoiceInput::NormalizeDoubaoAuthMode("legacy", ""), "legacy");
+    REQUIRE_EQ(VoiceInput::NormalizeDoubaoAuthMode("LEGACY", ""), "legacy");
+
+    // Absent or unrecognised setting: infer from the App ID.
+    REQUIRE_EQ(VoiceInput::NormalizeDoubaoAuthMode("", "real-app-id"), "legacy");
+    REQUIRE_EQ(VoiceInput::NormalizeDoubaoAuthMode("", ""), "api_key");
+    REQUIRE_EQ(VoiceInput::NormalizeDoubaoAuthMode("nonsense", "real-app-id"), "legacy");
+    // The shipped placeholders must not be mistaken for a configured legacy console.
+    REQUIRE_EQ(VoiceInput::NormalizeDoubaoAuthMode("", "<YOUR_OWN_DOUBAO_APP_ID>"), "api_key");
+    REQUIRE_EQ(VoiceInput::NormalizeDoubaoAuthMode("", "<YOUR_ASR_APP_KEY>"), "api_key");
+
+    VoiceInputConfig config;
+    config.doubao_auth_mode = "api_key";
+    config.asr_app_key = "real-app-id";
+    REQUIRE(!VoiceInput::UsesDoubaoLegacyAuth(config));
+    config.doubao_auth_mode = "legacy";
+    REQUIRE(VoiceInput::UsesDoubaoLegacyAuth(config));
+    config.doubao_auth_mode.clear();
+    REQUIRE(VoiceInput::UsesDoubaoLegacyAuth(config));
+    config.asr_app_key.clear();
+    REQUIRE(!VoiceInput::UsesDoubaoLegacyAuth(config));
+}
+
 TEST_CASE(voice_providers_use_builtin_prompt_until_overridden)
 {
     VoiceInputConfig config;

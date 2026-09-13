@@ -1077,6 +1077,8 @@ bool LoadImeConfig()
         voice.hotkey_hold_space_lock = tbl["voice_input"]["hotkey_hold_space_lock"].value_or(true);
         voice.asr_provider = tbl["voice_input"]["asr_provider"].value_or(std::string("doubao"));
         voice.asr_app_key = tbl["voice_input"]["asr_app_key"].value_or(std::string());
+        voice.doubao_auth_mode = VoiceInput::NormalizeDoubaoAuthMode(
+            tbl["voice_input"]["doubao_auth_mode"].value_or(std::string()), voice.asr_app_key);
         voice.asr_token = tbl["voice_input"]["asr_token"].value_or(std::string());
         for (const auto provider : VoiceInput::AsrProviders())
         {
@@ -3091,6 +3093,8 @@ bool SetConfiguredVoiceInputString(const std::string &key, const std::string &va
         target = &VoiceInputConfig::asr_provider;
     else if (key == "asr_app_key")
         target = &VoiceInputConfig::asr_app_key;
+    else if (key == "doubao_auth_mode")
+        target = &VoiceInputConfig::doubao_auth_mode;
     else if (key == "asr_token")
         target = &VoiceInputConfig::asr_token;
     else if (key == "asr_endpoint")

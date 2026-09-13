@@ -910,9 +910,9 @@ bool StartRecording()
     if (use_doubao)
     {
         g_doubao_asr = std::make_unique<DoubaoAsrClient>(
-            config.asr_endpoint, config.asr_app_key, asr_token, config.asr_resource_id, config.doubao_enable_itn,
-            config.doubao_enable_punc, config.doubao_enable_ddc, config.doubao_boosting_table_id,
-            [voice_session](const std::string &text) {
+            config.asr_endpoint, VoiceInput::UsesDoubaoLegacyAuth(config), config.asr_app_key, asr_token,
+            config.asr_resource_id, config.doubao_enable_itn, config.doubao_enable_punc, config.doubao_enable_ddc,
+            config.doubao_boosting_table_id, [voice_session](const std::string &text) {
                 if (g_voice_session != voice_session)
                     return;
                 const std::wstring wide = string_to_wstring(text);
