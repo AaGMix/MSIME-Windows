@@ -10,6 +10,27 @@ inline std::wstring ZEN_BROWSER = L"zen.exe";
 // inline std::unordered_set<std::wstring> VSCodeSeries = {L"Code.exe", L"Code - Insiders.exe", L"VSCodium.exe"};
 // inline bool IsVSCodeLike = false;
 inline LONG INVALID_Y = -100000;
+
+// 成对标点自动补全在这些宿主中禁用。Excel 的单元格编辑不接受补全后的光标
+// 左移：右半边上屏后光标回到两半之间的动作会被单元格吞掉，表现为焦点单元格
+// 往左偏一格。微信输入法同样把 Excel 排除在这个功能之外。
+inline const wchar_t *const PAIRED_PUNCTUATION_EXCLUDED_APPS[] = {L"EXCEL.EXE"};
+
+inline bool IsPairedPunctuationExcludedProcess(const std::wstring &processName)
+{
+    if (processName.empty())
+    {
+        return false;
+    }
+    for (const wchar_t *excluded : PAIRED_PUNCTUATION_EXCLUDED_APPS)
+    {
+        if (CompareStringOrdinal(processName.c_str(), -1, excluded, -1, TRUE) == CSTR_EQUAL)
+        {
+            return true;
+        }
+    }
+    return false;
+}
 } // namespace Global
 
 namespace GlobalSettings
