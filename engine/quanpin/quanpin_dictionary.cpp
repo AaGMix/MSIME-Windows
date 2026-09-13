@@ -72,13 +72,25 @@ std::string fold_autocorrect_letters(const std::string &text)
     return folded;
 }
 
-struct SeriesQueryResolution
+// How many ranked correction cuts feed the query pipeline: the primary cut
+// becomes the query key and the rest ride along as alternative segmentations
+// for query-time disambiguation (patent CN 101133411 B M3). k=9 is set by the
+// phase-4/5 evaluation data: dropped-initial keys such as uan have 10-15
+// equally-weighted deletion targets (cuan/duan/guan/.../zuan), and k=3 cut the
+// list by table order before reaching the correct reading (quan'li for uanli).
+// k=9 lifts R@1/R@3 across the deletion and mixed models with no p95 change.
+constexpr std::size_t kAutocorrectCutKBest = 9;
+
+quanpin::Segments cut_syllables(const quanpin::AutocorrectCut &cut)
 {
-    std::string segmentation;
-    std::string cache_key;
-    quanpin::Segments corrected_segments;
-    bool corrected_input = false;
-};
+    quanpin::Segments syllables;
+    syllables.reserve(cut.segments.size());
+    for (const auto &segment : cut.segments)
+    {
+        syllables.push_back(segment.syllable);
+    }
+    return syllables;
+}
 
 SeriesQueryResolution resolve_series_query(const std::string &raw_input, const std::string &segmentation,
                                            const quanpin::Segments &segments, unsigned autocorrect_types)
@@ -86,12 +98,28 @@ SeriesQueryResolution resolve_series_query(const std::string &raw_input, const s
     SeriesQueryResolution result;
     // Guard order matters: the jianpin-shape predicate runs before autocorrect_cut
     // so a guarded input never pays for the BFS. Both guards express "the user did
-    // not mistype" and either one disables the rewrite entirely.
-    result.corrected_input =
-        autocorrect_types != 0 && !segments.empty() && raw_input.find('\'') == std::string::npos &&
-        !quanpin::has_only_complete_pinyin_segments(segments) &&
-        !quanpin::looks_like_syllable_with_jianpin_tail(raw_input) &&
-        !(result.corrected_segments = quanpin::autocorrect_cut(raw_input, autocorrect_types)).empty();
+    // not mistype" and either one disables the rewrite entirely. The base
+    // segmentation is deliberately NOT part of the gate: the BFS works on the raw
+    // letters, so an empty base cut (nothing segmentable, e.g. a dropped initial
+    // such as uanli for quan'li) is often exactly the input that needs correction.
+    // With no correction reading the search returns nothing and the plain path is
+    // kept unchanged.
+    const bool eligible = autocorrect_types != 0 && raw_input.find('\'') == std::string::npos &&
+                          !quanpin::has_only_complete_pinyin_segments(segments) &&
+                          !quanpin::looks_like_syllable_with_jianpin_tail(raw_input);
+    if (eligible)
+    {
+        const auto cuts = quanpin::autocorrect_cut_kbest(raw_input, autocorrect_types, kAutocorrectCutKBest);
+        result.corrected_input = !cuts.empty();
+        if (result.corrected_input)
+        {
+            result.corrected_segments = cut_syllables(cuts.front());
+            for (std::size_t i = 1; i < cuts.size(); ++i)
+            {
+                result.alternative_corrected_cuts.push_back(cut_syllables(cuts[i]));
+            }
+        }
+    }
     result.segmentation =
         result.corrected_input
             ? quanpin::join_segments(result.corrected_segments)
@@ -114,7 +142,7 @@ std::string escape_sql_text(std::string text)
 } // namespace
 
 QuanpinDictionary::QuanpinDictionary(std::string db_path, metasequoia::RuntimePaths paths)
-    : cache_(128), series_cache_(128), segmentation_cache_(128), paths_(std::move(paths)),
+    : cache_(128), series_cache_(128), segmentation_cache_(128), resolution_cache_(128), paths_(std::move(paths)),
       decoder_(paths_.resource(metasequoia::assets::pinyin_model),
                paths_.user(metasequoia::assets::pinyin_user_dictionary)),
       db_path_(db_path.empty() ? metasequoia::path_to_utf8(paths_.dictionary(metasequoia::assets::main_dictionary))
@@ -164,8 +192,28 @@ std::vector<WordItem> QuanpinDictionary::query_exact(const std::string &raw_inpu
     // segmentation becomes the primary key so that selection and weight
     // updates land on the right dictionary entries, and the original
     // (garbage-leaning) candidates stay behind as a fallback tail.
-    const auto resolution = resolve_series_query(raw_input, segmentation, segments, autocorrect_types);
+    // Memoize the k-best correction search: it is the expensive part of every
+    // keystroke, yet a pure function of this input tuple, so a re-typed or
+    // backspaced prefix should reuse it instead of re-running the k=9 beam.
+    const std::string resolution_key = std::to_string(autocorrect_types) + '\x1f' + raw_input + '\x1f' + segmentation;
+    SeriesQueryResolution resolution;
+    if (const auto cached_resolution = resolution_cache_.get(resolution_key))
+    {
+        resolution = cached_resolution.value();
+    }
+    else
+    {
+        resolution = resolve_series_query(raw_input, segmentation, segments, autocorrect_types);
+        resolution_cache_.insert(resolution_key, resolution);
+    }
     pinyin_segmentation_ = resolution.segmentation;
+    // The alternative readings must be published even on the cache-hit path:
+    // mark_autocorrect_candidates runs after every query, cached or not.
+    pinyin_alternative_segmentations_.clear();
+    for (const auto &alternative : resolution.alternative_corrected_cuts)
+    {
+        pinyin_alternative_segmentations_.push_back(quanpin::join_segments(alternative));
+    }
 
     // Autocorrected results get their own cache slot so they never leak the
     // fallback tail into plain (correct) spellings sharing the same key.
@@ -197,6 +245,13 @@ std::vector<WordItem> QuanpinDictionary::query_exact(const std::string &raw_inpu
     // autocorrection explicitly turned off.
     if (autocorrect_types != 0)
     {
+        // Correction alternatives first: they explain the letters the user
+        // actually typed, so they outrank the phonetic-shape alias readings that
+        // follow (the alias layer rewrites legal-looking spellings regardless).
+        for (const auto &candidate : resolution.alternative_corrected_cuts)
+        {
+            append_alternative(candidate);
+        }
         const auto correction_paths = quanpin::cut_pinyin_by_mode(raw_input, "correction");
         for (const auto &candidate : correction_paths)
         {
@@ -222,6 +277,14 @@ std::vector<WordItem> QuanpinDictionary::query_exact(const std::string &raw_inpu
         const std::string fallback_segmentation =
             segmentation.empty() ? quanpin::join_segments(segments) : segmentation;
         append_unique_words(result, query_series(raw_input, fallback_segmentation, segments));
+        // Query-time disambiguation (patent M3): the alternative readings of the
+        // same typo compete with the primary cut under dictionary word
+        // frequency; the best one keeps a protected slot near the top.
+        if (!alternative_segmentations.empty())
+        {
+            result = merge_alternative_segmentations(raw_input, pinyin_segmentation_, resolution.corrected_segments,
+                                                     alternative_segmentations, std::move(result));
+        }
     }
     else
     {
@@ -623,17 +686,29 @@ void QuanpinDictionary::append_unique_words(std::vector<WordItem> &result, const
 
 void QuanpinDictionary::mark_autocorrect_candidates(std::vector<WordItem> &candidates, const std::string &raw_input)
 {
-    // A candidate comes from the corrected interpretation exactly when its code
-    // letters equal the primary segmentation letters while those differ from the
-    // typed letters. The first condition alone would also sweep up prefix
-    // candidates (keneng -> ke, single-letter jianpin expansions) that the user
-    // spelled correctly; both rules together keep those unmarked. Deliberately
-    // switch-independent: the scheme alias layer rewrites letters regardless of
-    // the autocorrect switches, so an alias-corrected candidate is labelled as
-    // such even with autocorrection off.
-    const std::string primary_letters = fold_autocorrect_letters(pinyin_segmentation_);
+    // A candidate comes from a corrected interpretation exactly when its code
+    // letters equal any correction cut's letters (primary or ranked
+    // alternative) while those differ from the typed letters. The letters-only
+    // comparison alone would also sweep up prefix candidates (keneng -> ke,
+    // single-letter jianpin expansions) that the user spelled correctly; both
+    // rules together keep those unmarked. Deliberately switch-independent: the
+    // scheme alias layer rewrites letters regardless of the autocorrect
+    // switches, so an alias-corrected candidate is labelled as such even with
+    // autocorrection off.
+    std::vector<std::string> corrected_letter_sets;
+    corrected_letter_sets.reserve(1 + pinyin_alternative_segmentations_.size());
+    corrected_letter_sets.push_back(fold_autocorrect_letters(pinyin_segmentation_));
+    for (const auto &alternative : pinyin_alternative_segmentations_)
+    {
+        corrected_letter_sets.push_back(fold_autocorrect_letters(alternative));
+    }
+    corrected_letter_sets.erase(std::remove_if(corrected_letter_sets.begin(), corrected_letter_sets.end(),
+                                               [](const std::string &letters) { return letters.empty(); }),
+                                corrected_letter_sets.end());
     const std::string raw_letters = fold_autocorrect_letters(raw_input);
-    if (primary_letters.empty() || primary_letters == raw_letters)
+    if (corrected_letter_sets.empty() ||
+        std::all_of(corrected_letter_sets.begin(), corrected_letter_sets.end(),
+                    [&](const std::string &letters) { return letters == raw_letters; }))
     {
         return;
     }
@@ -643,7 +718,15 @@ void QuanpinDictionary::mark_autocorrect_candidates(std::vector<WordItem> &candi
         {
             continue;
         }
-        if (fold_autocorrect_letters(item.pinyin) == primary_letters)
+        const std::string item_letters = fold_autocorrect_letters(item.pinyin);
+        // Match only against readings that actually differ from the typed
+        // letters. An alternative cut can fold back to exactly raw_letters
+        // (e.g. a v/u-normalizing fold that erases the corrected difference);
+        // matching that set would stamp corrected_from onto a candidate the
+        // user spelled correctly. The all-equal gate above only guards the case
+        // where EVERY set equals raw_letters, so this per-set filter is needed.
+        if (std::any_of(corrected_letter_sets.begin(), corrected_letter_sets.end(),
+                        [&](const std::string &letters) { return letters != raw_letters && item_letters == letters; }))
         {
             item.corrected_from = raw_letters;
         }
@@ -834,6 +917,7 @@ void QuanpinDictionary::reset_state()
 {
     pinyin_sequence_.clear();
     pinyin_segmentation_.clear();
+    pinyin_alternative_segmentations_.clear();
     current_candidate_list_.clear();
 }
 

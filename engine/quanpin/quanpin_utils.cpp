@@ -3,11 +3,10 @@
 #include "autocorrect_table.h"
 #include "../common/helpcode_utils.h"
 #include <algorithm>
-#include <deque>
 #include <limits>
-#include <optional>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace quanpin
 {
@@ -466,160 +465,318 @@ namespace
 {
 constexpr size_t kMaxAutocorrectEdges = 3;
 constexpr size_t kMaxAutocorrectInputLength = 64;
+constexpr size_t kNoPredecessor = static_cast<size_t>(-1);
 
 // Keys point at string literals in the generated tables (static storage), so views
-// stay valid forever.
-const std::unordered_map<std::string_view, std::string_view> &transposition_index()
+// stay valid forever; Entry::correct is a 16-bit index into the generated
+// kCorrectSyllables table, dereferenced once here so everything downstream
+// (ranking, merging, queries) keeps plain string views. One wrong key maps to
+// every correction target the tables offer: ambiguous variants are kept on purpose so the query layer can settle
+// them with word frequency (CN 101133411 B M3). Tables are merged in weight
+// order (transposition, deletion, insertion, neighbor), so target lists end up
+// weight-sorted with array order breaking ties -- the deterministic "table
+// order" of the ranking key.
+struct CorrectionTarget
 {
-    static const std::unordered_map<std::string_view, std::string_view> kIndex = [] {
-        std::unordered_map<std::string_view, std::string_view> index;
-        index.reserve(autocorrect::kTranspositionCount * 2);
-        for (const auto &entry : autocorrect::kTranspositionEntries)
+    std::string_view syllable;
+    // OR of every correction type whose table offers this (wrong -> syllable)
+    // pair. The tie-break weight is derived from the ENABLED subset at query
+    // time (see min_enabled_correction_weight), never from a switched-off table.
+    unsigned type_bit = 0;
+};
+
+// Canonical per-type tie-break cost. Each correction type carries one fixed
+// weight (header constants); this maps a single type bit back to it.
+constexpr int correction_type_weight(const unsigned type_bit)
+{
+    switch (type_bit)
+    {
+    case kAutocorrectTransposition:
+        return kAutocorrectTranspositionWeight;
+    case kAutocorrectDeletion:
+        return kAutocorrectDeletionWeight;
+    case kAutocorrectInsertion:
+        return kAutocorrectInsertionWeight;
+    case kAutocorrectNeighbor:
+        return kAutocorrectNeighborWeight;
+    default:
+        return 0;
+    }
+}
+
+// Cheapest explanation among the correction types that are BOTH offered by a
+// target and enabled by the caller. A pair shared by two tables is ranked by
+// the min weight of the enabled ones only, so disabling a cheaper table lets
+// the surviving (dearer) table set the cost instead of leaking the off table's.
+int min_enabled_correction_weight(const unsigned enabled_bits)
+{
+    int best = std::numeric_limits<int>::max();
+    for (const unsigned bit :
+         {kAutocorrectTransposition, kAutocorrectDeletion, kAutocorrectInsertion, kAutocorrectNeighbor})
+    {
+        if (enabled_bits & bit)
         {
-            index.emplace(entry.wrong, entry.correct);
+            best = std::min(best, correction_type_weight(bit));
         }
+    }
+    return best;
+}
+
+const std::unordered_map<std::string_view, std::vector<CorrectionTarget>> &correction_index()
+{
+    static const std::unordered_map<std::string_view, std::vector<CorrectionTarget>> kIndex = [] {
+        std::unordered_map<std::string_view, std::vector<CorrectionTarget>> index;
+        index.reserve((autocorrect::kTranspositionCount + autocorrect::kNeighborCount + autocorrect::kDeletionCount +
+                       autocorrect::kInsertionCount) *
+                      4 / 3);
+        const auto add_table = [&](const autocorrect::Entry *entries, const std::size_t count,
+                                   const unsigned type_bit) {
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                const std::string_view correct = autocorrect::kCorrectSyllables[entries[i].correct];
+                auto &targets = index[entries[i].wrong];
+                // The generator guarantees (wrong, correct) pairs are unique
+                // across tables; the merge below only defends against drift.
+                // Only the type bits accumulate -- the tie-break weight is
+                // recomputed from the enabled subset at query time, so a shared
+                // pair never inherits a switched-off table's cheaper cost.
+                const auto duplicate =
+                    std::find_if(targets.begin(), targets.end(),
+                                 [&](const CorrectionTarget &target) { return target.syllable == correct; });
+                if (duplicate != targets.end())
+                {
+                    duplicate->type_bit |= type_bit;
+                }
+                else
+                {
+                    targets.push_back(CorrectionTarget{correct, type_bit});
+                }
+            }
+        };
+        add_table(autocorrect::kTranspositionEntries, autocorrect::kTranspositionCount, kAutocorrectTransposition);
+        add_table(autocorrect::kDeletionEntries, autocorrect::kDeletionCount, kAutocorrectDeletion);
+        add_table(autocorrect::kInsertionEntries, autocorrect::kInsertionCount, kAutocorrectInsertion);
+        add_table(autocorrect::kNeighborEntries, autocorrect::kNeighborCount, kAutocorrectNeighbor);
         return index;
     }();
     return kIndex;
 }
 
-const std::unordered_map<std::string_view, std::string_view> &neighbor_index()
-{
-    static const std::unordered_map<std::string_view, std::string_view> kIndex = [] {
-        std::unordered_map<std::string_view, std::string_view> index;
-        index.reserve(autocorrect::kNeighborCount * 2);
-        for (const auto &entry : autocorrect::kNeighborEntries)
-        {
-            index.emplace(entry.wrong, entry.correct);
-        }
-        return index;
-    }();
-    return kIndex;
-}
-
+// Edge taken to arrive at a hypothesis position. raw_length is the number of
+// input letters consumed: equal to syllable.size() for legal syllables and
+// same-length corrections (transposition / neighbor), one less for deletion
+// corrections ("zhng" -> zhang), one more for insertion corrections
+// ("shangg" -> shang).
 struct AutocorrectEdge
 {
-    size_t end = 0;
+    size_t raw_length = 0;
     std::string_view syllable;
     bool corrected = false;
 };
+
+// One propagated cut hypothesis, ranked by (edge_count, weight, arrival):
+// fewest corrections first (the least-intrusive contract), then the summed
+// correction weights (only within the same edge count), then the deterministic
+// generation order -- positions ascending, pieces longest-first, table order.
+// prev_index points back into the predecessor position's final hypothesis
+// list, which is frozen once finalized, so indices stay stable.
+struct SearchHypothesis
+{
+    size_t edge_count = 0;
+    size_t prev_index = kNoPredecessor;
+    size_t arrival = 0;
+    int weight = 0;
+    AutocorrectEdge edge;
+    // Order-sensitive rolling hash of the joined syllable sequence. Two
+    // hypotheses reaching the same position share a sequence iff their hashes
+    // match; dedup keys on this instead of materializing the full string per
+    // node (which was O(length^2 * k) allocation on the keystroke path). A
+    // 64-bit collision across the few thousand live hypotheses is ~1e-11, and
+    // its only effect would be dropping one alternative reading -- the same
+    // class of outcome the dedup itself produces.
+    size_t seq_hash = 0;
+};
+
+// Fold one more syllable into a sequence hash (boost-style hash_combine over
+// the predecessor hash so order and separators are encoded).
+inline size_t extend_sequence_hash(const size_t seed, const std::string_view syllable)
+{
+    const size_t piece = std::hash<std::string_view>{}(syllable);
+    return seed ^ (piece + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2));
+}
 } // namespace
 
-AutocorrectCut autocorrect_cut_detail(const std::string &pinyin, const unsigned autocorrect_types)
+std::vector<AutocorrectCut> autocorrect_cut_kbest(const std::string &pinyin, const unsigned autocorrect_types,
+                                                  const std::size_t k)
 {
-    // Contract: the caller has already failed the correction cut (the input is
-    // not a legal pinyin combination), so a valid result here always contains
-    // at least one corrected edge. Manual delimiters express user intent and
-    // are never rewritten.
-    if (autocorrect_types == 0 || pinyin.empty() || pinyin.size() > kMaxAutocorrectInputLength ||
+    // Contract (see header): no type enabled, manual delimiters, overlong
+    // input, or k == 0 yield nothing. Every returned cut contains at least one
+    // corrected edge; legal-only hypotheses at the final position are dropped
+    // on arrival, so a fully legal input without any correction reading
+    // returns {} -- the caller already owns the plain segmentation.
+    if (k == 0 || autocorrect_types == 0 || pinyin.empty() || pinyin.size() > kMaxAutocorrectInputLength ||
         pinyin.find('\'') != std::string::npos)
     {
         return {};
     }
 
     const auto &valid_pinyin = intact_pinyin_set();
+    const auto &index = correction_index();
     const size_t length = pinyin.size();
 
-    // The generated tables are disjoint (cross-type conflicts are resolved at
-    // generation time), so at most one enabled index can claim a piece.
-    const auto correction = [](const unsigned types, const std::string_view piece) -> std::optional<std::string_view> {
-        if ((types & kAutocorrectTransposition) != 0)
+    // Top-k hypotheses per input position. All edges consume at least one raw
+    // letter, so a single left-to-right sweep finalizes each position before
+    // relaxing its out-edges -- a label-correcting pass without a queue.
+    std::vector<std::vector<SearchHypothesis>> best(length + 1);
+    std::vector<bool> finalized(length + 1, false);
+    size_t arrival = 0;
+    best[0].push_back(SearchHypothesis{}); // seed: zero edges, no predecessor
+
+    const auto finalize = [&](const size_t position) {
+        if (finalized[position])
         {
-            const auto &index = transposition_index();
-            if (const auto found = index.find(piece); found != index.end())
-            {
-                return found->second;
-            }
+            return;
         }
-        if ((types & kAutocorrectNeighbor) != 0)
+        finalized[position] = true;
+        auto &list = best[position];
+        if (list.size() < 2)
         {
-            const auto &index = neighbor_index();
-            if (const auto found = index.find(piece); found != index.end())
-            {
-                return found->second;
-            }
+            return;
         }
-        return std::nullopt;
+        std::sort(list.begin(), list.end(), [](const SearchHypothesis &lhs, const SearchHypothesis &rhs) {
+            if (lhs.edge_count != rhs.edge_count)
+            {
+                return lhs.edge_count < rhs.edge_count;
+            }
+            if (lhs.weight != rhs.weight)
+            {
+                return lhs.weight < rhs.weight;
+            }
+            return lhs.arrival < rhs.arrival;
+        });
+        // Same syllable sequence reached twice (different raw spans): keep the
+        // best-ranked hypothesis, drop the rest before truncating to k. The list
+        // is sorted by (edge_count, weight, arrival), NOT by sequence, so equal
+        // sequences are not adjacent -- std::unique would miss them. Scan front
+        // to back (best first) and drop any sequence hash already seen.
+        std::unordered_set<size_t> seen_sequences;
+        seen_sequences.reserve(list.size());
+        list.erase(std::remove_if(list.begin(), list.end(),
+                                  [&](const SearchHypothesis &hypothesis) {
+                                      return !seen_sequences.insert(hypothesis.seq_hash).second;
+                                  }),
+                   list.end());
+        if (list.size() > k)
+        {
+            list.resize(k);
+        }
     };
 
-    const auto kInfinite = std::numeric_limits<size_t>::max();
-    std::vector<size_t> dist(length + 1, kInfinite);
-    // Predecessor of each reachable position: the edge used to arrive.
-    std::vector<AutocorrectEdge> pred(length + 1);
+    const auto extend = [&](const size_t end, const SearchHypothesis &parent, const std::size_t parent_index,
+                            const AutocorrectEdge &edge, const int edge_weight) {
+        SearchHypothesis child;
+        child.edge_count = parent.edge_count + (edge.corrected ? 1 : 0);
+        if (child.edge_count > kMaxAutocorrectEdges)
+        {
+            return;
+        }
+        // Legal-only hypotheses at the final position can never win a result
+        // slot nor propagate further; dropping them here keeps k == 1
+        // consistent with larger k (same first cut either way).
+        if (end == length && child.edge_count == 0)
+        {
+            return;
+        }
+        child.prev_index = parent_index;
+        child.arrival = arrival++;
+        child.weight = parent.weight + edge_weight;
+        child.edge = edge;
+        child.seq_hash = extend_sequence_hash(parent.seq_hash, edge.syllable);
+        best[end].push_back(std::move(child));
+    };
 
-    // 0-1 BFS over the autocorrect-aware syllable graph: normal syllables are
-    // zero-cost edges, corrected ones cost one. The first full path popped with
-    // the minimal corrected-edge count is the least-intrusive correction.
-    std::deque<size_t> queue;
-    dist[0] = 0;
-    queue.push_back(0);
-
-    while (!queue.empty())
+    for (size_t start = 0; start < length; ++start)
     {
-        const size_t start = queue.front();
-        queue.pop_front();
-
-        const size_t current_cost = dist[start];
+        finalize(start);
+        const auto &hypotheses = best[start];
+        if (hypotheses.empty())
+        {
+            continue;
+        }
         const size_t remaining = length - start;
         const size_t max_len = std::min<size_t>(remaining, 6);
         for (size_t len = max_len; len >= 1; --len)
         {
             const std::string_view piece(pinyin.data() + start, len);
             AutocorrectEdge edge;
+            edge.raw_length = len;
             if (valid_pinyin.find(std::string(piece)) != valid_pinyin.end())
             {
-                edge = AutocorrectEdge{start + len, piece, false};
+                edge.syllable = piece;
+                edge.corrected = false;
+                for (size_t i = 0; i < hypotheses.size(); ++i)
+                {
+                    extend(start + len, hypotheses[i], i, edge, 0);
+                }
+                continue;
             }
-            else if (const auto corrected = correction(autocorrect_types, piece))
-            {
-                edge = AutocorrectEdge{start + len, *corrected, true};
-            }
-            else
+            const auto found = index.find(piece);
+            if (found == index.end())
             {
                 continue;
             }
-
-            const size_t next_cost = current_cost + (edge.corrected ? 1 : 0);
-            if (next_cost >= dist[edge.end] || next_cost > kMaxAutocorrectEdges)
+            // Every ambiguous target is a parallel edge; the enabled type
+            // bits gate which tables may answer.
+            for (const auto &target : found->second)
             {
-                continue;
-            }
-            dist[edge.end] = next_cost;
-            pred[edge.end] = edge;
-            if (edge.corrected)
-            {
-                queue.push_back(edge.end);
-            }
-            else
-            {
-                queue.push_front(edge.end);
+                const unsigned enabled_bits = autocorrect_types & target.type_bit;
+                if (enabled_bits == 0)
+                {
+                    continue;
+                }
+                edge.syllable = target.syllable;
+                edge.corrected = true;
+                const int weight = min_enabled_correction_weight(enabled_bits);
+                for (size_t i = 0; i < hypotheses.size(); ++i)
+                {
+                    extend(start + len, hypotheses[i], i, edge, weight);
+                }
             }
         }
     }
+    finalize(length);
 
-    if (dist[length] == kInfinite || dist[length] == 0)
+    // Rebuild each surviving end hypothesis by walking the predecessor chain.
+    // raw_length (not syllable.size()) gives the raw span: deletion edges
+    // consume one letter less, insertion edges one letter more, than the
+    // syllable they produce.
+    std::vector<AutocorrectCut> results;
+    for (const auto &hypothesis : best[length])
     {
-        // Either no correction path exists, or the input is fully legal after all
-        // (nothing to correct; the caller already owns the plain segmentation).
-        return {};
+        AutocorrectCut cut;
+        size_t position = length;
+        const SearchHypothesis *current = &hypothesis;
+        while (current->prev_index != kNoPredecessor)
+        {
+            const size_t segment_start = position - current->edge.raw_length;
+            cut.segments.push_back(AutocorrectCutSegment{std::string(current->edge.syllable),
+                                                         pinyin.substr(segment_start, current->edge.raw_length),
+                                                         segment_start, current->edge.corrected});
+            position = segment_start;
+            current = &best[position][current->prev_index];
+        }
+        std::reverse(cut.segments.begin(), cut.segments.end());
+        results.push_back(std::move(cut));
     }
+    return results;
+}
 
-    // Rebuild the chain of predecessor edges from the end back to the start.
-    // Every edge consumes exactly syllable.size() input chars (transpositions
-    // and neighbor substitutions preserve length), so the raw span of each
-    // edge is derivable from the position without storing it.
-    AutocorrectCut result;
-    size_t pos = length;
-    while (pos != 0)
-    {
-        const auto &edge = pred[pos];
-        const size_t start = pos - edge.syllable.size();
-        result.segments.push_back(AutocorrectCutSegment{
-            std::string(edge.syllable), pinyin.substr(start, edge.syllable.size()), start, edge.corrected});
-        pos = start;
-    }
-    std::reverse(result.segments.begin(), result.segments.end());
-    return result;
+AutocorrectCut autocorrect_cut_detail(const std::string &pinyin, const unsigned autocorrect_types)
+{
+    // Single-hypothesis projection of the k-best search: same gating, same
+    // ranking, cheapest path for the per-keystroke preedit consumer.
+    const auto kbest = autocorrect_cut_kbest(pinyin, autocorrect_types, 1);
+    return kbest.empty() ? AutocorrectCut{} : kbest.front();
 }
 
 Segments autocorrect_cut(const std::string &pinyin, const unsigned autocorrect_types)
