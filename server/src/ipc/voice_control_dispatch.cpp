@@ -1,5 +1,5 @@
 #include "voice_control_dispatch.h"
-#include "MetasequoiaImeEngine/contracts/windows_ipc.h"
+#include "contracts/windows_ipc.h"
 #include <cwchar>
 #include <cerrno>
 
