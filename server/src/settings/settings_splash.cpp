@@ -109,7 +109,7 @@ HRESULT EnsureFactories()
     {
         const HRESULT hr =
             g_dwrite->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-                                       DWRITE_FONT_STRETCH_NORMAL, 13.0f, L"zh-cn", &g_hint_format);
+                                       DWRITE_FONT_STRETCH_NORMAL, 14.0f, L"zh-cn", &g_hint_format);
         if (FAILED(hr))
             return hr;
         g_hint_format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -209,7 +209,7 @@ void PaintSplash()
     }
 
     const wchar_t *title = L"正在打开设置";
-    const wchar_t *hint = L"首次启动可能需要稍等片刻";
+    const wchar_t *hint = L"冷启动可能需要稍等片刻";
     const D2D1_RECT_F title_rect =
         D2D1::RectF(24.0f, cy + kSpinnerRadiusDip + 42.0f, size.width - 24.0f, cy + kSpinnerRadiusDip + 72.0f);
     const D2D1_RECT_F hint_rect =
