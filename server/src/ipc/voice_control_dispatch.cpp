@@ -5,13 +5,12 @@
 
 namespace FanyNamedPipe
 {
-bool ParseVoiceControl(std::wstring_view frame, std::uint64_t client_id,
-                       std::uint64_t activation_epoch, std::uint64_t generation,
-                       VoiceControlAction &action)
+bool ParseVoiceControl(std::wstring_view frame, std::uint64_t client_id, std::uint64_t activation_epoch,
+                       std::uint64_t generation, VoiceControlAction &action)
 {
     constexpr std::wstring_view prefix = L"MSIME_VOICE|";
-    if (frame.size() > FanyImeVoiceControl::MaxMessageChars || frame.substr(0, prefix.size()) != prefix ||
-        !client_id || !activation_epoch || !generation)
+    if (frame.size() > FanyImeVoiceControl::MaxMessageChars || frame.substr(0, prefix.size()) != prefix || !client_id ||
+        !activation_epoch || !generation)
         return false;
     frame.remove_prefix(prefix.size());
     wchar_t *end = nullptr;
@@ -25,8 +24,7 @@ bool ParseVoiceControl(std::wstring_view frame, std::uint64_t client_id,
         const auto actual = std::wcstoull(begin, next, 10);
         return errno != ERANGE && actual == expected;
     };
-    if (!parse(end + 1, client_id, &end) || *end != L'|' ||
-        !parse(end + 1, activation_epoch, &end) || *end != L'|' ||
+    if (!parse(end + 1, client_id, &end) || *end != L'|' || !parse(end + 1, activation_epoch, &end) || *end != L'|' ||
         !parse(end + 1, generation, &end) || *end != L'\0')
         return false;
     action = static_cast<VoiceControlAction>(command);
