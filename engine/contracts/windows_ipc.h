@@ -124,6 +124,17 @@ constexpr std::uint32_t ToTsf = 1;
 constexpr std::uint32_t ToTsfWorkerThread = 2;
 } // namespace FanyImePipeRole
 
+// Tauri-to-Server voice lifecycle commands. Consumers must authenticate the
+// client_id and activation epoch with the registered pipe lease; generation
+// is a non-zero session value used to reject stale cancellation requests.
+namespace FanyImeVoiceControl
+{
+constexpr std::uint32_t Start = 1;
+constexpr std::uint32_t Stop = 2;
+constexpr std::uint32_t Cancel = 3;
+constexpr std::size_t MaxMessageChars = 96;
+} // namespace FanyImeVoiceControl
+
 struct alignas(8) FanyImePipeHello
 {
     uint64_t client_id = 0;

@@ -176,6 +176,8 @@ set(SRC_FILES
     "./src/ipc/ipc.cpp"
     "./src/ipc/ipc.h"
     "./src/ipc/voice_composition_pipe.h"
+    "./src/ipc/voice_control_dispatch.cpp"
+    "./src/ipc/voice_control_dispatch.h"
     "./src/kaomoji/kaomoji_ime.cpp"
     "./src/kaomoji/kaomoji_ime.h"
     "./src/log/fanylog.cpp"
