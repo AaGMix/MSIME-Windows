@@ -1307,6 +1307,19 @@ bool CMetasequoiaIME::_ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM
             return setKeyState(CATEGORY_CANDIDATE, FUNCTION_MOVE_PAGE_BOTTOM);
         case VK_OEM_MINUS:
         case VK_OEM_PLUS:
+            if (*classifiedCode == VK_OEM_PLUS && shadow.unicodeMode && shadow.inputLength == 1 &&
+                *classifiedWch == L'+')
+            {
+                return setKeyState(CATEGORY_COMPOSING, FUNCTION_INPUT);
+            }
+            if (Global::JapaneseInputModeEnabled.load(std::memory_order_relaxed))
+            {
+                // 日语模式禁用 -/= 翻页：'-' 输入长音符（ー），其余字符退回标点上屏。
+                return *classifiedCode == VK_OEM_MINUS && *classifiedWch == L'-'
+                           ? setKeyState(CATEGORY_COMPOSING, FUNCTION_INPUT)
+                           : setKeyState(CATEGORY_COMPOSING, FUNCTION_PUNCTUATION);
+            }
+            return setKeyState(CATEGORY_CANDIDATE, FUNCTION_SERVER_CANDIDATE_KEY);
         case VK_OEM_COMMA:
         case VK_OEM_PERIOD:
         case VK_OEM_4:
@@ -1316,11 +1329,6 @@ bool CMetasequoiaIME::_ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM
         case VK_NEXT:
         case VK_UP:
         case VK_DOWN:
-            if (*classifiedCode == VK_OEM_PLUS && shadow.unicodeMode && shadow.inputLength == 1 &&
-                *classifiedWch == L'+')
-            {
-                return setKeyState(CATEGORY_COMPOSING, FUNCTION_INPUT);
-            }
             return setKeyState(CATEGORY_CANDIDATE, FUNCTION_SERVER_CANDIDATE_KEY);
         default:
             break;

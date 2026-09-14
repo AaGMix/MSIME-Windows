@@ -698,9 +698,38 @@ std::wstring BuildCreateWordPipePayload(const std::string &remaining_raw_input_w
     return remaining + L'\t' + word + L'\t' + preedit;
 }
 
+// 日语模式由配置项决定，和 R 模式（中文里临时切日语）无关：TSF 侧只能看到配置，
+// 两侧必须用同一个判据，否则按键分类会不一致、预编辑会错位。
+bool IsJapaneseInputMode()
+{
+    return GetConfiguredInputMode() == "japanese";
+}
+
+// 日语模式下 '-' 不翻页，而是长音符（ー）的输入键。空编码时也要起头组合，
+// 候选框第一项是长音符 ー、第二项是普通连字符 '-'（见日语候选提供者）。
+bool IsJapaneseLongVowelKey(UINT keycode, WCHAR wch)
+{
+    return keycode == VK_OEM_MINUS && wch == L'-' && IsJapaneseInputMode() && g_inputSession != nullptr;
+}
+
+// 日语模式下 '-' '=' 一律不当翻页键用。
+bool IsJapaneseDisabledPagingKey(UINT keycode)
+{
+    return (keycode == VK_OEM_MINUS || keycode == VK_OEM_PLUS) && IsJapaneseInputMode();
+}
+
 bool IsCommitWithHighlightedCandidatePunctuationInCandidateMode(UINT keycode, WCHAR wch)
 {
-    if (keycode == VK_OEM_MINUS || keycode == VK_OEM_PLUS || keycode == VK_TAB)
+    if (keycode == VK_TAB)
+    {
+        return false;
+    }
+    if ((keycode == VK_OEM_MINUS || keycode == VK_OEM_PLUS) && !IsJapaneseDisabledPagingKey(keycode))
+    {
+        return false;
+    }
+    // 日语模式下 '-' 走长音符输入，不能当作上屏标点。
+    if (IsJapaneseLongVowelKey(keycode, wch))
     {
         return false;
     }
@@ -727,6 +756,8 @@ bool IsCommitWithHighlightedCandidatePunctuationInCandidateMode(UINT keycode, WC
         L'*',  //
         L'-',  // Numpad arithmetic keys are not candidate paging keys.
         L'+',  //
+        L'_',  // 日语模式禁用 -/= 翻页后，这两个字符退回标点上屏。
+        L'=',  //
         L'(',  //
         L')',  //
         L'[',  //
@@ -786,6 +817,10 @@ bool IsSelectionKey(UINT keycode)
 
 bool IsPagingKey(UINT keycode)
 {
+    if (IsJapaneseDisabledPagingKey(keycode))
+    {
+        return false;
+    }
     return keycode == VK_OEM_MINUS || keycode == VK_OEM_PLUS || keycode == VK_TAB || keycode == VK_PRIOR ||
            keycode == VK_NEXT || keycode == VK_LEFT || keycode == VK_RIGHT || keycode == VK_UP || keycode == VK_DOWN ||
            ((keycode == VK_OEM_COMMA || keycode == VK_OEM_PERIOD) && GetConfiguredPagingCommaPeriodEnabled()) ||
@@ -794,6 +829,10 @@ bool IsPagingKey(UINT keycode)
 
 bool IsCandidateNavigationKey(UINT keycode)
 {
+    if (IsJapaneseDisabledPagingKey(keycode))
+    {
+        return false;
+    }
     return keycode == VK_OEM_MINUS || keycode == VK_OEM_PLUS || keycode == VK_OEM_COMMA || keycode == VK_OEM_PERIOD ||
            keycode == VK_OEM_4 || keycode == VK_OEM_6 || keycode == VK_TAB || keycode == VK_PRIOR ||
            keycode == VK_NEXT || keycode == VK_UP || keycode == VK_DOWN;
@@ -857,6 +896,10 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch)
                  g_inputSession->current_scheme_type() == SchemeType::Shuangpin)
         {
             input = ';';
+        }
+        else if (IsJapaneseLongVowelKey(keycode, wch))
+        {
+            input = '-';
         }
         else if (IsUnicodeCompositionActive(raw) && keycode >= '0' && keycode <= '9')
         {
@@ -3890,9 +3933,12 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     const bool is_manual_pinyin_separator = IsManualPinyinSeparatorKey(Global::Keycode, Global::Wch);
     const bool is_microsoft_shuangpin_ing_key =
         IsMicrosoftShuangpinIngKey(Global::Keycode, Global::Wch, input_before_key);
-    const int word_character_direction = FanyImeIpc::WordToCharacterDirection(
-        Global::Keycode, Global::Wch, Global::ModifiersDown, GetConfiguredWordToCharacterEnabled(),
-        GetConfiguredWordToCharacterKeys() == "minus_equal");
+    // 日语模式下 '-' 是长音符输入键，既不翻页也不做词转字。
+    const bool is_japanese_long_vowel = IsJapaneseLongVowelKey(Global::Keycode, Global::Wch);
+    const int word_character_direction =
+        FanyImeIpc::WordToCharacterDirection(Global::Keycode, Global::Wch, Global::ModifiersDown,
+                                             GetConfiguredWordToCharacterEnabled() && !is_japanese_long_vowel,
+                                             GetConfiguredWordToCharacterKeys() == "minus_equal");
     const bool is_commit_with_highlighted_candidate_punctuation =
         word_character_direction != 0 ||
         (!is_manual_pinyin_separator && !is_microsoft_shuangpin_ing_key &&
@@ -3903,10 +3949,11 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     const bool is_unicode_hex_digit = unicode_composition_active && !is_unicode_shift_digit_selection &&
                                       Global::Keycode >= '0' && Global::Keycode <= '9';
     const bool is_unicode_plus = unicode_composition_active && Global::Keycode == VK_OEM_PLUS && Global::Wch == L'+';
-    const bool is_composition_edit_key =
-        Global::Keycode == VK_LEFT || Global::Keycode == VK_RIGHT || Global::Keycode == VK_BACK ||
-        Global::Keycode == VK_DELETE || (Global::Keycode >= 'A' && Global::Keycode <= 'Z') ||
-        is_manual_pinyin_separator || is_microsoft_shuangpin_ing_key || is_unicode_hex_digit || is_unicode_plus;
+    const bool is_composition_edit_key = Global::Keycode == VK_LEFT || Global::Keycode == VK_RIGHT ||
+                                         Global::Keycode == VK_BACK || Global::Keycode == VK_DELETE ||
+                                         (Global::Keycode >= 'A' && Global::Keycode <= 'Z') ||
+                                         is_manual_pinyin_separator || is_microsoft_shuangpin_ing_key ||
+                                         is_unicode_hex_digit || is_unicode_plus || is_japanese_long_vowel;
     const bool should_forward_key_to_session = !is_commit_with_highlighted_candidate_punctuation && !is_selection_key &&
                                                !is_paging_key && !is_composition_edit_key;
 
@@ -4050,7 +4097,7 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     //
     if (FanyImeIpc::ShouldSendCompositionReply(Global::Keycode >= 'A' && Global::Keycode <= 'Z',
                                                is_manual_pinyin_separator, is_microsoft_shuangpin_ing_key,
-                                               is_unicode_hex_digit, is_unicode_plus))
+                                               is_unicode_hex_digit, is_unicode_plus, is_japanese_long_vowel))
     {
         if (IsUiLessMode())
         {

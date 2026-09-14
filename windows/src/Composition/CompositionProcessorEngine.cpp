@@ -570,6 +570,33 @@ BOOL CCompositionProcessorEngine::IsPunctuation(WCHAR wch)
 
 namespace
 {
+// 日语模式禁用 -/= 翻页：'-' 是长音符（ー）的输入键。空编码时也要起头组合，
+// 候选框第一项是长音符 ー、第二项是普通连字符 '-'（候选由服务端提供）。
+bool IsJapaneseLongVowelKey(UINT uCode, WCHAR wch)
+{
+    return uCode == VK_OEM_MINUS && wch == L'-' && Global::JapaneseInputModeEnabled.load(std::memory_order_relaxed);
+}
+
+// '_' '=' '+' 在日语模式下也不翻页，但它们没有假名写法，按标点上屏处理，
+// 且只在已有编码时接管——空编码时仍然是普通标点，归应用程序。
+bool IsJapaneseMinusEqualPunctuationKey(UINT uCode, WCHAR wch, BOOL fComposing, CANDIDATE_MODE candidateMode,
+                                        DWORD_PTR keystrokeLength)
+{
+    if (uCode != VK_OEM_MINUS && uCode != VK_OEM_PLUS)
+    {
+        return false;
+    }
+    if (keystrokeLength == 0 || !Global::JapaneseInputModeEnabled.load(std::memory_order_relaxed))
+    {
+        return false;
+    }
+    if (IsJapaneseLongVowelKey(uCode, wch))
+    {
+        return false;
+    }
+    return fComposing || candidateMode != CANDIDATE_NONE;
+}
+
 bool IsCommitWithHighlightedCandidatePunctuationInCandidateMode(UINT uCode, WCHAR wch, CANDIDATE_MODE candidateMode)
 {
     if (candidateMode == CANDIDATE_NONE)
@@ -583,12 +610,19 @@ bool IsCommitWithHighlightedCandidatePunctuationInCandidateMode(UINT uCode, WCHA
     {
     case VK_PRIOR:
     case VK_NEXT:
-    case VK_OEM_MINUS:
-    case VK_OEM_PLUS:
     case VK_HOME:
     case VK_END:
     case VK_TAB:
         return false;
+    case VK_OEM_MINUS:
+    case VK_OEM_PLUS:
+        // 日语模式下这两个键不翻页，交给下面的标点判定处理；但 '-' 走长音符输入，
+        // 不是标点上屏。
+        if (!Global::JapaneseInputModeEnabled.load(std::memory_order_relaxed) || IsJapaneseLongVowelKey(uCode, wch))
+        {
+            return false;
+        }
+        break;
     default:
         break;
     }
@@ -2011,6 +2045,16 @@ BOOL CCompositionProcessorEngine::IsVirtualKeyNeedForFreshComposition(UINT uCode
         }
         return TRUE;
     }
+    // 日语模式下 '-' 单独按也要起头组合，弹出候选框选长音符 ー 或普通 '-'。
+    if (IsJapaneseLongVowelKey(uCode, pwch ? *pwch : 0))
+    {
+        if (pKeyState)
+        {
+            pKeyState->Category = CATEGORY_COMPOSING;
+            pKeyState->Function = FUNCTION_INPUT;
+        }
+        return TRUE;
+    }
     if (IsVirtualKeyKeystrokeComposition(uCode, pKeyState, FUNCTION_INPUT))
     {
         return TRUE;
@@ -2072,6 +2116,16 @@ BOOL CCompositionProcessorEngine::IsVirtualKeyNeed( //
         return TRUE;
     }
 
+    if (IsJapaneseLongVowelKey(uCode, pwch ? *pwch : 0))
+    {
+        if (pKeyState)
+        {
+            pKeyState->Category = CATEGORY_COMPOSING;
+            pKeyState->Function = FUNCTION_INPUT;
+        }
+        return TRUE;
+    }
+
     // U-mode: bare digits compose hex; Shift+1..9 selects candidates.
     if (IsUnicodeModeComposition() && uCode >= L'0' && uCode <= L'9')
     {
@@ -2106,14 +2160,27 @@ BOOL CCompositionProcessorEngine::IsVirtualKeyNeed( //
         return TRUE;
     }
 
+    if (IsJapaneseMinusEqualPunctuationKey(uCode, pwch ? *pwch : 0, fComposing, candidateMode,
+                                           _keystrokeBuffer.GetLength()))
+    {
+        if (pKeyState)
+        {
+            pKeyState->Category = CATEGORY_COMPOSING;
+            pKeyState->Function = FUNCTION_PUNCTUATION;
+        }
+        return TRUE;
+    }
+
     // The Server owns the configurable comma/period behavior. Always route
     // these keys through it while candidates are active; its response decides
     // whether the key navigates or commits the highlighted candidate with punctuation.
     const bool isCommaPeriodPagingKey = uCode == VK_OEM_COMMA || uCode == VK_OEM_PERIOD;
     const bool isBracketPagingKey = uCode == VK_OEM_4 || uCode == VK_OEM_6;
+    const bool isMinusEqualPagingKey = (uCode == VK_OEM_MINUS || uCode == VK_OEM_PLUS) &&
+                                       !Global::JapaneseInputModeEnabled.load(std::memory_order_relaxed);
     if (candidateMode != CANDIDATE_NONE &&
-        (uCode == VK_OEM_MINUS || uCode == VK_OEM_PLUS || isCommaPeriodPagingKey || isBracketPagingKey ||
-         uCode == VK_TAB || uCode == VK_PRIOR || uCode == VK_NEXT || uCode == VK_UP || uCode == VK_DOWN))
+        (isMinusEqualPagingKey || isCommaPeriodPagingKey || isBracketPagingKey || uCode == VK_TAB ||
+         uCode == VK_PRIOR || uCode == VK_NEXT || uCode == VK_UP || uCode == VK_DOWN))
     {
         if (IsUnicodeModeComposition() && _keystrokeBuffer.GetLength() == 1 && uCode == VK_OEM_PLUS && pwch &&
             *pwch == L'+')

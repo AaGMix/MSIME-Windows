@@ -79,6 +79,16 @@ std::vector<WordItem> JapaneseCandidateProvider::query(const QueryRequest &reque
 
     std::vector<WordItem> candidates;
     std::unordered_set<std::string> seen;
+
+    // 单独按 '-' 时给出两个候选：长音符 ー 在前，普通连字符 '-' 在后。
+    // 这里直接返回，避免句子搜索在两项之间插进无关候选。
+    if (request.raw_input == "-")
+    {
+        AppendUnique(candidates, seen, request.raw_input_with_cases, "ー", 1000000, CandidateSource::Generated);
+        AppendUnique(candidates, seen, request.raw_input_with_cases, "-", 999999, CandidateSource::Generated);
+        return candidates;
+    }
+
     const auto conversion = japanese::ConvertRomaji(request.raw_input);
     const bool kana_first = japanese::IsSingleKanaConversion(conversion);
 
