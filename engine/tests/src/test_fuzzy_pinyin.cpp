@@ -31,6 +31,13 @@ bool contains(const std::vector<WordItem> &items, const std::string &word)
 {
     return std::any_of(items.begin(), items.end(), [&](const auto &item) { return item.word == word; });
 }
+std::size_t position(const std::vector<WordItem> &items, const std::string &word)
+{
+    for (std::size_t i = 0; i < items.size(); ++i)
+        if (items[i].word == word)
+            return i;
+    throw std::runtime_error("Missing " + word);
+}
 int main()
 {
     const auto directory =
@@ -50,7 +57,7 @@ int main()
     {
         sqlite3 *db = nullptr;
         require(sqlite3_open((directory / "msime.db").u8string().c_str(), &db) == SQLITE_OK, "open fixture");
-        const auto insert = [&](const std::string &key, const std::string &word) {
+        const auto insert_weighted = [&](const std::string &key, const std::string &word, std::int64_t weight) {
             const auto segments = quanpin::split_segments(key);
             const auto table = quanpin::build_table_name(segments);
             std::string escaped;
@@ -62,9 +69,11 @@ int main()
             }
             const auto sql = "CREATE TABLE IF NOT EXISTS " + table +
                              "(key TEXT,jp TEXT,value TEXT,weight INTEGER);INSERT INTO " + table + " VALUES('" +
-                             escaped + "','','" + word + "',100);";
-            require(sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK, "fixture insert " + key);
+                             escaped + "','','" + word + "'," + std::to_string(weight) + ");";
+            require(sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK,
+                    "fixture insert " + key + ": " + sqlite3_errmsg(db));
         };
+        const auto insert = [&](const std::string &key, const std::string &word) { insert_weighted(key, word, 100); };
         const std::vector<std::pair<std::string, std::string>> pairs = {
             {"zan", "zhan"}, {"can", "chan"}, {"san", "shan"}, {"na", "la"},      {"fa", "ha"},     {"ran", "lan"},
             {"ban", "bang"}, {"ben", "beng"}, {"bin", "bing"}, {"lian", "liang"}, {"guan", "guang"}};
@@ -77,6 +86,19 @@ int main()
         insert("zhong", "中");
         insert("guo", "国");
         insert("zhong'guo", "中国");
+        // 回归夹具：权重取自出货词库的真实量级。xian->西安对先是真歧义（比值 3.3% 过门槛），
+        // xie->西鄂、jiang->激昂被门槛拒收；youdian->尤迪安的键更长（you'di'an），旧排序按
+        // 原始键长比较时，即使模糊音没有产出任何变体也会把它顶到第一。
+        insert_weighted("xian", "先", 1662684);
+        insert_weighted("xi'an", "西安", 55003);
+        insert_weighted("xie", "些", 3752167);
+        insert_weighted("xie", "蟹", 10000);
+        insert_weighted("xi'e", "西鄂", 6);
+        insert_weighted("jiang", "将", 2629219);
+        insert_weighted("jiang", "僵", 94955);
+        insert_weighted("ji'ang", "激昂", 23740);
+        insert_weighted("you'dian", "邮电", 999);
+        insert_weighted("you'di'an", "尤迪安", 7);
         sqlite3_close(db);
         std::filesystem::create_directories(directory / "helpcodes");
         std::ofstream(directory / "helpcodes" / "helpcode.txt") << "中=ab\n宗=cd\n国=ef\n";
@@ -97,6 +119,20 @@ int main()
                               "糊" + std::to_string(i)),
                     "unselected rule expanded");
         }
+        // 回归断言：备选切分的保护位与模糊音分支的排序不得把罕见重码顶到主读音前面。
+        const FuzzyPinyinOptions fuzzy_on{1u};
+        const auto xian_list = dictionary.query("xian", "xian", 0u, fuzzy_on);
+        require(xian_list.at(0).word == "先" && xian_list.at(1).word == "西安",
+                "real ambiguity lost its protected slot");
+        const auto xie_list = dictionary.query("xie", "xie", 0u, fuzzy_on);
+        require(xie_list.at(0).word == "些" && xie_list.at(1).word == "蟹" && position(xie_list, "西鄂") > 1,
+                "rare re-segmentation outranked the exact reading");
+        const auto jiang_list = dictionary.query("jiang", "jiang", 0u, fuzzy_on);
+        require(jiang_list.at(0).word == "将" && jiang_list.at(1).word == "僵" && position(jiang_list, "激昂") > 1,
+                "rare homophone word outranked the exact reading");
+        const auto youdian_list = dictionary.query("youdian", "you'dian", 0u, fuzzy_on);
+        require(youdian_list.at(0).word == "邮电" && position(youdian_list, "尤迪安") > 0,
+                "longer alternative key outranked the exact reading");
         require(quanpin::fuzzy_syllables("zh", {0x7ff}) == std::vector<std::string>{"zh"},
                 "incomplete initial changed");
         require(quanpin::fuzzy_syllables("bian", {1u << 6}) == std::vector<std::string>{"bian"},
