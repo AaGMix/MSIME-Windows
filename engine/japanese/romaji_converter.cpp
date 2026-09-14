@@ -77,7 +77,8 @@ RomajiConversion ConvertRomaji(std::string_view input)
                 index += 2;
                 continue;
             }
-            if (next == 'n' || (IsConsonant(next) && next != 'y'))
+            // 长音符 '-' 不是元音，和辅音一样让前面的 n 收成 ん。
+            if (next == 'n' || next == '-' || (IsConsonant(next) && next != 'y'))
             {
                 result.hiragana += "ん";
                 ++index;

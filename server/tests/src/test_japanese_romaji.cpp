@@ -15,13 +15,19 @@
 
 namespace
 {
+UINT VirtualKeyForRomajiChar(char ch)
+{
+    if (ch == '-')
+        return 0xBD; // VK_OEM_MINUS
+    if (ch == '\'')
+        return 0xDE; // VK_OEM_7
+    return static_cast<UINT>(static_cast<unsigned char>(std::toupper(static_cast<unsigned char>(ch))));
+}
+
 void InputRomaji(JapaneseRomajiScheme &scheme, const std::string &keys)
 {
     for (const char ch : keys)
-    {
-        const char upper = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
-        scheme.handle_key(static_cast<UINT>(upper), 0, static_cast<WCHAR>(ch));
-    }
+        scheme.handle_key(VirtualKeyForRomajiChar(ch), 0, static_cast<WCHAR>(ch));
 }
 
 bool ContainsWord(const std::vector<WordItem> &items, const std::string &word)
@@ -66,6 +72,62 @@ TEST_CASE(JapaneseRomajiConvertsCommonImeSpellings)
     REQUIRE_EQ(japanese::HiraganaToKatakana("にほんご"), std::string("ニホンゴ"));
     REQUIRE_EQ(japanese::HiraganaToRomaji("かわいい"), std::string("kawaii"));
     REQUIRE_EQ(japanese::HiraganaToRomaji("にほんご"), std::string("nihongo"));
+}
+
+TEST_CASE(JapaneseRomajiLongVowelKeyTypesChounpu)
+{
+    // "コーヒー" 里的 "ー" 就是 P 右上角的 '-' 键。
+    REQUIRE_EQ(japanese::ConvertRomaji("ko-hi-").hiragana, std::string("こーひー"));
+    REQUIRE(japanese::ConvertRomaji("ko-hi-").complete);
+    REQUIRE_EQ(japanese::HiraganaToKatakana("こーひー"), std::string("コーヒー"));
+    REQUIRE_EQ(japanese::ConvertRomaji("ra-men").hiragana, std::string("らーめん"));
+    // '-' 不是元音，前面的单个 n 要收成 ん。
+    REQUIRE_EQ(japanese::ConvertRomaji("n-").hiragana, std::string("んー"));
+    REQUIRE_EQ(japanese::HiraganaToRomaji("コーヒー"), std::string("ko-hi-"));
+}
+
+TEST_CASE(JapaneseRomajiSchemeAcceptsLongVowelKeyInsteadOfPaging)
+{
+    JapaneseRomajiScheme scheme;
+    InputRomaji(scheme, "ko-hi-");
+    const auto request = scheme.build_request();
+    REQUIRE(request.valid);
+    REQUIRE_EQ(request.raw_input, std::string("ko-hi-"));
+    REQUIRE_EQ(request.segmentation, std::string("こーひー"));
+    REQUIRE_EQ(request.key_strokes.size(), static_cast<size_t>(6));
+
+    // 服务端回填编码（造词、光标编辑）时也必须保留 '-'。
+    scheme.set_raw_input("ko-hi-", "ko-hi-");
+    REQUIRE_EQ(scheme.get_preedit(), std::string("ko-hi-"));
+}
+
+TEST_CASE(JapaneseRomajiSchemeStartsCompositionFromBareLongVowelKey)
+{
+    // 空编码下单独按 '-' 也要起头组合，好让候选框弹出来。
+    JapaneseRomajiScheme scheme;
+    InputRomaji(scheme, "-");
+    const auto request = scheme.build_request();
+    REQUIRE(request.valid);
+    REQUIRE_EQ(request.raw_input, std::string("-"));
+    REQUIRE_EQ(request.segmentation, std::string("ー"));
+}
+
+TEST_CASE(JapaneseProviderOffersChounpuThenPlainHyphenForBareMinus)
+{
+    const auto path = CreateJapaneseDatabase();
+    {
+        JapaneseCandidateProvider provider(test::Utf8(path));
+        QueryRequest request;
+        request.scheme = SchemeType::JapaneseRomaji;
+        request.raw_input = "-";
+        request.raw_input_with_cases = "-";
+        request.valid = true;
+        const auto candidates = provider.query(request);
+        REQUIRE_EQ(candidates.size(), static_cast<size_t>(2));
+        REQUIRE_EQ(candidates[0].word, std::string("ー"));
+        REQUIRE_EQ(candidates[1].word, std::string("-"));
+    }
+    std::filesystem::remove(path);
 }
 
 TEST_CASE(JapaneseRomajiSchemePreservesTypedCodeAndShowsKanaSegmentation)

@@ -38,6 +38,13 @@ void JapaneseRomajiScheme::handle_key(ImeKeyCode vk, ImeModifierMask modifiers_d
         key_strokes_.push_back(KeyStroke{vk, modifiers_down, wch});
         return;
     }
+    // '-' 是长音符（ー）的罗马字写法，不是翻页键，罗马字表里已有对应条目。
+    if (vk == ImeKey::Minus && wch == u'-')
+    {
+        raw_input_.push_back('-');
+        key_strokes_.push_back(KeyStroke{vk, modifiers_down, wch});
+        return;
+    }
     if (!IsRomajiKey(vk))
         return;
 
@@ -52,7 +59,7 @@ void JapaneseRomajiScheme::set_raw_input(const std::string &raw_input, const std
 {
     raw_input_ = raw_input_with_cases.empty() ? raw_input : raw_input_with_cases;
     raw_input_.erase(std::remove_if(raw_input_.begin(), raw_input_.end(),
-                                    [](unsigned char ch) { return !std::isalpha(ch) && ch != '\''; }),
+                                    [](unsigned char ch) { return !std::isalpha(ch) && ch != '\'' && ch != '-'; }),
                      raw_input_.end());
     key_strokes_.clear();
 }

@@ -74,9 +74,22 @@ TEST_CASE(english_mode_toggle_requires_ctrl_shift_e)
 
 TEST_CASE(composition_reply_includes_microsoft_shuangpin_ing_key)
 {
-    REQUIRE(FanyImeIpc::ShouldSendCompositionReply(false, false, true, false, false));
-    REQUIRE(FanyImeIpc::ShouldSendCompositionReply(true, false, false, false, false));
-    REQUIRE(!FanyImeIpc::ShouldSendCompositionReply(false, false, false, false, false));
+    REQUIRE(FanyImeIpc::ShouldSendCompositionReply(false, false, true, false, false, false));
+    REQUIRE(FanyImeIpc::ShouldSendCompositionReply(true, false, false, false, false, false));
+    REQUIRE(!FanyImeIpc::ShouldSendCompositionReply(false, false, false, false, false, false));
+}
+
+TEST_CASE(composition_reply_includes_japanese_long_vowel_key)
+{
+    // 日语模式下 '-' 打长音符，必须回包刷新候选框。
+    REQUIRE(FanyImeIpc::ShouldSendCompositionReply(false, false, false, false, false, true));
+}
+
+TEST_CASE(japanese_long_vowel_key_is_not_word_to_character_key)
+{
+    // 词转字用 -/= 时，日语模式的 '-' 已被长音符占用，不能再触发词转字。
+    REQUIRE_EQ(FanyImeIpc::WordToCharacterDirection(0xBD, '-', 0, true, true), -1);
+    REQUIRE_EQ(FanyImeIpc::WordToCharacterDirection(0xBD, '-', 0, false, true), 0);
 }
 
 TEST_CASE(temporary_r_mode_japanese_session_is_not_replaced_by_config_sync)
