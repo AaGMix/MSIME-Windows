@@ -2950,8 +2950,14 @@ void CandidateList::Render(DeviceResources &deviceResources)
             highlighted && appearance_.rowTextSelected.a > 0.001f ? appearance_.rowTextSelected : appearance_.textColor;
         ID2D1SolidColorBrush *labelBrush = deviceResources.GetSolidColorBrush(labelColor);
         ID2D1SolidColorBrush *textBrush = deviceResources.GetSolidColorBrush(textColor);
-        ID2D1SolidColorBrush *annotationBrush = deviceResources.GetSolidColorBrush(appearance_.annotationColor);
-        D2D1_COLOR_F translationColor = appearance_.annotationColor;
+        // 辅助码与翻译在 CSS 里都是 .text 的子节点（.cand-content / .cand-translation），
+        // 颜色继承自 .text，选中行的 `.first .text { color: ... }` 会一并覆盖它们。
+        // D2D 端分开绘制，所以这里显式跟随选中行文字色，translation 再乘 CSS 的 opacity .62。
+        const D2D1_COLOR_F &annotationColor = highlighted && appearance_.rowTextSelected.a > 0.001f
+                                                  ? appearance_.rowTextSelected
+                                                  : appearance_.annotationColor;
+        ID2D1SolidColorBrush *annotationBrush = deviceResources.GetSolidColorBrush(annotationColor);
+        D2D1_COLOR_F translationColor = annotationColor;
         translationColor.a *= 0.62f;
         ID2D1SolidColorBrush *translationBrush = deviceResources.GetSolidColorBrush(translationColor);
         if (cache.labelLayout && labelBrush)
