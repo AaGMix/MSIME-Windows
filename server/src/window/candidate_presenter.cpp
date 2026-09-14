@@ -491,6 +491,27 @@ void CandidatePresenter::ApplySkin()
             ApplyPackageColors(candLight ? package->light : package->dark, tokens);
         }
     }
+    // 阴影跟皮肤走，与 WebView2 端同一参照：四套内置皮肤与自定义包共用的皮肤 CSS
+    // （ui-html/webview2/candwnd/skins/*/horizontal_*.css）带同一对 box-shadow——
+    // light `8px 10px 24px rgba(0,0,0,.18), 2px 3px 8px rgba(0,0,0,.10)`，dark α .34/.22；
+    // σ = blur ÷ 2。默认皮肤（webview 端只有 body HTML，无 box-shadow）直接关阴影。
+    if (impl_->card)
+    {
+        if (CandidateSkinCatalog::IsBuiltIn(skinId) || package)
+        {
+            // 暂不解析自定义包内 CSS 的 box-shadow，先沿用内置皮肤的标准对，后续可加。
+            const std::vector<msimeui::ShadowPass> shadowPasses = {
+                {12.0f, candLight ? 0.18f : 0.34f, 8.0f, 10.0f},
+                {4.0f, candLight ? 0.10f : 0.22f, 2.0f, 3.0f},
+            };
+            impl_->card->SetShadowEnabled(true);
+            impl_->card->SetShadowPasses(shadowPasses);
+        }
+        else
+        {
+            impl_->card->SetShadowEnabled(false);
+        }
+    }
 
     msimeui::Theme theme = msimeui::ThemeManager::GetCurrent();
     theme.textInputFontFamily = string_to_wstring(GetConfiguredCandidateFont());
