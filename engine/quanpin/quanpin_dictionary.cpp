@@ -20,6 +20,12 @@ constexpr size_t kSyllableGraphPathLimit = 32;
 constexpr size_t kMaxSyllablesForMultipleSegmentations = 4;
 constexpr int kAlternativeSegmentationCandidateLimit = 128;
 constexpr size_t kBestAlternativeSegmentationMaxIndex = 1;
+// 备选切分保护位的词频门槛：备选读音的最佳词权重达到主切分首位的 1/RATIO 以上
+// 才配保护位。跨表权重不可直接比（单字是语料计数、词组是小尺度词权），这个量级
+// 判断只负责把「真歧义」和「罕见重码」分开：xian -> 西安(55K) 对 先(1.66M)，
+// 比值 3.3% 仍提升；xie -> 西鄂(6) 对 些(3.75M) 被拒，jiang -> 激昂(23.7K) 对
+// 将(2.63M) 同样被拒。
+constexpr std::int64_t kAlternativeSegmentationPromotionRatio = 100;
 
 bool is_alpha_vk(ImeKeyCode vk)
 {
@@ -707,12 +713,18 @@ std::vector<WordItem> QuanpinDictionary::merge_alternative_segmentations(
 
     // Weights rank candidates reliably within one pinyin key, but are not directly comparable across
     // different segmentations. Keep the best alternative interpretation visible without letting every
-    // segmentation occupy a protected slot on the first page.
+    // segmentation occupy a protected slot on the first page -- but only when the best alternative
+    // word is not dwarfed by the primary reading's top candidate, otherwise the slot goes to noise
+    // like 西鄂 for "xie" instead of a reading the user might actually have meant.
+    const std::int64_t primary_top_weight = primary_full.empty() ? 0 : primary_full.front().weight;
+    const bool promote_alternative =
+        static_cast<std::int64_t>(alternative_items.front().weight) * kAlternativeSegmentationPromotionRatio >=
+        primary_top_weight;
     const std::string &best_alternative_word = alternative_items.front().value;
     const auto best_alternative = std::find_if(merged_full.begin(), merged_full.end(), [&](const WordItem &item) {
         return item.word == best_alternative_word;
     });
-    if (best_alternative != merged_full.end() &&
+    if (promote_alternative && best_alternative != merged_full.end() &&
         static_cast<size_t>(std::distance(merged_full.begin(), best_alternative)) >
             kBestAlternativeSegmentationMaxIndex)
     {
@@ -1346,8 +1358,20 @@ std::vector<WordItem> QuanpinDictionary::query(const std::string &raw_input, con
         const auto typed =
             segmentation.empty() ? quanpin::join_segments(resolve_segments(raw_input, segmentation)) : segmentation;
         append_unique_words(result, fuzzy_candidates(typed, fuzzy));
+        // Specificity is how many typed letters a candidate accounts for, not the raw
+        // length of its stored key: alternative cuts ("xi'e" for "xie", "you'di'an"
+        // for "you'dian") and fuzzy variants carry apostrophes, so comparing pinyin
+        // size() verbatim lifted rarer re-segmentations above the exact reading.
+        const auto matched_letters = [](const WordItem &item) {
+            size_t letters = 0;
+            for (const char ch : item.pinyin)
+            {
+                letters += ch != '\'';
+            }
+            return letters;
+        };
         std::stable_sort(result.begin(), result.end(),
-                         [](const auto &a, const auto &b) { return a.pinyin.size() > b.pinyin.size(); });
+                         [&](const WordItem &a, const WordItem &b) { return matched_letters(a) > matched_letters(b); });
     }
     // Labeling runs after every mutation (including the fuzzy merge) so the
     // returned list and the published candidate list always agree.

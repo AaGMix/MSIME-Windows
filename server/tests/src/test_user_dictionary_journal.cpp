@@ -404,6 +404,60 @@ TEST_CASE(UserDictionaryPromoteDoesNotCrushPrefixSinglesFromSeriesQuery)
     std::filesystem::remove_all(directory);
 }
 
+// 回归：调频的权重基准只能取与选中词同尺度（同音节数）的候选。备选切分词（xi'e 的
+// 西鄂 w=6）在旧显示排序下会坐在 xie 列表最前面，拿它当基准会把写（原 605147）写成
+// 6+500=506，权重反而低于些/血/谢——这就是用户机器上「置顶写之后写还是不在前排」的根因。
+// 同音节的多个表（九宫格数字上下混多个单字表）仍互相比权，不受影响。
+TEST_CASE(UserDictionaryPromoteBasesWeightOnTheSelectedCandidatesOwnScale)
+{
+    const auto directory =
+        std::filesystem::temp_directory_path() / ("msime-cross-table-ranking-" + std::to_string(GetCurrentProcessId()));
+    std::filesystem::create_directories(directory);
+    const auto user_path = directory / "msime_user.db";
+    const auto main_path = directory / "msime.db";
+    {
+        TestDatabase db(main_path);
+        db.exec("CREATE TABLE tbl_1_x(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                "CREATE TABLE tbl_2_x(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                "INSERT INTO tbl_1_x VALUES("
+                "'xie','x','些',3752167),"
+                "('xie','x','血',933230),"
+                "('xie','x','谢',623220),"
+                "('xie','x','写',605147);"
+                "INSERT INTO tbl_2_x VALUES('xi''e','xa','西鄂',6),('xi''e','xa','喜恶',1);");
+    }
+    // 显示列表照旧把备选切分词放在最前（旧排序的产物）。
+    std::vector<WordItem> candidates = {
+        {"xi'e", "西鄂", 6, CandidateSource::Database, "xi'e"},
+        {"xie", "些", 3752167, CandidateSource::Database, "xie"},
+        {"xie", "血", 933230, CandidateSource::Database, "xie"},
+        {"xie", "谢", 623220, CandidateSource::Database, "xie"},
+        {"xie", "写", 605147, CandidateSource::Database, "xie"},
+    };
+
+    bool ranking_changed = false;
+    REQUIRE(user_dictionary::adjust_candidate_ranking(test::Utf8(main_path), test::Utf8(user_path), "xie", candidates,
+                                                      "xie", "写", "pin", 1, 1, true, &ranking_changed));
+    REQUIRE(ranking_changed);
+    {
+        TestDatabase db(main_path);
+        // 置顶写：基准必须是同表的些（3752167），不再是跨表的西鄂 6。
+        REQUIRE(db.scalar_int64("SELECT weight FROM tbl_1_x WHERE value='写'") > 3752167);
+        REQUIRE_EQ(db.scalar_int64("SELECT weight FROM tbl_2_x WHERE value='西鄂'"), 6);
+    }
+
+    // 已经是同表首位的词不再被跨表基准反降（旧逻辑会把些写成 6+500=506）。
+    ranking_changed = false;
+    REQUIRE(user_dictionary::adjust_candidate_ranking(test::Utf8(main_path), test::Utf8(user_path), "xie", candidates,
+                                                      "xie", "些", "pin", 1, 1, true, &ranking_changed));
+    REQUIRE(!ranking_changed);
+    {
+        TestDatabase db(main_path);
+        REQUIRE_EQ(db.scalar_int64("SELECT weight FROM tbl_1_x WHERE value='些'"), 3752167);
+    }
+    std::filesystem::remove_all(directory);
+}
+
 TEST_CASE(UserDictionaryEqualWeightPromoteDoesNotWriteNegatives)
 {
     const auto directory = std::filesystem::temp_directory_path() /

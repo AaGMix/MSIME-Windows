@@ -48,7 +48,7 @@ std::filesystem::path CreatePinyinCacheDatabase()
         "INSERT INTO tbl_1_x VALUES('xian','x','__primary_xian_1__',1000);"
         "INSERT INTO tbl_1_x VALUES('xian','x','__primary_xian_2__',900);"
         "INSERT INTO tbl_1_x VALUES('xian','x','__primary_xian_3__',800);"
-        "INSERT INTO tbl_2_x VALUES('xi''an','xa','__alternative_xi_an__',1);"
+        "INSERT INTO tbl_2_x VALUES('xi''an','xa','__alternative_xi_an__',100);"
         "INSERT INTO tbl_4_x VALUES('xi''an''xian''xian','xaxx','__three_syllable_alternative__',100);"
         "INSERT INTO tbl_5_x VALUES('xi''an''xian''xian''xian','xaxxx','__four_syllable_alternative__',100);"
         "INSERT INTO tbl_6_x VALUES('xi''an''xian''xian''xian''xian','xaxxxx','__five_syllable_alternative__',100);";
@@ -208,7 +208,9 @@ TEST_CASE(QuanpinDictionaryRequiresCompletePrimarySegmentsBeforeTryingAlternativ
         std::none_of(candidates.begin(), candidates.end(), [](const WordItem &item) { return item.word == "西安"; }));
 }
 
-TEST_CASE(QuanpinDictionaryKeepsBestAlternativeSegmentationNearTheFront)
+// The alternative must stay within two orders of magnitude of the primary top (1000) for the
+// protected slot; alternatives dwarfed by it are rejected (pinned in engine test_fuzzy_pinyin).
+TEST_CASE(QuanpinDictionaryKeepsPlausibleAlternativeSegmentationNearTheFront)
 {
     const auto db_path = CreatePinyinCacheDatabase();
     {
