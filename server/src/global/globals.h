@@ -1,5 +1,7 @@
 #pragma once
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -96,6 +98,18 @@ inline LONG INVALID_Y = -100000;
 inline int MarginTop = 0;
 // Horizontal offset of the opaque card inside the stable (often 720 DIP-wide) host.
 inline int MarginLeft = 0;
+
+// Candidate pages are published by the IPC worker thread but painted by the UI thread. The worker
+// stamps every published page (candidate_page_generation), the UI echoes back the generation it
+// actually painted (rendered_candidate_page_generation), and a digit/space selection waits for that
+// echo before settling against page_words. Without it, pin-frequency reorders the page between
+// publish and paint and the selection commits a candidate the user never saw. 0 means "nothing
+// published/rendered yet".
+inline std::atomic<std::uint64_t> candidate_page_generation{0};
+inline std::atomic<std::uint64_t> rendered_candidate_page_generation{0};
+// Mirrors ::is_global_wnd_cand_shown so the worker thread can cheaply tell whether an on-screen
+// candidate list exists. Kept in lockstep at every write site of the plain flag.
+inline std::atomic<bool> candidate_window_rendered_visible{false};
 
 using CandidateWordItem = WordItem;
 
@@ -235,6 +249,10 @@ struct CandidatePageSnapshot
     // the height estimate prefers the derived count and only falls back to the rendered one.
     int page_count = 0;
     int page_item_count = 0;
+    // Generation stamped by the worker at publish time. The UI thread echoes this exact value back
+    // after painting, which is what lets a selection distinguish "what the user sees" from "what
+    // the worker has just rebuilt".
+    std::uint64_t generation = 0;
 };
 
 using CandidatePageSnapshotPtr = std::shared_ptr<const CandidatePageSnapshot>;
