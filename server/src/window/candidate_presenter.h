@@ -2,6 +2,7 @@
 
 #include "utils/window_utils.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <windows.h>
@@ -27,7 +28,9 @@ class CandidatePresenter
 
     void RebuildScene();
     void ApplySkin();
-    void FillItemsFromUi();
+    // Returns the generation of the snapshot that was actually rendered, so the caller can echo it
+    // back to Global::rendered_candidate_page_generation once the paint is on screen.
+    std::uint64_t FillItemsFromUi();
     // `scale` carries the scale resolved once per show in ShowFromGlobalState
     // so measure, clamping, sizing and rendering all share one source; an
     // unset (scale == 0) value makes PlaceAndShow resolve it itself.

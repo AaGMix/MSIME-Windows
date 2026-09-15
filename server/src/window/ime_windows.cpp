@@ -2384,8 +2384,12 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
             uint64_t expectedGeneration = contentGeneration;
             const bool generationRestored =
                 g_candidate_content_generation.compare_exchange_strong(expectedGeneration, contentGeneration - 1);
-            CAND_DIAG_LOGF(L"candidate-frame path=dedup content_gen={} generation_restored={}", contentGeneration,
-                           generationRestored);
+            // The frame already on screen is identical to the page just loaded, so the render echo is
+            // honest even though nothing was repainted. Without it a digit/space selection would wait
+            // out the full timeout on content that is already visible.
+            Global::rendered_candidate_page_generation.store(candidatePage->generation, std::memory_order_release);
+            CAND_DIAG_LOGF(L"candidate-frame path=dedup content_gen={} generation_restored={} page_gen={}",
+                           contentGeneration, generationRestored, candidatePage->generation);
             return 0;
         }
         g_last_rendered_candidate_signature = frameSignature;
@@ -2404,6 +2408,7 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
         // WebView2 controller is still being created. That is what makes
         // CreateCoreWebView2Controller fail for this HWND while menu/FTB succeed.
         ::is_global_wnd_cand_shown = true;
+        Global::candidate_window_rendered_visible.store(true, std::memory_order_relaxed);
         if (!IsCandidateWebviewReady())
         {
             DeferCandidateShowUntilWebviewReady();
@@ -2435,15 +2440,19 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
         {
             CAND_DIAG_LOGF(L"candidate-frame path=content-only content_gen={} inflight={}", contentGeneration,
                            layoutInflight);
-            InflateCandWnd(str, [hwnd, contentGeneration, updateStartedTick]() {
+            InflateCandWnd(str, [hwnd, contentGeneration, updateStartedTick,
+                                 pageGeneration = candidatePage->generation]() {
                 const ULONGLONG callbackTick = GetTickCount64();
-                CAND_DIAG_LOGF(L"candidate-frame dom-callback content_gen={} current_gen={} elapsed_ms={}",
+                CAND_DIAG_LOGF(L"candidate-frame dom-callback content_gen={} current_gen={} elapsed_ms={} page_gen={}",
                                contentGeneration, g_candidate_content_generation.load(),
-                               callbackTick - updateStartedTick);
+                               callbackTick - updateStartedTick, pageGeneration);
                 if (!::is_global_wnd_cand_shown || contentGeneration != g_candidate_content_generation.load())
                 {
                     return;
                 }
+                // The DOM holds this page now; echo the captured generation (not a live read: the
+                // page may already have been superseded) so selections can settle against it.
+                Global::rendered_candidate_page_generation.store(pageGeneration, std::memory_order_release);
                 RefreshCandidateClipAfterPaint(hwnd, contentGeneration, updateStartedTick);
             });
             if (!sameCaret)
@@ -2504,6 +2513,7 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
         g_candidate_hide_pending = false;
         CAND_DIAG_LOGF(L"hide message begin {}", DescribeCandidateHostState());
         ::is_global_wnd_cand_shown = false;
+        Global::candidate_window_rendered_visible.store(false, std::memory_order_relaxed);
         g_last_rendered_candidate_signature.clear();
         KillTimer(hwnd, TIMER_ID_CANDIDATE_MOVE_SETTLE);
         g_candidate_session_anchor_valid = false;
@@ -4216,12 +4226,16 @@ int FineTuneWindow(HWND hwnd)
             InjectSurfaceViewportLimits(::webviewCandWnd.Get(), hwnd);
 
             InflateCandWnd(str, [hwnd, positioned, generation, containerSize, layoutScale, caretX, caretY,
-                                 packingMarginTop, deferHostMove]() {
+                                 packingMarginTop, deferHostMove, pageGeneration = candidatePage->generation]() {
                 if (!::is_global_wnd_cand_shown || generation != g_candidate_finetune_generation.load())
                 {
                     EndCandidateLayoutIfCurrent(generation);
                     return;
                 }
+                // The DOM update for this page has completed; echo the captured generation so a
+                // selection that arrives while the layout pass is still running settles against the
+                // page that is about to become visible.
+                Global::rendered_candidate_page_generation.store(pageGeneration, std::memory_order_release);
 
                 // Stay cloaked through pass 1. First-pass size is routinely taller
                 // than the painted card (log: 289dip then 201dip). Uncloaking with

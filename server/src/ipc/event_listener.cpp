@@ -14,6 +14,7 @@
 #include <thread>
 #include <unordered_map>
 #include "Ipc.h"
+#include "ipc/candidate_render_sync.h"
 #include "ipc/candidate_selection_policy.h"
 #include "ipc/async_request_origin.h"
 #include "ipc/candidate_ui_owner.h"
@@ -198,6 +199,7 @@ void ApplyUiLessFromPacket(const FanyImeNamedpipeData &pipe_data)
         // A prior non-UILess session may have left the WebView2 candidate HWND
         // visible; hide it immediately when the host takes over drawing.
         ::is_global_wnd_cand_shown = false;
+        Global::candidate_window_rendered_visible.store(false, std::memory_order_relaxed);
         if (::global_hwnd && IsWindow(::global_hwnd))
         {
             PostMessage(::global_hwnd, WM_HIDE_MAIN_WINDOW, 0, 0);
@@ -1100,6 +1102,8 @@ void PublishBuiltCandidatePage(const std::wstring &candidate_string)
     snapshot->selected_index_in_page = ui.selected_index_in_page;
     snapshot->page_count = ui.current_page_count();
     snapshot->page_item_count = ui.cur_page_item_cnt;
+    // Stamp before publishing so the UI thread can echo back exactly which page it painted.
+    snapshot->generation = ++Global::candidate_page_generation;
     Global::PublishCandidatePageSnapshot(std::move(snapshot));
 }
 
@@ -4319,6 +4323,7 @@ void ClearState()
     // first so async FineTuneWindow callbacks refuse to resurrect the window,
     // then post the actual hide message (idempotent with TSF's HideCandidateWnd).
     ::is_global_wnd_cand_shown = false;
+    Global::candidate_window_rendered_visible.store(false, std::memory_order_relaxed);
     if (::global_hwnd && IsWindow(::global_hwnd))
     {
         PostMessage(::global_hwnd, WM_HIDE_MAIN_WINDOW, 0, 0);
@@ -4349,6 +4354,41 @@ bool ResolveCandidateItem(int one_based_index, WordItem &item)
     return true;
 }
 
+// A digit/space selection settles against the live page_words, while the user is looking at the
+// asynchronously painted snapshot. Pin-frequency reorders the page after every commit, so a
+// keystroke that lands between publish and paint would commit a candidate the user never saw.
+// Poll (no lock, no event) until the UI echoes back the generation it painted, with a hard bound so
+// a wedged UI thread cannot hang input: on timeout the selection continues with the current page and
+// the miss is recorded in the diagnostic log. Runs on the IPC worker thread only.
+void WaitForCandidateRenderSync(UINT keycode)
+{
+    const auto renderLagsPublished = []() {
+        return FanyImeIpc::ShouldWaitForCandidateRender(
+            Global::rendered_candidate_page_generation.load(std::memory_order_acquire),
+            Global::candidate_page_generation.load(std::memory_order_acquire), IsUiLessMode(),
+            Global::candidate_window_rendered_visible.load(std::memory_order_acquire));
+    };
+    if (!renderLagsPublished())
+    {
+        return;
+    }
+
+    const ULONGLONG startedTick = GetTickCount64();
+    while (renderLagsPublished())
+    {
+        const ULONGLONG waitedMs = GetTickCount64() - startedTick;
+        if (waitedMs >= static_cast<ULONGLONG>(FanyImeIpc::kCandidateSelectionRenderWaitMaxMs))
+        {
+            CAND_DIAG_LOGF(L"candidate-select-render-timeout keycode={} current={} rendered={}", keycode,
+                           Global::candidate_page_generation.load(std::memory_order_acquire),
+                           Global::rendered_candidate_page_generation.load(std::memory_order_acquire));
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CAND_DIAG_LOGF(L"candidate-select-render-synced keycode={} waited_ms={}", keycode, GetTickCount64() - startedTick);
+}
+
 void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_epoch, int forced_index_in_page)
 {
     /* 先清理一下状态 */
@@ -4356,6 +4396,14 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
 
     static bool isNeedUpdateWeight = false;
     isNeedUpdateWeight = false;
+
+    // Keyboard selection must match the painted page. Mouse clicks carry an explicit index
+    // (forced_index_in_page >= 0) and keep the old behavior: waiting cannot restore the intent of a
+    // click that targeted a candidate of a page that is no longer on screen.
+    if (forced_index_in_page < 0 && (keycode == VK_SPACE || (keycode >= '1' && keycode <= '9')))
+    {
+        WaitForCandidateRenderSync(keycode);
+    }
 
     EnsureCandidatePageReady();
 

@@ -28,6 +28,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cctype>
 #include <filesystem>
@@ -618,7 +619,7 @@ void CandidatePresenter::ApplySkin()
     }
 }
 
-void CandidatePresenter::FillItemsFromUi()
+std::uint64_t CandidatePresenter::FillItemsFromUi()
 {
     const Global::CandidatePageSnapshotPtr page = Global::LoadCandidatePageSnapshot();
     std::vector<msimeui::CandidateList::Item> items;
@@ -637,6 +638,7 @@ void CandidatePresenter::FillItemsFromUi()
     impl_->list->SetItems(std::move(items));
     impl_->list->SetSelectedIndex(static_cast<size_t>((std::max)(0, page->selected_index_in_page)));
     ignoreSelectionCallback_ = false;
+    return page->generation;
 }
 
 void CandidatePresenter::CommitItem(size_t pageIndex)
@@ -1029,6 +1031,7 @@ void CandidatePresenter::ShowFromGlobalState(POINT caret)
         CloseContextMenu(false);
         SetCandidateHostCloaked(true);
         ::is_global_wnd_cand_shown = true;
+        Global::candidate_window_rendered_visible.store(true, std::memory_order_relaxed);
         CAND_DIAG_LOGF(L"candidate-d2d show deferred: no usable caret anchor ({},{})", caret.x, caret.y);
         return;
     }
@@ -1061,7 +1064,7 @@ void CandidatePresenter::ShowFromGlobalState(POINT caret)
         impl_->preedit->ClearHeight();
         impl_->preedit->SetCaretIndex(caretIndex);
     }
-    FillItemsFromUi();
+    const std::uint64_t renderedGeneration = FillItemsFromUi();
     impl_->list->SetHoverEnabled(hoverArmed_);
     // Resolve the scale once per show and thread it through measure, clamping,
     // window sizing and rendering DPI — a foreground window changing mid-show
@@ -1091,6 +1094,11 @@ void CandidatePresenter::ShowFromGlobalState(POINT caret)
     }
     PlaceAndShow(caret, widthDip, heightDip, cardLeftDip, cardTopDip, scale);
     ::is_global_wnd_cand_shown = true;
+    Global::candidate_window_rendered_visible.store(true, std::memory_order_relaxed);
+    // PlaceAndShow paints synchronously, so the page is on screen now. Echo the generation of the
+    // snapshot that was actually rendered (not the latest published one) so a pending digit/space
+    // selection can settle against the same page the user is looking at.
+    Global::rendered_candidate_page_generation.store(renderedGeneration, std::memory_order_release);
 }
 
 void CandidatePresenter::Hide()
@@ -1101,6 +1109,7 @@ void CandidatePresenter::Hide()
     }
     CloseContextMenu(false);
     ::is_global_wnd_cand_shown = false;
+    Global::candidate_window_rendered_visible.store(false, std::memory_order_relaxed);
     hoverArmed_ = false;
     wheelDeltaAccumulator_ = 0;
     if (impl_ && impl_->list)
