@@ -278,8 +278,14 @@ LRESULT WaveOverlay::handle_message(HWND hwnd, UINT message, WPARAM wParam, LPAR
         update_dpi_scale();
         return 0;
     case WM_DPICHANGED:
-        update_dpi_scale();
+        // update_window_bounds 内部会刷新缩放，DPI 变化时重新计算位置/尺寸。
         update_window_bounds();
+        return 0;
+    case WM_DISPLAYCHANGE:
+        // 分辨率切换时重新按当前显示器计算 DPI 缩放与窗口位置/尺寸，
+        // 与候选框一致地适配分辨率变化（SetWindowPos 触发的 WM_SIZE 会同步渲染目标尺寸）。
+        update_window_bounds();
+        InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     case WM_MOUSEACTIVATE:
         return MA_NOACTIVATE;
@@ -329,8 +335,7 @@ LRESULT WaveOverlay::handle_message(HWND hwnd, UINT message, WPARAM wParam, LPAR
         update_window_bounds();
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
-    case WM_PAINT:
-    case WM_DISPLAYCHANGE: {
+    case WM_PAINT: {
         PAINTSTRUCT ps{};
         BeginPaint(hwnd, &ps);
         draw();
@@ -474,15 +479,32 @@ void WaveOverlay::update_dpi_scale()
         return;
     }
 
-    dpi_ = GetDpiForWindow(hwnd_);
-    scale_x_ = static_cast<float>(dpi_) / 96.0f;
-    scale_y_ = static_cast<float>(dpi_) / 96.0f;
+    // 与候选框一致：按目标显示器（前台窗口所在显示器，与 update_window_bounds 里
+    // GetMonitorCoordinates 同源）的有效 DPI 计算缩放，而不是用 GetDpiForWindow(hwnd_)。
+    // 后者在切换分辨率时可能返回陈旧值，且当提示条与前台窗口分处不同显示器时会取错
+    // DPI，导致尺寸/缩放错误。
+    const float scale = mvi_utils::GetForegroundMonitorScale();
+    scale_x_ = scale;
+    scale_y_ = scale;
+    dpi_ = static_cast<UINT>(std::lround(scale * USER_DEFAULT_SCREEN_DPI));
+
+    // 渲染目标的 DPI 决定 draw() 里逻辑坐标（px / scale_）到像素的映射。它只在
+    // CreateHwndRenderTarget 时按创建时的系统 DPI 定过一次，切换分辨率/DPI 后不会自动
+    // 更新，导致逻辑坐标映射到错误的像素尺寸（尺寸/缩放错乱）。这里同步刷新，等价于
+    // 候选框把新 DPI 推进 D2D 设备（SetDpiOverride/SetDpi）的做法。
+    if (render_target_)
+    {
+        render_target_->SetDpi(static_cast<float>(dpi_), static_cast<float>(dpi_));
+    }
 }
 
 void WaveOverlay::update_window_bounds()
 {
     if (!hwnd_)
         return;
+    // 每次重新定位都按当前目标显示器刷新缩放，使 show()、状态切换、分辨率/DPI 变化
+    // 走到的尺寸计算始终基于最新的显示器 DPI（与候选框每次显示都重算的行为一致）。
+    update_dpi_scale();
     bool has_transcript = false;
     if (show_transcript_.load())
     {
