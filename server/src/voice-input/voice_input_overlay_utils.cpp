@@ -1,19 +1,8 @@
 #include "mvi_utils.h"
 
-#include <shellapi.h>
 #include <shellscalingapi.h>
 
 #pragma comment(lib, "Shcore.lib")
-
-int mvi_utils::GetTaskbarHeight()
-{
-    APPBARDATA data{};
-    data.cbSize = sizeof(data);
-    if (!SHAppBarMessage(ABM_GETTASKBARPOS, &data))
-        return 0;
-    return data.uEdge == ABE_TOP || data.uEdge == ABE_BOTTOM ? data.rc.bottom - data.rc.top
-                                                             : data.rc.right - data.rc.left;
-}
 
 HMONITOR mvi_utils::GetForegroundMonitor()
 {
@@ -21,14 +10,17 @@ HMONITOR mvi_utils::GetForegroundMonitor()
     return MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST);
 }
 
-RECT mvi_utils::GetMonitorCoordinates()
+mvi_utils::MonitorMetrics mvi_utils::GetForegroundMonitorMetrics()
 {
-    RECT coordinates{};
+    MonitorMetrics metrics{};
     const HMONITOR monitor = GetForegroundMonitor();
     MONITORINFO info{sizeof(info)};
     if (monitor && GetMonitorInfoW(monitor, &info))
-        coordinates = info.rcMonitor;
-    return coordinates;
+    {
+        metrics.full = info.rcMonitor;
+        metrics.work = info.rcWork;
+    }
+    return metrics;
 }
 
 float mvi_utils::GetForegroundMonitorScale()
