@@ -10,14 +10,17 @@ HMONITOR mvi_utils::GetForegroundMonitor()
     return MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST);
 }
 
-RECT mvi_utils::GetMonitorWorkArea()
+mvi_utils::MonitorMetrics mvi_utils::GetForegroundMonitorMetrics()
 {
-    RECT work{};
+    MonitorMetrics metrics{};
     const HMONITOR monitor = GetForegroundMonitor();
     MONITORINFO info{sizeof(info)};
     if (monitor && GetMonitorInfoW(monitor, &info))
-        work = info.rcWork;
-    return work;
+    {
+        metrics.full = info.rcMonitor;
+        metrics.work = info.rcWork;
+    }
+    return metrics;
 }
 
 float mvi_utils::GetForegroundMonitorScale()

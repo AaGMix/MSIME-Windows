@@ -480,7 +480,7 @@ void WaveOverlay::update_dpi_scale()
     }
 
     // 与候选框一致：按目标显示器（前台窗口所在显示器，与 update_window_bounds 里
-    // GetMonitorWorkArea 同源）的有效 DPI 计算缩放，而不是用 GetDpiForWindow(hwnd_)。
+    // GetForegroundMonitorMetrics 同源）的有效 DPI 计算缩放，而不是用 GetDpiForWindow(hwnd_)。
     // 后者在切换分辨率时可能返回陈旧值，且当提示条与前台窗口分处不同显示器时会取错
     // DPI，导致尺寸/缩放错误。
     const float scale = mvi_utils::GetForegroundMonitorScale();
@@ -521,11 +521,13 @@ void WaveOverlay::update_window_bounds()
                     : (has_compact_status ? kProcessingHeight : (has_transcript ? kTranscriptHeight : kCompactHeight));
     const int width = static_cast<int>(std::lround(logical_width * scale_x_));
     const int height = static_cast<int>(std::lround(logical_height * scale_y_));
-    // 用工作区（rcWork，已扣除任意边缘的任务栏/应用栏）定位，而不是"整屏减去底部
-    // 任务栏高度"。后者假设任务栏在底部，任务栏放到左/右/上时会把语音条算偏。
-    const RECT work = mvi_utils::GetMonitorWorkArea();
-    const int x = (work.right + work.left) / 2 - width / 2;
-    const int y = work.bottom - height - 10;
+    // 无论任务栏在哪条边，都让语音条位于“屏幕水平正中、偏底部”：
+    //  - 水平按整屏矩形（rcMonitor）居中，不受左/右任务栏挤压工作区的影响；
+    //  - 垂直贴工作区（rcWork）底部上方 10px，自动避开底部任务栏（任务栏在其它边时
+    //    rcWork.bottom 即整屏底部）。
+    const mvi_utils::MonitorMetrics metrics = mvi_utils::GetForegroundMonitorMetrics();
+    const int x = (metrics.full.right + metrics.full.left) / 2 - width / 2;
+    const int y = metrics.work.bottom - height - 10;
     SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
 }
 
