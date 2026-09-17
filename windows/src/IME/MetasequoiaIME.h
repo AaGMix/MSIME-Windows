@@ -54,6 +54,67 @@ constexpr bool IsSelfGeneratedSendInputExtraInfo(ULONG_PTR extraInfo)
 {
     return extraInfo == PAIRED_PUNCTUATION_SENDINPUT_EXTRA_INFO;
 }
+// Payload shared by the NeedToCreateWord and CompositionRestored replies:
+//   remaining_raw \t committed_word \t display_preedit [\t caret]
+// The caret is an optional decimal offset into remaining_raw; omitting it means
+// "caret at the end", which is what a legacy three-field payload meant.
+struct CreatingWordPayload
+{
+    std::wstring remaining_raw;
+    std::wstring word;
+    std::wstring display_preedit;
+    bool has_caret = false;
+    size_t caret = 0;
+};
+
+inline bool ParseCreatingWordPayload(const std::wstring &data, CreatingWordPayload &payload)
+{
+    const size_t separator = data.find(L'\t');
+    if (separator == std::wstring::npos)
+    {
+        return false;
+    }
+    payload.remaining_raw = data.substr(0, separator);
+    const std::wstring rest = data.substr(separator + 1);
+    const size_t second_separator = rest.find(L'\t');
+    if (second_separator == std::wstring::npos)
+    {
+        payload.word = rest;
+        return true;
+    }
+    payload.word = rest.substr(0, second_separator);
+    const std::wstring tail = rest.substr(second_separator + 1);
+    const size_t third_separator = tail.find(L'\t');
+    if (third_separator == std::wstring::npos)
+    {
+        payload.display_preedit = tail;
+        return true;
+    }
+    payload.display_preedit = tail.substr(0, third_separator);
+    const std::wstring caret_text = tail.substr(third_separator + 1);
+    if (caret_text.empty())
+    {
+        return true;
+    }
+    // A raw pinyin offset fits easily in nine digits; anything longer is a
+    // malformed frame rather than a caret to obey.
+    if (caret_text.size() > 9)
+    {
+        return false;
+    }
+    size_t caret = 0;
+    for (const wchar_t ch : caret_text)
+    {
+        if (ch < L'0' || ch > L'9')
+        {
+            return false;
+        }
+        caret = caret * 10 + static_cast<size_t>(ch - L'0');
+    }
+    payload.has_caret = true;
+    payload.caret = caret;
+    return true;
+}
 constexpr ULONGLONG SMART_PUNCTUATION_REPEAT_INTERVAL_MS = 2000;
 constexpr UINT_PTR TIMER_CONNECT_ALL_NAMEDPIPE = 1;
 constexpr UINT_PTR TIMER_CONNECT_TO_TSF_NAMEDPIPE = 2;
@@ -192,6 +253,11 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     HRESULT _HandleCompositionFinalize(TfEditCookie ec, _In_ ITfContext *pContext, BOOL fCandidateList);
     HRESULT _HandleCompositionConvert(TfEditCookie ec, _In_ ITfContext *pContext, BOOL isWildcardSearch);
     HRESULT _HandleCompositionBackspace(TfEditCookie ec, _In_ ITfContext *pContext, uint64_t requestId);
+    // Rebuild the composition from a creating-word payload: keystroke buffer,
+    // accumulated word, preedit and caret. Used both when a selection continues a
+    // word (NeedToCreateWord) and when the Server retracts it
+    // (CompositionRestored).
+    HRESULT _ApplyCreatingWordPayload(TfEditCookie ec, _In_ ITfContext *pContext, const CreatingWordPayload &payload);
     HRESULT _HandleCompositionDelete(TfEditCookie ec, _In_ ITfContext *pContext, uint64_t requestId);
     HRESULT _HandleCompositionArrowKey(TfEditCookie ec, _In_ ITfContext *pContext, KEYSTROKE_FUNCTION keyFunction,
                                        uint64_t requestId = FANY_IME_NO_REQUEST_ID);

@@ -63,12 +63,26 @@ struct CreatingWordState
     }
 };
 
+struct CreatingWordSnapshot
+{
+    // Raw spelling the selection consumed, in the user's original form. It is the
+    // raw the engine returns to when the last selected segment is retracted.
+    std::string consumed_raw_input_with_cases;
+    // The word accumulated before that selection. On the first selection this is
+    // an inactive empty state, so retracting it leaves a plain pinyin composition.
+    CreatingWordState previous_creating_word;
+};
+
 struct CompositionState
 {
     std::string segmented_pinyin;
     std::string raw_input_with_cases;
     size_t caret_position = 0;
     CreatingWordState creating_word;
+    // One entry per selection that entered the creating-word state, newest last.
+    // Retracting pops the newest entry and restores it, which is why an empty
+    // history must disable retraction entirely.
+    std::vector<CreatingWordSnapshot> selection_history;
 
     void clear()
     {
@@ -76,11 +90,43 @@ struct CompositionState
         raw_input_with_cases.clear();
         caret_position = 0;
         creating_word.clear();
+        selection_history.clear();
     }
 
     void clear_creating_word()
     {
+        // The composition is still alive (a longer phrase is possible), so the
+        // selection history stays; only the finished word resets.
         creating_word.clear();
+    }
+
+    // Record the state the user is leaving when a selection continues the word.
+    // An empty raw spelling means the candidate came from a source that consumed
+    // no typed input, so there is nothing this selection could ever retract.
+    void push_selection_snapshot(const std::string &consumed_raw_input_with_cases)
+    {
+        if (consumed_raw_input_with_cases.empty())
+        {
+            return;
+        }
+        selection_history.push_back({consumed_raw_input_with_cases, creating_word});
+    }
+
+    // Restore the newest snapshot: the raw spelling that selection consumed, the
+    // word accumulated before it, and a caret at the end of the restored raw.
+    // Returns false when there is nothing to retract.
+    bool restore_last_selection()
+    {
+        if (selection_history.empty())
+        {
+            return false;
+        }
+        CreatingWordSnapshot snapshot = std::move(selection_history.back());
+        selection_history.pop_back();
+        raw_input_with_cases = std::move(snapshot.consumed_raw_input_with_cases);
+        creating_word = std::move(snapshot.previous_creating_word);
+        caret_position = raw_input_with_cases.size();
+        return true;
     }
 };
 

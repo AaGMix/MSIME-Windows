@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace FanyImeIpc
@@ -78,5 +79,21 @@ constexpr bool ShouldSendCompositionReply(bool is_alpha_key, bool is_manual_piny
 {
     return is_alpha_key || is_manual_pinyin_separator || is_microsoft_shuangpin_ing_key || is_unicode_hex_digit ||
            is_unicode_plus || is_japanese_long_vowel;
+}
+
+// The Backspace that would delete the last remaining pinyin character of an
+// in-progress word retracts the last selected segment instead of deleting the
+// character and dropping the whole composition. Retraction needs a caret that
+// could actually delete the character (caret > 0, which with raw_length <= 1
+// means the caret sits at the end), a snapshot to restore, and a client that
+// negotiated the CompositionRestore capability: UILess hosts draw their own
+// candidate UI, and a DLL without the capability treats the reply as a
+// transport fault rather than ignoring it.
+constexpr bool ShouldRetreatCreatingWordSelection(bool creating_word_active, bool ui_less, bool client_supports_restore,
+                                                  std::size_t raw_length, std::size_t caret_position,
+                                                  std::size_t selection_history_size)
+{
+    return creating_word_active && !ui_less && client_supports_restore && caret_position > 0 && raw_length <= 1 &&
+           selection_history_size > 0;
 }
 } // namespace FanyImeIpc

@@ -105,6 +105,13 @@ class InputSession
         std::string current_segmentation;
         std::string current_segmentation_with_cases;
         std::string selected_canonical_pinyin;
+        // Raw spelling the selection consumed from the active scheme's input,
+        // in the exact form the user typed it. A host that lets the user retract
+        // a selected segment must replay this spelling, not the pre-selection
+        // raw: the pre-selection raw also contains suffix characters the user
+        // may have deleted since the selection. Sources that consume no input
+        // (cloud, associative, whole-word commits) leave it empty.
+        std::string consumed_raw_input_with_cases;
     };
 
     struct CloudQueryState

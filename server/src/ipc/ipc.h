@@ -120,6 +120,10 @@ int ReadDataFromSharedMemory(UINT read_flag);
 int ReadDataFromNamedPipe(UINT read_flag);
 uint64_t RegisterMainPipeClient(uint64_t client_id, HANDLE pipe);
 uint64_t RegisterToTsfPipeClient(uint64_t client_id, HANDLE pipe);
+// True only when this main-pipe client's versioned hello advertised the
+// optional CompositionRestore capability. Server-to-client replies that older
+// DLLs would reject must be gated on it.
+bool ClientNegotiatedCompositionRestore(uint64_t client_id);
 uint64_t RegisterToTsfWorkerThreadPipeClient(uint64_t client_id, HANDLE pipe);
 uint64_t BeginPipeClientHandler(HANDLE pipe);
 void EndPipeClientHandler(uint64_t handler_id);

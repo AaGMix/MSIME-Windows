@@ -117,7 +117,23 @@ TEST_CASE(EngineShuangpinSessionContinuesCompositionWithoutHelpcode)
 
     const auto transition = session.advance_composition_after_selection("xi", "西", "xi");
     REQUIRE(transition.continues_composition);
+    REQUIRE_EQ(transition.consumed_raw_input_with_cases, std::string("xi"));
     REQUIRE_EQ(session.get_pinyin_sequence(), std::string("tele"));
+}
+
+TEST_CASE(EngineShuangpinMicrosoftSemicolonFinalStaysInConsumedInput)
+{
+    EngineInputSession session(SchemeType::Shuangpin, GetMicrosoftShuangpinProfile());
+    // In the Microsoft profile ';' is the "ing" final: "b;" is bing, "ni" is ni.
+    session.handle_key('B', 0, L'b');
+    session.handle_key(VK_OEM_1, 0, L';');
+    session.handle_key('N', 0, L'n');
+    session.handle_key('I', 0, L'i');
+
+    const auto transition = session.advance_composition_after_selection("b;", "冰", "bing");
+    REQUIRE(transition.continues_composition);
+    REQUIRE_EQ(transition.consumed_raw_input_with_cases, std::string("b;"));
+    REQUIRE_EQ(session.get_pinyin_sequence(), std::string("ni"));
 }
 
 // 模糊音是会话级注入：总开关 + 规则位两层。总开关关 → 聚合 getter 全零，候选不出现；
@@ -371,6 +387,8 @@ TEST_CASE(EngineShuangpinSessionContinuesCompositionWithSingleHelpcode)
 
     const auto transition = session.advance_composition_after_selection("xi", "西", "xi");
     REQUIRE(transition.continues_composition);
+    // The active helpcode is not part of what the selection consumed.
+    REQUIRE_EQ(transition.consumed_raw_input_with_cases, std::string("xi"));
     REQUIRE_EQ(session.get_pinyin_sequence(), std::string("tele"));
 }
 
@@ -510,6 +528,7 @@ TEST_CASE(EngineQuanpinSessionContinuesCompositionForCreatingWord)
 
     const auto transition = session.advance_composition_after_selection("xi", "西", "xi");
     REQUIRE(transition.continues_composition);
+    REQUIRE_EQ(transition.consumed_raw_input_with_cases, std::string("xi"));
     REQUIRE_EQ(session.get_pinyin_sequence(), std::string("tele"));
     REQUIRE_EQ(session.get_pinyin_segmentation_with_cases(), std::string("te'le"));
 }

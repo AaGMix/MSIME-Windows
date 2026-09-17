@@ -840,8 +840,28 @@ bool IsCandidateNavigationKey(UINT keycode)
            keycode == VK_NEXT || keycode == VK_UP || keycode == VK_DOWN;
 }
 
-bool ApplyCompositionEditKey(UINT keycode, WCHAR wch)
+// Retract the last selected segment of the word being created. The engine raw
+// returns to the spelling that segment consumed, the accumulated word returns to
+// its pre-selection state, and candidates are rebuilt for the restored raw. The
+// caller must have verified that a snapshot exists.
+bool RetreatCreatingWordSelection()
 {
+    auto &composition = GlobalIme::composition;
+    if (!composition.restore_last_selection())
+    {
+        return false;
+    }
+
+    const std::string &restored_raw = composition.raw_input_with_cases;
+    g_inputSession->set_pinyin_sequence(restored_raw);
+    g_inputSession->set_pinyin_sequence_with_cases(restored_raw);
+    g_inputSession->recompute_candidates();
+    return true;
+}
+
+bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, bool client_supports_restore, bool &composition_restored)
+{
+    composition_restored = false;
     std::string raw = g_inputSession->get_pinyin_sequence_with_cases();
     auto &composition = GlobalIme::composition;
     if (composition.raw_input_with_cases != raw && composition.caret_position == 0 && !raw.empty())
@@ -869,7 +889,21 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch)
 
     if (keycode == VK_BACK)
     {
-        if (composition.caret_position > 0)
+        if (FanyImeIpc::ShouldRetreatCreatingWordSelection(
+                composition.creating_word.active, IsUiLessMode(), client_supports_restore, raw.size(),
+                composition.caret_position, composition.selection_history.size()))
+        {
+            // This Backspace must not also delete the character: the retraction
+            // removes the segment and restores its raw spelling instead.
+            composition_restored = RetreatCreatingWordSelection();
+            if (composition_restored)
+            {
+                // The retraction already replaced the raw, the word and the
+                // caret; re-applying the pre-retraction raw would undo it.
+                return true;
+            }
+        }
+        else if (composition.caret_position > 0)
         {
             raw.erase(composition.caret_position - 1, 1);
             --composition.caret_position;
@@ -922,6 +956,16 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch)
         }
         raw.insert(raw.begin() + static_cast<std::ptrdiff_t>(composition.caret_position), input);
         ++composition.caret_position;
+    }
+
+    if (raw.empty())
+    {
+        // TSF cancels the whole composition as soon as the last remaining
+        // character is gone, so the accumulated word and the snapshots a later
+        // Backspace could retract from must not survive here: they would let a
+        // fresh pinyin composition retract a segment of the previous one.
+        composition.clear_creating_word();
+        composition.selection_history.clear();
     }
 
     g_inputSession->set_pinyin_sequence(raw);
@@ -4007,6 +4051,8 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
 
     /* 先处理一下通用的按键，包括所有可能的按键，如普通的拼音字符按键、空格、Tab
      * 等等，然后再在下面处理其中的特殊的按键 */
+    bool composition_restored = false;
+    const bool client_supports_restore = Global::Keycode == VK_BACK && ClientNegotiatedCompositionRestore(client_id);
     const bool r_mode_prefix_backspace = g_r_mode_triggered && Global::Keycode == VK_BACK && input_before_key.empty();
     if (r_mode_prefix_backspace)
     {
@@ -4014,7 +4060,7 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     }
     else if (is_composition_edit_key && !r_mode_trigger_key)
     {
-        ApplyCompositionEditKey(Global::Keycode, Global::Wch);
+        ApplyCompositionEditKey(Global::Keycode, Global::Wch, client_supports_restore, composition_restored);
     }
     else if (should_forward_key_to_session)
     {
@@ -4144,6 +4190,18 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
                 PrepareCandidateList(client_id, activation_epoch);
                 SendUiLessCompositionToClient(client_id, activation_epoch, request_id);
             }
+        }
+        else if (composition_restored)
+        {
+            // Unlike an ordinary deletion, the retraction is not mirrored by
+            // TSF on its own: TSF rebuilds its keystroke buffer from this
+            // payload. It must therefore be sent in both preedit styles, and the
+            // trailing caret field pins the restored caret to the raw end.
+            Global::MsgTypeToTsf = Global::DataFromServerMsgType::CompositionRestored;
+            Global::candidate_ui.selected_text = BuildCreateWordPipePayload(GlobalIme::composition.raw_input_with_cases,
+                                                                            GlobalIme::composition.creating_word.word) +
+                                                 L'\t' + std::to_wstring(GlobalIme::composition.caret_position);
+            SendCurrentDataToClient(client_id, activation_epoch, request_id);
         }
         else if (GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
         {
@@ -4523,6 +4581,11 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
             FanyImeIpc::ShouldEnterCreatingWord(curWordItem.source, selection_transition.continues_composition);
         if (isNeedCreateWord)
         { /* 候选只消耗了输入的一部分，继续使用剩余输入造词。完整拼音和简拼均可进入。 */
+            // Snapshot the state the user is leaving before this selection
+            // overwrites it. The engine's current raw cannot serve as the
+            // snapshot: it still contains the remaining suffix, which the user
+            // may delete before asking to retract this segment.
+            GlobalIme::composition.push_selection_snapshot(selection_transition.consumed_raw_input_with_cases);
             /* 打开造词开关 */
             GlobalIme::composition.creating_word.active = true;
             Global::MsgTypeToTsf = Global::DataFromServerMsgType::NeedToCreateWord;
@@ -4596,6 +4659,9 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
             }
             GlobalIme::composition.caret_position = 0;
             GlobalIme::composition.raw_input_with_cases.clear();
+            // The composition is over; stale snapshots must not survive into the
+            // next one where they could restore an unrelated spelling.
+            GlobalIme::composition.selection_history.clear();
             ClearSpecialModeTriggers();
         }
         else

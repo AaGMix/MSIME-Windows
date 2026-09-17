@@ -791,7 +791,8 @@ bool SharedMemoryAvailable()
 bool NegotiateMainPipeClient(const FanyImeNamedpipeData &hello, uint64_t registration_id)
 {
     const auto protocol =
-        FanyImeProtocol::Negotiate(hello, FanyImeProtocol::Capabilities | FanyImeProtocol::CharacterSetShortcut);
+        FanyImeProtocol::Negotiate(hello, FanyImeProtocol::Capabilities | FanyImeProtocol::CharacterSetShortcut |
+                                              FanyImeProtocol::CompositionRestore);
     std::lock_guard lock(g_pipe_clients_mutex);
     auto it = g_pipe_clients.find(hello.client_id);
     if (it == g_pipe_clients.end() || registration_id == 0 || it->second.main_registration_id != registration_id)
@@ -809,6 +810,19 @@ bool NegotiateMainPipeClient(const FanyImeNamedpipeData &hello, uint64_t registr
     // endpoint replacement. No activation or candidate result can precede it.
     return session.to_tsf_pipe->Write(&reply, sizeof(reply), written, error) && written == sizeof(reply) &&
            protocol.accepted;
+}
+
+bool ClientNegotiatedCompositionRestore(uint64_t client_id)
+{
+    // A legacy (unversioned) client is reported with the server's own capability
+    // set by FanyImeProtocol::Negotiate, so "legacy" has to exclude it here: an
+    // old DLL treats an unknown reply type as a transport fault, not as a frame
+    // to ignore. Only a versioned hello that advertised the bit may receive
+    // CompositionRestored.
+    std::lock_guard lock(g_pipe_clients_mutex);
+    const auto it = g_pipe_clients.find(client_id);
+    return it != g_pipe_clients.end() && !it->second.protocol.legacy &&
+           (it->second.protocol.capabilities & FanyImeProtocol::CompositionRestore) != 0;
 }
 
 uint64_t RegisterToTsfPipeClient(uint64_t client_id, HANDLE pipe)

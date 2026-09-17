@@ -538,14 +538,15 @@ InputSession::SelectionTransition InputSession::advance_composition_after_select
         size_t consumed_length = remove_delimiters(selected_pinyin).size();
         if (base.helpcode_length > 0)
         {
+            const size_t rest_start =
+                shuangpin::raw_length_for_effective_prefix(base.raw_input_with_cases, word_pinyin_length);
+            transition.consumed_raw_input_with_cases = base.raw_input_with_cases.substr(0, rest_start);
             const size_t required_length = word_pinyin_length + base.helpcode_length;
             transition.continues_composition =
                 required_length < total_input_length && word_pinyin_length < total_input_length;
 
             if (transition.continues_composition)
             {
-                const size_t rest_start =
-                    shuangpin::raw_length_for_effective_prefix(base.raw_input_with_cases, word_pinyin_length);
                 const size_t rest_end = shuangpin::raw_length_for_effective_prefix(
                     base.raw_input_with_cases, total_input_length - base.helpcode_length);
                 const std::string rest_pinyin_sequence = base.raw_input.substr(rest_start, rest_end - rest_start);
@@ -564,12 +565,13 @@ InputSession::SelectionTransition InputSession::advance_composition_after_select
                 consumed_length = (std::min)(word_pinyin_length, base.effective_raw_input.size());
             }
 
+            const size_t consumed_raw_length =
+                shuangpin::raw_length_for_effective_prefix(base.raw_input_with_cases, consumed_length);
+            transition.consumed_raw_input_with_cases = base.raw_input_with_cases.substr(0, consumed_raw_length);
             transition.continues_composition = consumed_length < transition.full_pure_pinyin.size();
 
             if (transition.continues_composition)
             {
-                const size_t consumed_raw_length =
-                    shuangpin::raw_length_for_effective_prefix(base.raw_input_with_cases, consumed_length);
                 const std::string rest_pinyin_sequence =
                     base.raw_input.substr(consumed_raw_length, base.raw_input.size() - consumed_raw_length);
                 const std::string rest_pinyin_sequence_with_cases = base.raw_input_with_cases.substr(
@@ -600,6 +602,7 @@ InputSession::SelectionTransition InputSession::advance_composition_after_select
 
     size_t consumed_raw_length =
         shuangpin::raw_length_for_effective_prefix(raw_input_with_cases_without_helpcodes, selected_pure_pinyin.size());
+    transition.consumed_raw_input_with_cases = raw_input_with_cases_without_helpcodes.substr(0, consumed_raw_length);
 
     transition.continues_composition = !selected_pure_pinyin.empty() &&
                                        selected_pure_pinyin.size() < transition.full_pure_pinyin.size() &&

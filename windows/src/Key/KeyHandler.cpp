@@ -809,6 +809,58 @@ HRESULT CMetasequoiaIME::_HandleCompositionConvert(TfEditCookie ec, _In_ ITfCont
 
 //+---------------------------------------------------------------------------
 //
+// _ApplyCreatingWordPayload
+//
+// TSF keeps its own copy of an in-progress word (keystroke buffer + committed
+// word), so any Server-side change to that word must be applied here from the
+// authoritative payload instead of being reproduced by deleting virtual keys.
+//
+//----------------------------------------------------------------------------
+
+HRESULT CMetasequoiaIME::_ApplyCreatingWordPayload(TfEditCookie ec, _In_ ITfContext *pContext,
+                                                   const CreatingWordPayload &payload)
+{
+    GlobalIme::word_for_creating_word = payload.word;
+    GlobalIme::pending_create_word_preedit.clear();
+    if (GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
+    {
+        // The payload preedit is authoritative (汉字 + remaining raw). Handing it
+        // to the worker also keeps it from reading the pipe again for a reply
+        // this caller already consumed.
+        GlobalIme::pending_create_word_preedit = payload.display_preedit;
+    }
+
+    CCompositionProcessorEngine *pCompositionProcessorEngine = _pCompositionProcessorEngine;
+    pCompositionProcessorEngine->PurgeVirtualKey();
+    for (const wchar_t ch : payload.remaining_raw)
+    {
+        pCompositionProcessorEngine->AddVirtualKey(ch);
+    }
+
+    if (payload.has_caret)
+    {
+        const LONGLONG target = static_cast<LONGLONG>(payload.caret);
+        const LONGLONG caret = static_cast<LONGLONG>(pCompositionProcessorEngine->GetCaretPosition());
+        const LONGLONG length = static_cast<LONGLONG>(pCompositionProcessorEngine->GetVirtualKeyLength());
+        if (target >= 0 && target <= length && target != caret)
+        {
+            pCompositionProcessorEngine->MoveCaret(static_cast<int>(target - caret));
+        }
+    }
+
+    if (pCompositionProcessorEngine->GetVirtualKeyLength() == 0)
+    {
+        // Nothing left to compose: the payload retracted the last state there
+        // was. Same terminal behavior as the NeedToCreateWord empty-input path.
+        GlobalIme::pending_create_word_preedit.clear();
+        _HandleCancel(ec, pContext);
+        return S_OK;
+    }
+    return _HandleCompositionInputWorker(pCompositionProcessorEngine, ec, pContext, FANY_IME_NO_REQUEST_ID);
+}
+
+//+---------------------------------------------------------------------------
+//
 // _HandleCompositionBackspace
 //
 //----------------------------------------------------------------------------
@@ -857,6 +909,28 @@ HRESULT CMetasequoiaIME::_HandleCompositionBackspace(TfEditCookie ec, _In_ ITfCo
     if (!g_toggleImeFallbackBuffer.empty())
     {
         g_toggleImeFallbackBuffer.pop_back();
+    }
+
+    // The Backspace that would delete the last remaining character of an
+    // in-progress word retracts the last selected segment instead. The Server
+    // performs the retraction and answers with the authoritative raw spelling;
+    // TSF must rebuild from that reply rather than delete a virtual key locally.
+    if (vKeyLen <= 1 && vKeyLen == pCompositionProcessorEngine->GetCaretPosition() &&
+        !GlobalIme::word_for_creating_word.empty() && SupportsCompositionRestore() && !Global::IsUiLessMode() &&
+        requestId != FANY_IME_NO_REQUEST_ID)
+    {
+        struct FanyImeNamedpipeDataToTsf *receivedData =
+            TryReadDataFromServerPipeWithTimeout(requestId, /*abortTransportOnTimeout=*/false);
+        if (receivedData->msg_type == Global::DataFromServerMsgType::CompositionRestored)
+        {
+            CreatingWordPayload payload;
+            if (ParseCreatingWordPayload(receivedData->candidate_string, payload))
+            {
+                workerResult = _ApplyCreatingWordPayload(ec, pContext, payload);
+                tfSelection.range->Release();
+                return workerResult;
+            }
+        }
     }
 
     if (vKeyLen)

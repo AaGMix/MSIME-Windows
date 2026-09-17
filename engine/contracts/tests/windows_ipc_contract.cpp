@@ -56,6 +56,25 @@ int main()
         CHECK(FanyImeProtocol::IsCharacterSetShortcut('F', modifiers) == (modifiers == 3));
     CHECK(!FanyImeProtocol::IsCharacterSetShortcut('E', 3));
 
+    // Backspace retraction is negotiated separately: an old Server must keep
+    // its current behavior, and an old DLL must never receive CompositionRestored.
+    const auto restoreCapabilities = FanyImeProtocol::Capabilities | FanyImeProtocol::CompositionRestore;
+    const auto restoreHello = FanyImeProtocol::Hello(7, 21, restoreCapabilities);
+    const auto oldServerForRestore = FanyImeProtocol::Negotiate(restoreHello);
+    CHECK(oldServerForRestore.accepted);
+    CHECK((oldServerForRestore.capabilities & FanyImeProtocol::CompositionRestore) == 0);
+    const auto newServerForRestore = FanyImeProtocol::Negotiate(restoreHello, restoreCapabilities);
+    CHECK(newServerForRestore.accepted);
+    CHECK((newServerForRestore.capabilities & FanyImeProtocol::CompositionRestore) != 0);
+    CHECK(FanyImeProtocol::AcceptReply(FanyImeProtocol::Reply(restoreHello, newServerForRestore), 21));
+    CHECK(FanyImeProtocol::ReplyCapabilities(FanyImeProtocol::Reply(restoreHello, newServerForRestore)) ==
+          restoreCapabilities);
+    CHECK((FanyImeProtocol::Negotiate(hello, restoreCapabilities).capabilities & FanyImeProtocol::CompositionRestore) ==
+          0); // old client/new server
+    CHECK(FanyImeReplyType::CompositionRestored == 14);
+    CHECK(FanyImeReplyType::MaxKnown == FanyImeReplyType::CompositionRestored);
+    CHECK(FanyImeReplyType::TransportUnavailable > FanyImeReplyType::MaxKnown);
+
     hello.wch += 1;
     result = FanyImeProtocol::Negotiate(hello);
     CHECK(!result.accepted);

@@ -79,6 +79,24 @@ TEST_CASE(composition_reply_includes_microsoft_shuangpin_ing_key)
     REQUIRE(!FanyImeIpc::ShouldSendCompositionReply(false, false, false, false, false, false));
 }
 
+TEST_CASE(backspace_retracts_only_the_last_selected_segment_boundary)
+{
+    using FanyImeIpc::ShouldRetreatCreatingWordSelection;
+    // The normal case: one character left, caret at the end, snapshot available,
+    // and a client that negotiated the retraction reply.
+    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 1, 1, 1));
+    // No active word, UILess host, old DLL, nothing left to delete, or no snapshot.
+    REQUIRE(!ShouldRetreatCreatingWordSelection(false, false, true, 1, 1, 1));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, true, true, 1, 1, 1));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, false, 1, 1, 1));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 0, 0, 1));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 1, 1, 0));
+    // More than one character left: this Backspace only deletes a character.
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 2, 2, 3));
+    // Caret at the start of the remaining input cannot delete the character.
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 1, 0, 1));
+}
+
 TEST_CASE(composition_reply_includes_japanese_long_vowel_key)
 {
     // 日语模式下 '-' 打长音符，必须回包刷新候选框。
