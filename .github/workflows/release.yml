@@ -4,7 +4,7 @@ name: Release
 #
 # The whole cycle runs inside the one run that the original push started. land-release-pr.sh merges with GITHUB_TOKEN, whose pushes do not start workflow runs, so the merge cannot produce a second Release run queued behind this one on the concurrency group.
 #
-# This spends a code signing signature on every releasable merge to main. The certificate allows 3000 signatures a month, so the quota is not what constrains this; what it spends is release hygiene -- see docs/product-release.md.
+# This spends code signing signatures on every releasable merge to main -- one per payload EXE/DLL plus one for the installer, so roughly fifteen per release rather than one. The certificate allows 3000 signatures a month, so the quota is still not what constrains this; what it spends is release hygiene -- see docs/product-release.md.
 #
 # workflow_dispatch stays, and is now a repair path rather than the normal one. It builds an existing draft, which is what a run that failed after creating the draft leaves behind.
 on:
@@ -499,7 +499,11 @@ jobs:
           --windows-commit "$env:WINDOWS_COMMIT"
           --output installer/app_data/product-manifest.json
 
-      - name: Sign the uiAccess server
+      # Every payload EXE/DLL, not just the uiAccess server. The server is the only one that
+      # technically requires a signature (uiAccess=true is ignored without one), but Microsoft
+      # Defender blocks the unsigned helper processes -- settings page, emoji panel, watchdog --
+      # and the user sees an input method that installs and then cannot open its own panels.
+      - name: Sign the payload binaries
         if: ${{ steps.signing.outputs.signing_enabled == 'true' }}
         shell: pwsh
         working-directory: installer
@@ -508,7 +512,7 @@ jobs:
           CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
           CERTIFICATE_THUMBPRINT: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT }}
           TIMESTAMP_URL: ${{ vars.WINDOWS_SIGNING_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
-        run: ../scripts/ci/sign-binaries.ps1 -Path 'server_exe/MetasequoiaImeServer.exe'
+        run: ../scripts/ci/sign-binaries.ps1 -Recurse -Path 'server_exe', 'tsf_dll'
 
       - name: Install the Chinese language file for Inno Setup
         shell: pwsh
