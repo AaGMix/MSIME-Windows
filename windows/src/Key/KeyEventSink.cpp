@@ -123,9 +123,12 @@ void ApplyDeferredKeyState(DeferredShadowState &shadow, const _KEYSTROKE_STATE &
         }
         break;
     case FUNCTION_BACKSPACE_SEGMENT:
-        // How much one unit covers is Server-owned, so the future raw cannot be
-        // predicted here. Invalidate the projection instead of advancing it by
-        // one character; the next key re-reads the real composition.
+    case FUNCTION_MOVE_LEFT_SEGMENT:
+    case FUNCTION_MOVE_RIGHT_SEGMENT:
+        // How much one unit covers is Server-owned, so the future raw and caret
+        // cannot be predicted here. Invalidate the projection instead of
+        // advancing it by one character; the next key re-reads the real
+        // composition.
         shadow.projectionValid = false;
         break;
     case FUNCTION_CONVERT_WILDCARD:
@@ -185,6 +188,8 @@ bool IsRecoverableDeferredPrefix(const _KEYSTROKE_STATE &keyState)
     case FUNCTION_INPUT:
     case FUNCTION_BACKSPACE:
     case FUNCTION_BACKSPACE_SEGMENT:
+    case FUNCTION_MOVE_LEFT_SEGMENT:
+    case FUNCTION_MOVE_RIGHT_SEGMENT:
     case FUNCTION_DELETE:
     case FUNCTION_MOVE_LEFT:
     case FUNCTION_MOVE_RIGHT:
@@ -208,13 +213,29 @@ bool StartsNewDeferredPrefix(const _KEYSTROKE_STATE &keyState)
            keyState.Function == FUNCTION_FINALIZE_CANDIDATELIST_AND_INPUT;
 }
 
-// Ctrl+Backspace inside a composition deletes one input unit. It is the only
-// Ctrl chord the IME claims: Shift, Alt and the Windows keys keep their host
-// meaning, as does Ctrl+Backspace while no composition is active.
-bool IsSegmentBackspaceChord(UINT code, UINT modifiers)
+// Ctrl+Backspace inside a composition deletes one input unit and Ctrl+Left /
+// Ctrl+Right move one unit. These are the only Ctrl chords the IME claims:
+// Shift, Alt and the Windows keys keep their host meaning, as do all three
+// chords while no composition is active. The returned function is the one a
+// claim site must classify the key as; FUNCTION_NONE means "host key".
+KEYSTROKE_FUNCTION SegmentEditFunction(UINT code, UINT modifiers)
 {
-    return code == VK_BACK && (modifiers & 0b00000111u) == 0b00000010u && (GetAsyncKeyState(VK_LWIN) & 0x8000) == 0 &&
-           (GetAsyncKeyState(VK_RWIN) & 0x8000) == 0;
+    if ((modifiers & 0b00000111u) != 0b00000010u || (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
+        (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0)
+    {
+        return FUNCTION_NONE;
+    }
+    switch (code)
+    {
+    case VK_BACK:
+        return FUNCTION_BACKSPACE_SEGMENT;
+    case VK_LEFT:
+        return FUNCTION_MOVE_LEFT_SEGMENT;
+    case VK_RIGHT:
+        return FUNCTION_MOVE_RIGHT_SEGMENT;
+    default:
+        return FUNCTION_NONE;
+    }
 }
 
 UINT CaptureIpcModifiers()
@@ -818,14 +839,16 @@ BOOL CMetasequoiaIME::_IsKeyEaten(         //
         if ((shortcutModifiers & 0b00000110u) != 0 || (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
             (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0)
         {
-            // Ctrl+Backspace inside a composition is the one exception: it
-            // deletes one input unit, whose length only the Server can decide.
-            if (IsSegmentBackspaceChord(*pCodeOut, shortcutModifiers) && _IsCompositionActiveForKeyGuard())
+            // Ctrl+Backspace / Ctrl+Left / Ctrl+Right inside a composition are
+            // the one exception: they edit one input unit, whose length only
+            // the Server can decide.
+            const KEYSTROKE_FUNCTION segmentEdit = SegmentEditFunction(*pCodeOut, shortcutModifiers);
+            if (segmentEdit != FUNCTION_NONE && _IsCompositionActiveForKeyGuard())
             {
                 if (pKeyState)
                 {
                     pKeyState->Category = CATEGORY_COMPOSING;
-                    pKeyState->Function = FUNCTION_BACKSPACE_SEGMENT;
+                    pKeyState->Function = segmentEdit;
                 }
                 return TRUE;
             }
@@ -1131,10 +1154,11 @@ void CMetasequoiaIME::_ApplyDeferredKeyProjection(const _KEYSTROKE_STATE &keySta
     ApplyDeferredKeyState(shadow, keyState, wch);
     if (!shadow.projectionValid)
     {
-        // The queued key's effect on the composition is unknown (segment
-        // Backspace): drop the projection so the next key classifies against
-        // the real state instead of against a guess that could delete a
-        // different amount than TSF believes.
+        // The queued key's effect on the composition is unknown (a segment
+        // edit -- Ctrl+Backspace deletion or Ctrl+Left/Right caret move -- has
+        // a Server-owned unit length): drop the projection so the next key
+        // classifies against the real state instead of against a guess that
+        // could edit a different amount than TSF believes.
         _deferredKeyProjectionValid = false;
         _deferredProjectedInputLength = 0;
         _deferredProjectedRawInput.clear();
@@ -1332,20 +1356,22 @@ bool CMetasequoiaIME::_ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM
     }
 
     // Other Ctrl/Alt/Windows combinations belong to the application. In particular,
-    // never turn a recovery FIFO into a shortcut sink. Ctrl+Backspace inside a
-    // composition is the single exception; its unit length is Server-owned, and
-    // the projection may already be invalid, so the liveness test falls back to
-    // the projected input when one exists and to the real state otherwise.
+    // never turn a recovery FIFO into a shortcut sink. The segment edit chords
+    // (Ctrl+Backspace, Ctrl+Left, Ctrl+Right) are the exception; their unit
+    // length is Server-owned, and the projection may already be invalid, so the
+    // liveness test falls back to the projected input when one exists and to
+    // the real state otherwise.
     {
         const bool projectedCompositionActive =
             _deferredKeyProjectionValid
                 ? (_deferredProjectedInputLength > 0 || _deferredProjectedCandidateActive)
                 : (_pCompositionProcessorEngine->GetVirtualKeyLength() > 0 || _candidateMode != CANDIDATE_NONE);
-        if (IsSegmentBackspaceChord(*classifiedCode, capturedModifiers) && !_IsKeyboardDisabled() &&
+        const KEYSTROKE_FUNCTION segmentEdit = SegmentEditFunction(*classifiedCode, capturedModifiers);
+        if (segmentEdit != FUNCTION_NONE && !_IsKeyboardDisabled() &&
             (projectedCompositionActive || !GlobalIme::word_for_creating_word.empty()))
         {
             keyState->Category = CATEGORY_COMPOSING;
-            keyState->Function = FUNCTION_BACKSPACE_SEGMENT;
+            keyState->Function = segmentEdit;
             return true;
         }
     }

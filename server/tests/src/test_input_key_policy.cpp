@@ -115,6 +115,61 @@ TEST_CASE(segment_backspace_is_ctrl_only)
     REQUIRE(!IsSegmentBackspaceKey('A', FanyImeIpc::kModifierControl));
 }
 
+TEST_CASE(segment_caret_move_is_ctrl_only)
+{
+    using FanyImeIpc::IsSegmentCaretKey;
+    REQUIRE(IsSegmentCaretKey(FanyImeIpc::kVirtualKeyLeft, FanyImeIpc::kModifierControl));
+    REQUIRE(IsSegmentCaretKey(FanyImeIpc::kVirtualKeyRight, FanyImeIpc::kModifierControl));
+    // Shift, Alt, the Windows keys and any extra modifier keep the host meaning.
+    for (const unsigned extra : {FanyImeIpc::kModifierShift, FanyImeIpc::kModifierAlt})
+    {
+        REQUIRE(!IsSegmentCaretKey(FanyImeIpc::kVirtualKeyLeft, FanyImeIpc::kModifierControl | extra));
+        REQUIRE(!IsSegmentCaretKey(FanyImeIpc::kVirtualKeyRight, FanyImeIpc::kModifierControl | extra));
+    }
+    REQUIRE(!IsSegmentCaretKey(FanyImeIpc::kVirtualKeyLeft, 0));
+    REQUIRE(!IsSegmentCaretKey(FanyImeIpc::kVirtualKeyRight, 0));
+    REQUIRE(!IsSegmentCaretKey(FanyImeIpc::kVirtualKeyLeft, FanyImeIpc::kModifierUiLess));
+    REQUIRE(!IsSegmentCaretKey(FanyImeIpc::kVirtualKeyBackspace, FanyImeIpc::kModifierControl));
+    REQUIRE(!IsSegmentCaretKey('A', FanyImeIpc::kModifierControl));
+}
+
+TEST_CASE(segment_caret_boundaries_stop_at_the_unit_next_to_the_caret)
+{
+    using FanyImeIpc::NextSegmentBoundary;
+    using FanyImeIpc::PreviousSegmentBoundary;
+    const std::vector<std::size_t> boundaries = {0, 3, 7, 9};
+    // Inside a unit, on its first offset, on its last offset and past the end:
+    // left lands on the unit start, right on the unit end, and both directions
+    // are idempotent at the raw ends.
+    struct Case
+    {
+        std::size_t caret;
+        std::size_t previous;
+        std::size_t next;
+    };
+    const Case cases[] = {
+        {8, 7, 9}, // inside the last unit
+        {7, 3, 9}, // first offset of the last unit
+        {9, 7, 9}, // raw end: both directions stay put
+        {1, 0, 3}, // inside the first unit
+        {0, 0, 3}, // raw start: left stays put
+        {4, 3, 7}, // inside the middle unit
+    };
+    for (const Case &expected : cases)
+    {
+        REQUIRE_EQ(PreviousSegmentBoundary(boundaries, expected.caret), expected.previous);
+        REQUIRE_EQ(NextSegmentBoundary(boundaries, expected.caret), expected.next);
+    }
+    // No unit model: both directions keep the caret where the caller had it and
+    // the caller falls back to the single-character move.
+    REQUIRE_EQ(PreviousSegmentBoundary({}, 4), std::size_t(4));
+    REQUIRE_EQ(NextSegmentBoundary({}, 4), std::size_t(4));
+    // An incomplete tail is a unit of its own, so the jump stops inside the raw.
+    const std::vector<std::size_t> partial = {0, 2, 3};
+    REQUIRE_EQ(PreviousSegmentBoundary(partial, 3), std::size_t(2));
+    REQUIRE_EQ(NextSegmentBoundary(partial, 2), std::size_t(3));
+}
+
 TEST_CASE(segment_backspace_drops_a_selected_segment_only_at_the_head_of_the_raw)
 {
     using FanyImeIpc::ShouldDropCreatingWordSegment;

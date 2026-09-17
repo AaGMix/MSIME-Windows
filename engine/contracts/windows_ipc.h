@@ -221,8 +221,10 @@ constexpr std::uint32_t UiLessComposition = 11;
 // Registration-only replies, consumed before a new client may send keys.
 constexpr std::uint32_t ProtocolReady = 12;
 constexpr std::uint32_t ProtocolMismatch = 13;
-// The Server retracted the last selected segment of an in-progress word and
-// restored its raw pinyin. candidate_string =
+// The Server retracted or repositioned an in-progress word and restored its raw
+// pinyin: this is the authoritative reply for the retraction (Backspace), the
+// unit deletion (Ctrl+Backspace) and the unit caret move (Ctrl+Left /
+// Ctrl+Right). candidate_string =
 //   remaining_raw \t committed_word \t display_preedit [\t caret]
 // caret is an optional decimal offset into remaining_raw; a 3-field payload
 // means "caret at the end". NeedToCreateWord and CompositionRestored share the

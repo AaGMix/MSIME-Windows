@@ -1124,27 +1124,7 @@ HRESULT CMetasequoiaIME::_HandleCompositionArrowKey(TfEditCookie ec, _In_ ITfCon
     if (keyFunction == FUNCTION_MOVE_LEFT || keyFunction == FUNCTION_MOVE_RIGHT)
     {
         _pCompositionProcessorEngine->MoveCaret(keyFunction == FUNCTION_MOVE_LEFT ? -1 : 1);
-        if (_pComposition == nullptr)
-        {
-            return S_OK;
-        }
-
-        ITfRange *caretRange = nullptr;
-        if (FAILED(_pComposition->GetRange(&caretRange)) || caretRange == nullptr)
-        {
-            return S_OK;
-        }
-        caretRange->Collapse(ec, TF_ANCHOR_START);
-        LONG shifted = 0;
-        caretRange->ShiftEnd(ec, static_cast<LONG>(_pCompositionProcessorEngine->GetRenderedCaretPosition()), &shifted,
-                             nullptr);
-        caretRange->Collapse(ec, TF_ANCHOR_END);
-        TF_SELECTION caretSelection = {};
-        caretSelection.range = caretRange;
-        caretSelection.style.ase = TF_AE_NONE;
-        caretSelection.style.fInterimChar = FALSE;
-        pContext->SetSelection(ec, 1, &caretSelection);
-        caretRange->Release();
+        (void)_SetCompositionCaretSelection(ec, pContext);
         if (Global::IsUiLessMode() && _pCandidateListUIPresenter)
         {
             _pCandidateListUIPresenter->_ConsumeUiLessCompositionReply(requestId);
@@ -1202,6 +1182,101 @@ HRESULT CMetasequoiaIME::_HandleCompositionArrowKey(TfEditCookie ec, _In_ ITfCon
 Exit:
     tfSelection.range->Release();
     return S_OK;
+}
+
+//+---------------------------------------------------------------------------
+//
+// _SetCompositionCaretSelection
+//
+// Place the TSF selection at the engine's rendered caret without changing the
+// composition text.
+//
+//----------------------------------------------------------------------------
+
+HRESULT CMetasequoiaIME::_SetCompositionCaretSelection(TfEditCookie ec, _In_ ITfContext *pContext)
+{
+    if (_pComposition == nullptr)
+    {
+        return S_OK;
+    }
+
+    ITfRange *caretRange = nullptr;
+    if (FAILED(_pComposition->GetRange(&caretRange)) || caretRange == nullptr)
+    {
+        return S_OK;
+    }
+    caretRange->Collapse(ec, TF_ANCHOR_START);
+    LONG shifted = 0;
+    caretRange->ShiftEnd(ec, static_cast<LONG>(_pCompositionProcessorEngine->GetRenderedCaretPosition()), &shifted,
+                         nullptr);
+    caretRange->Collapse(ec, TF_ANCHOR_END);
+    TF_SELECTION caretSelection = {};
+    caretSelection.range = caretRange;
+    caretSelection.style.ase = TF_AE_NONE;
+    caretSelection.style.fInterimChar = FALSE;
+    pContext->SetSelection(ec, 1, &caretSelection);
+    caretRange->Release();
+    return S_OK;
+}
+
+//+---------------------------------------------------------------------------
+//
+// _HandleCompositionArrowKeySegment
+//
+// Ctrl+Left / Ctrl+Right move the caret by one input unit. The Server owns the
+// unit boundaries and answers with the authoritative caret, so TSF applies only
+// the offset it reports and then redraws the composition selection. Hosts that
+// cannot apply that reply (UILess, an older Server without the negotiated
+// capability, or a missing reply) fall back to the plain single-character move.
+//
+//----------------------------------------------------------------------------
+
+HRESULT CMetasequoiaIME::_HandleCompositionArrowKeySegment(TfEditCookie ec, _In_ ITfContext *pContext,
+                                                           KEYSTROKE_FUNCTION keyFunction, uint64_t requestId)
+{
+    if (!_IsComposing())
+    {
+        // The composition disappeared between classifying the key and running
+        // this session; there is neither a caret to move nor a reply to apply.
+        return S_OK;
+    }
+
+    const KEYSTROKE_FUNCTION singleStepFunction =
+        keyFunction == FUNCTION_MOVE_LEFT_SEGMENT ? FUNCTION_MOVE_LEFT : FUNCTION_MOVE_RIGHT;
+
+    if (!Global::IsUiLessMode() && SupportsCompositionRestore() && requestId != FANY_IME_NO_REQUEST_ID)
+    {
+        struct FanyImeNamedpipeDataToTsf *receivedData =
+            TryReadDataFromServerPipeWithTimeout(requestId, /*abortTransportOnTimeout=*/false);
+        if (receivedData->msg_type == Global::DataFromServerMsgType::CompositionRestored)
+        {
+            CreatingWordPayload payload;
+            if (ParseCreatingWordPayload(receivedData->candidate_string, payload))
+            {
+                CCompositionProcessorEngine *pCompositionProcessorEngine = _pCompositionProcessorEngine;
+                const LONGLONG length = static_cast<LONGLONG>(pCompositionProcessorEngine->GetVirtualKeyLength());
+                // The raw spelling is unchanged, so only the caret part of the
+                // payload is applied: rebuilding the keystroke buffer from the
+                // same text would flash the preedit. A payload without a caret
+                // means "at the end", the default an omitted field carries.
+                const LONGLONG target = payload.has_caret ? static_cast<LONGLONG>(payload.caret) : length;
+                const LONGLONG caret = static_cast<LONGLONG>(pCompositionProcessorEngine->GetCaretPosition());
+                if (target >= 0 && target <= length && target != caret)
+                {
+                    pCompositionProcessorEngine->MoveCaret(static_cast<int>(target - caret));
+                }
+                return _SetCompositionCaretSelection(ec, pContext);
+            }
+        }
+        // The Server answered with something other than the restored composition,
+        // or with nothing at all. This request's reply slot is already consumed
+        // (or was empty), so the fallback must not wait for it again.
+        return _HandleCompositionArrowKey(ec, pContext, singleStepFunction, FANY_IME_NO_REQUEST_ID);
+    }
+
+    // UILess hosts and unnegotiated clients keep the ordinary reply pipe: the
+    // single-character fallback consumes the UiLess composition frame.
+    return _HandleCompositionArrowKey(ec, pContext, singleStepFunction, requestId);
 }
 
 //+---------------------------------------------------------------------------

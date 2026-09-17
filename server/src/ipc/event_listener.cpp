@@ -892,17 +892,37 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
     }
     composition.caret_position = (std::min)(composition.caret_position, raw.size());
 
-    if (keycode == VK_LEFT)
+    // Ctrl+Left / Ctrl+Right jump the caret by one segmentation unit instead of
+    // one character, consuming the same engine boundaries Ctrl+Backspace
+    // deletes. The Server owns the unit model, so it moves the authoritative
+    // caret and answers with CompositionRestored; TSF only applies that caret.
+    // Everything unnegotiated, UILess or unit-less keeps the single-character
+    // move below, so both sides agree on when the jump happens.
+    const bool segment_caret = FanyImeIpc::IsSegmentCaretKey(keycode, modifiers_down);
+    const bool segment_caret_supported = segment_caret && client_supports_restore && !IsUiLessMode() &&
+                                         !g_english_input_mode && !IsSpecialModeCompositionActive(raw);
+    if (keycode == VK_LEFT || keycode == VK_RIGHT)
     {
-        if (composition.caret_position > 0)
+        if (segment_caret_supported)
         {
-            --composition.caret_position;
+            const std::vector<std::size_t> boundaries = g_inputSession->segment_raw_boundaries();
+            if (!boundaries.empty())
+            {
+                composition.caret_position =
+                    keycode == VK_LEFT ? FanyImeIpc::PreviousSegmentBoundary(boundaries, composition.caret_position)
+                                       : FanyImeIpc::NextSegmentBoundary(boundaries, composition.caret_position);
+                composition_restored = true;
+                return true;
+            }
         }
-        return true;
-    }
-    if (keycode == VK_RIGHT)
-    {
-        if (composition.caret_position < raw.size())
+        if (keycode == VK_LEFT)
+        {
+            if (composition.caret_position > 0)
+            {
+                --composition.caret_position;
+            }
+        }
+        else if (composition.caret_position < raw.size())
         {
             ++composition.caret_position;
         }
@@ -4117,7 +4137,9 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     /* 先处理一下通用的按键，包括所有可能的按键，如普通的拼音字符按键、空格、Tab
      * 等等，然后再在下面处理其中的特殊的按键 */
     bool composition_restored = false;
-    const bool client_supports_restore = Global::Keycode == VK_BACK && ClientNegotiatedCompositionRestore(client_id);
+    const bool client_supports_restore =
+        (Global::Keycode == VK_BACK || Global::Keycode == VK_LEFT || Global::Keycode == VK_RIGHT) &&
+        ClientNegotiatedCompositionRestore(client_id);
     const bool r_mode_prefix_backspace = g_r_mode_triggered && Global::Keycode == VK_BACK && input_before_key.empty();
     if (r_mode_prefix_backspace)
     {
@@ -4240,7 +4262,7 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
             }
         }
     }
-    else if (Global::Keycode == VK_BACK || Global::Keycode == VK_DELETE)
+    else if (Global::Keycode == VK_BACK || Global::Keycode == VK_DELETE || composition_restored)
     {
         if (IsUiLessMode())
         {
@@ -4259,10 +4281,12 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         }
         else if (composition_restored)
         {
-            // Unlike an ordinary deletion, the retraction is not mirrored by
-            // TSF on its own: TSF rebuilds its keystroke buffer from this
-            // payload. It must therefore be sent in both preedit styles, and the
-            // trailing caret field pins the restored caret to the raw end.
+            // Unlike an ordinary deletion, the retraction and the unit caret
+            // jump are not mirrored by TSF on its own: for a deletion TSF
+            // rebuilds its keystroke buffer from this payload, and for a jump
+            // it applies the caret field. It must therefore be sent in both
+            // preedit styles, and the trailing caret field pins the
+            // authoritative caret.
             Global::MsgTypeToTsf = Global::DataFromServerMsgType::CompositionRestored;
             Global::candidate_ui.selected_text = BuildCreateWordPipePayload(GlobalIme::composition.raw_input_with_cases,
                                                                             GlobalIme::composition.creating_word.word) +

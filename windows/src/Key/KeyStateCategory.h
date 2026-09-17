@@ -101,6 +101,9 @@ class CKeyStateCategory
     // HandleKeyArrow
     virtual HRESULT HandleKeyArrow(KeyHandlerEditSessionDTO dto);
 
+    // HandleKeyArrowSegment (Ctrl+Left / Ctrl+Right: one input unit)
+    virtual HRESULT HandleKeyArrowSegment(KeyHandlerEditSessionDTO dto);
+
     // HandleKeyDoubleSingleByte
     virtual HRESULT HandleKeyDoubleSingleByte(KeyHandlerEditSessionDTO dto);
 
@@ -158,6 +161,9 @@ class CKeyStateComposing : public CKeyStateCategory
 
     // HandleArrowKey
     HRESULT HandleKeyArrow(KeyHandlerEditSessionDTO dto);
+
+    // HandleKeyArrowSegment (Ctrl+Left / Ctrl+Right: one input unit)
+    HRESULT HandleKeyArrowSegment(KeyHandlerEditSessionDTO dto);
 
     // HandleKeyDoubleSingleByte
     HRESULT HandleKeyDoubleSingleByte(KeyHandlerEditSessionDTO dto);

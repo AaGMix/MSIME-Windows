@@ -127,6 +127,10 @@ HRESULT CKeyStateCategory::KeyStateHandler(KEYSTROKE_FUNCTION function, KeyHandl
     case FUNCTION_MOVE_RIGHT:
         return HandleKeyArrow(dto);
 
+    case FUNCTION_MOVE_LEFT_SEGMENT:
+    case FUNCTION_MOVE_RIGHT_SEGMENT:
+        return HandleKeyArrowSegment(dto);
+
     case FUNCTION_MOVE_UP:
     case FUNCTION_MOVE_DOWN:
     case FUNCTION_MOVE_PAGE_UP:
@@ -251,6 +255,13 @@ HRESULT CKeyStateCategory::HandleKeyArrow(KeyHandlerEditSessionDTO dto)
     return E_NOTIMPL;
 }
 
+//_HandleCompositionArrowKeySegment (Ctrl+Left / Ctrl+Right)
+HRESULT CKeyStateCategory::HandleKeyArrowSegment(KeyHandlerEditSessionDTO dto)
+{
+    dto;
+    return E_NOTIMPL;
+}
+
 //_HandleCompositionDoubleSingleByte
 HRESULT CKeyStateCategory::HandleKeyDoubleSingleByte(KeyHandlerEditSessionDTO dto)
 {
@@ -348,6 +359,11 @@ HRESULT CKeyStateComposing::HandleKeyDelete(KeyHandlerEditSessionDTO dto)
 HRESULT CKeyStateComposing::HandleKeyArrow(KeyHandlerEditSessionDTO dto)
 {
     return _pTextService->_HandleCompositionArrowKey(dto.ec, dto.pContext, dto.arrowKey, dto.requestId);
+}
+
+HRESULT CKeyStateComposing::HandleKeyArrowSegment(KeyHandlerEditSessionDTO dto)
+{
+    return _pTextService->_HandleCompositionArrowKeySegment(dto.ec, dto.pContext, dto.arrowKey, dto.requestId);
 }
 
 HRESULT CKeyStateComposing::HandleKeyDoubleSingleByte(KeyHandlerEditSessionDTO dto)

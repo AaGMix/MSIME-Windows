@@ -265,6 +265,14 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     HRESULT _HandleCompositionDelete(TfEditCookie ec, _In_ ITfContext *pContext, uint64_t requestId);
     HRESULT _HandleCompositionArrowKey(TfEditCookie ec, _In_ ITfContext *pContext, KEYSTROKE_FUNCTION keyFunction,
                                        uint64_t requestId = FANY_IME_NO_REQUEST_ID);
+    // Ctrl+Left / Ctrl+Right: the Server moves the caret by one input unit and
+    // answers with the authoritative caret. Hosts that cannot apply that reply
+    // fall back to the single-character move.
+    HRESULT _HandleCompositionArrowKeySegment(TfEditCookie ec, _In_ ITfContext *pContext,
+                                              KEYSTROKE_FUNCTION keyFunction, uint64_t requestId);
+    // Place the TSF selection at the engine's rendered caret. Shared by the
+    // plain arrow move and the Server-driven unit jump.
+    HRESULT _SetCompositionCaretSelection(TfEditCookie ec, _In_ ITfContext *pContext);
     HRESULT _HandleCompositionPunctuation(TfEditCookie ec, _In_ ITfContext *pContext, UINT code, WCHAR wch,
                                           uint64_t requestId, const std::wstring &prefetchedText);
     // Character immediately before the caret / composition start (0 if unavailable).

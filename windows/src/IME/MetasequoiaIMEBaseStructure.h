@@ -80,7 +80,13 @@ enum KEYSTROKE_FUNCTION
     // Ctrl+Backspace inside a composition: the Server deletes one input unit
     // (one character's pinyin, or a whole selected segment) and answers with the
     // authoritative spelling. Append-only, like every function above.
-    FUNCTION_BACKSPACE_SEGMENT
+    FUNCTION_BACKSPACE_SEGMENT,
+
+    // Ctrl+Left / Ctrl+Right inside a composition: the Server moves the caret by
+    // one input unit and answers with the authoritative caret. Append-only, like
+    // every function above.
+    FUNCTION_MOVE_LEFT_SEGMENT,
+    FUNCTION_MOVE_RIGHT_SEGMENT
 };
 
 //---------------------------------------------------------------------
