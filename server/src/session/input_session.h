@@ -39,6 +39,9 @@ class IInputSession
     virtual const std::string &get_pure_pinyin_sequence() const = 0;
     virtual const std::string &get_pinyin_segmentation() const = 0;
     virtual std::string get_pinyin_segmentation_with_cases() const = 0;
+    // Raw offsets where one input unit starts, for segment deletion. Empty when
+    // the scheme or mode has no unit model.
+    virtual std::vector<std::size_t> segment_raw_boundaries() const = 0;
     virtual std::string get_quanpin() const = 0;
     virtual bool is_all_complete_pure_pinyin() const = 0;
     virtual bool has_active_helpcode() const = 0;

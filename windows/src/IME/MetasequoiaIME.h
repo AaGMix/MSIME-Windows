@@ -253,6 +253,10 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     HRESULT _HandleCompositionFinalize(TfEditCookie ec, _In_ ITfContext *pContext, BOOL fCandidateList);
     HRESULT _HandleCompositionConvert(TfEditCookie ec, _In_ ITfContext *pContext, BOOL isWildcardSearch);
     HRESULT _HandleCompositionBackspace(TfEditCookie ec, _In_ ITfContext *pContext, uint64_t requestId);
+    // Ctrl+Backspace: the Server deletes one input unit and the composition is
+    // rebuilt from its authoritative CompositionRestored payload. Hosts that
+    // cannot apply that payload fall back to the single-character deletion.
+    HRESULT _HandleCompositionBackspaceSegment(TfEditCookie ec, _In_ ITfContext *pContext, uint64_t requestId);
     // Rebuild the composition from a creating-word payload: keystroke buffer,
     // accumulated word, preedit and caret. Used both when a selection continues a
     // word (NeedToCreateWord) and when the Server retracts it

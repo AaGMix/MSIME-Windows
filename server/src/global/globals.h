@@ -128,6 +128,23 @@ struct CompositionState
         caret_position = raw_input_with_cases.size();
         return true;
     }
+
+    // Drop the newest snapshot without restoring its spelling: the accumulated
+    // word returns to its pre-selection state while the raw stays empty. This is
+    // the Ctrl+Backspace semantics for a selected segment -- the user asked to
+    // delete it, not to edit its pinyin again -- so candidates are not rebuilt
+    // from the consumed input. Returns false when there is nothing to drop.
+    bool drop_last_selection()
+    {
+        if (selection_history.empty())
+        {
+            return false;
+        }
+        CreatingWordSnapshot snapshot = std::move(selection_history.back());
+        selection_history.pop_back();
+        creating_word = std::move(snapshot.previous_creating_word);
+        return true;
+    }
 };
 
 inline CompositionState composition;

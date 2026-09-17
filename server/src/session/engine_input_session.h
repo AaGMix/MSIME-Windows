@@ -28,6 +28,7 @@ class EngineInputSession : public IInputSession
     const std::string &get_pure_pinyin_sequence() const override;
     const std::string &get_pinyin_segmentation() const override;
     std::string get_pinyin_segmentation_with_cases() const override;
+    std::vector<std::size_t> segment_raw_boundaries() const override;
     std::string get_quanpin() const override;
     bool is_all_complete_pure_pinyin() const override;
     bool has_active_helpcode() const override;

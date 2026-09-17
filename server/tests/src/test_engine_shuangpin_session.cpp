@@ -1073,3 +1073,91 @@ TEST_CASE(EngineSessionsKeepHelpcodeFilteringAndAnnotationsTogether)
     quanpin.switch_scheme(SchemeType::Shuangpin);
     REQUIRE_EQ(quanpin.get_helpcode_annotation("你", false), std::string("(rE)"));
 }
+
+TEST_CASE(SegmentBoundariesFollowTheDisplayedQuanpinSyllables)
+{
+    EngineInputSession session(SchemeType::Quanpin);
+    InputLetters(session, "nihaoma");
+    REQUIRE_EQ(session.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 5, 7}));
+
+    // Manual delimiters are boundaries too, and every offset indexes the raw
+    // spelling (case included) rather than the displayed segmentation.
+    EngineInputSession delimited(SchemeType::Quanpin);
+    InputSequence(delimited, "ni'hao");
+    REQUIRE_EQ(delimited.segment_raw_boundaries(), std::vector<std::size_t>({0, 3, 6}));
+
+    EngineInputSession cased(SchemeType::Quanpin);
+    InputLetters(cased, "NiHaoMa");
+    REQUIRE_EQ(cased.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 5, 7}));
+
+    // A correction display that rewrites letters stays one unit when the cut
+    // reports one syllable, and an incomplete tail is a unit of its own so only
+    // the tail is deleted.
+    EngineInputSession corrected(SchemeType::Quanpin);
+    InputLetters(corrected, "sahng");
+    REQUIRE_EQ(corrected.segment_raw_boundaries(), std::vector<std::size_t>({0, 5}));
+
+    EngineInputSession partial(SchemeType::Quanpin);
+    InputLetters(partial, "nih");
+    REQUIRE_EQ(partial.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 3}));
+
+    EngineInputSession empty(SchemeType::Quanpin);
+    REQUIRE(empty.segment_raw_boundaries().empty());
+}
+
+TEST_CASE(SegmentBoundariesFollowShuangpinSyllableSegmentation)
+{
+    EngineInputSession xiaohe(SchemeType::Shuangpin);
+    InputLetters(xiaohe, "nihaoma");
+    REQUIRE_EQ(xiaohe.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 4, 5, 7}));
+
+    // One complete syllable is one unit.
+    EngineInputSession single(SchemeType::Shuangpin);
+    InputLetters(single, "ni");
+    REQUIRE_EQ(single.segment_raw_boundaries(), std::vector<std::size_t>({0, 2}));
+
+    // The Microsoft ';' final key belongs to the syllable that consumes it.
+    EngineInputSession microsoft(SchemeType::Shuangpin, GetMicrosoftShuangpinProfile());
+    InputLetters(microsoft, "b");
+    microsoft.handle_key(VK_OEM_1, 0, L';');
+    InputLetters(microsoft, "ni");
+    REQUIRE_EQ(microsoft.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 4}));
+}
+
+TEST_CASE(UnitlessSchemesReportNoSegmentBoundaries)
+{
+    EngineInputSession wubi(SchemeType::Wubi);
+    InputLetters(wubi, "nihao");
+    REQUIRE(wubi.segment_raw_boundaries().empty());
+
+    EngineInputSession japanese(SchemeType::JapaneseRomaji);
+    InputLetters(japanese, "nihao");
+    REQUIRE(japanese.segment_raw_boundaries().empty());
+}
+
+TEST_CASE(SegmentBoundariesKeepHelpcodeAndJianpinTailAsTheirOwnUnits)
+{
+    // The deletion follows the preedit, so the correction switches decide what
+    // the preedit looks like. Keep them off here so the test pins the plain
+    // syllable separators instead of the developer's own configuration.
+    ScopedConfigRoot config_root;
+    InitImeConfig();
+    REQUIRE(SetConfiguredQuanpinAutocorrectTransposition(false));
+    REQUIRE(SetConfiguredQuanpinAutocorrectNeighbor(false));
+    InitImeConfig();
+    REQUIRE(!GetConfiguredQuanpinAutocorrectTransposition());
+    REQUIRE(!GetConfiguredQuanpinAutocorrectNeighbor());
+
+    // A single trailing helpcode is one editable unit of its own, exactly as the
+    // preedit draws the separator before it.
+    EngineInputSession helpcode(SchemeType::Quanpin);
+    InputLetters(helpcode, "nihao");
+    InputLetters(helpcode, "V");
+    REQUIRE_EQ(helpcode.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 5, 6}));
+
+    // A jianpin tail after a complete syllable stays a unit of its own so only
+    // the tail is deleted.
+    EngineInputSession jianpin(SchemeType::Quanpin);
+    InputLetters(jianpin, "zheg");
+    REQUIRE_EQ(jianpin.segment_raw_boundaries(), std::vector<std::size_t>({0, 3, 4}));
+}

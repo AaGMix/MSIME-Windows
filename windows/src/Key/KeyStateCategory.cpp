@@ -117,6 +117,9 @@ HRESULT CKeyStateCategory::KeyStateHandler(KEYSTROKE_FUNCTION function, KeyHandl
     case FUNCTION_BACKSPACE:
         return HandleKeyBackspace(dto);
 
+    case FUNCTION_BACKSPACE_SEGMENT:
+        return HandleKeySegmentBackspace(dto);
+
     case FUNCTION_DELETE:
         return HandleKeyDelete(dto);
 
@@ -227,6 +230,13 @@ HRESULT CKeyStateCategory::HandleKeyBackspace(KeyHandlerEditSessionDTO dto)
     return E_NOTIMPL;
 }
 
+//_HandleCompositionBackspaceSegment
+HRESULT CKeyStateCategory::HandleKeySegmentBackspace(KeyHandlerEditSessionDTO dto)
+{
+    dto;
+    return E_NOTIMPL;
+}
+
 //_HandleCompositionDelete
 HRESULT CKeyStateCategory::HandleKeyDelete(KeyHandlerEditSessionDTO dto)
 {
@@ -323,6 +333,11 @@ HRESULT CKeyStateComposing::HandleKeyToogleIMEMode(KeyHandlerEditSessionDTO dto)
 HRESULT CKeyStateComposing::HandleKeyBackspace(KeyHandlerEditSessionDTO dto)
 {
     return _pTextService->_HandleCompositionBackspace(dto.ec, dto.pContext, dto.requestId);
+}
+
+HRESULT CKeyStateComposing::HandleKeySegmentBackspace(KeyHandlerEditSessionDTO dto)
+{
+    return _pTextService->_HandleCompositionBackspaceSegment(dto.ec, dto.pContext, dto.requestId);
 }
 
 HRESULT CKeyStateComposing::HandleKeyDelete(KeyHandlerEditSessionDTO dto)

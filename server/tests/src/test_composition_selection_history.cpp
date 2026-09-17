@@ -52,6 +52,29 @@ TEST_CASE(composition_selection_snapshot_requires_a_consumed_spelling)
     composition.push_selection_snapshot("");
     REQUIRE(composition.selection_history.empty());
     REQUIRE(!composition.restore_last_selection());
+    REQUIRE(!composition.drop_last_selection());
+}
+
+TEST_CASE(composition_drop_last_selection_discards_the_spelling)
+{
+    GlobalIme::CompositionState composition;
+    composition.push_selection_snapshot("te");
+    composition.creating_word = MakeCreatingWord("te", "特");
+    composition.push_selection_snapshot("le");
+
+    // Ctrl+Backspace drops 乐 without restoring "le": the accumulated 特 stays
+    // and the raw spelling the segment consumed is gone for good.
+    REQUIRE(composition.drop_last_selection());
+    REQUIRE_EQ(composition.raw_input_with_cases, std::string(""));
+    REQUIRE_EQ(composition.caret_position, std::size_t(0));
+    REQUIRE(composition.creating_word.active);
+    REQUIRE_EQ(composition.creating_word.word, std::string("特"));
+
+    // Dropping the earlier 特 ends the word state; nothing is left to drop.
+    REQUIRE(composition.drop_last_selection());
+    REQUIRE(!composition.creating_word.active);
+    REQUIRE(composition.selection_history.empty());
+    REQUIRE(!composition.drop_last_selection());
 }
 
 TEST_CASE(composition_clear_drops_history_while_clear_creating_word_keeps_it)

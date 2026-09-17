@@ -169,6 +169,10 @@ VOID CMetasequoiaIME::_DeleteCandidateList(BOOL isForce, _In_opt_ ITfContext *pC
 HRESULT CMetasequoiaIME::_HandleComplete(TfEditCookie ec, _In_ ITfContext *pContext)
 {
     g_toggleImeFallbackBuffer.clear();
+    // The composition ends here, so the creating-word prefix must not survive
+    // into the next one: a leftover word would be prepended to its preedit.
+    GlobalIme::word_for_creating_word.clear();
+    GlobalIme::pending_create_word_preedit.clear();
     _DeleteCandidateList(FALSE, pContext);
 
     // just terminate the composition
@@ -180,6 +184,10 @@ HRESULT CMetasequoiaIME::_HandleComplete(TfEditCookie ec, _In_ ITfContext *pCont
 HRESULT CMetasequoiaIME::_HandleCompleteCommitFirst(TfEditCookie ec, _In_ ITfContext *pContext)
 {
     g_toggleImeFallbackBuffer.clear();
+    // Same terminal cleanup as _HandleComplete: the accumulated word belongs to
+    // the composition being finished, never to the next one.
+    GlobalIme::word_for_creating_word.clear();
+    GlobalIme::pending_create_word_preedit.clear();
 
     _DeleteCandidateList(FALSE, pContext);
 
@@ -850,11 +858,39 @@ HRESULT CMetasequoiaIME::_ApplyCreatingWordPayload(TfEditCookie ec, _In_ ITfCont
 
     if (pCompositionProcessorEngine->GetVirtualKeyLength() == 0)
     {
-        // Nothing left to compose: the payload retracted the last state there
-        // was. Same terminal behavior as the NeedToCreateWord empty-input path.
         GlobalIme::pending_create_word_preedit.clear();
-        _HandleCancel(ec, pContext);
-        return S_OK;
+        if (payload.word.empty())
+        {
+            // Nothing left to compose: the payload retracted the last state
+            // there was. Same terminal behavior as the NeedToCreateWord
+            // empty-input path.
+            _HandleCancel(ec, pContext);
+            return S_OK;
+        }
+        // The raw spelling is gone but the accumulated word is still part of the
+        // composition (Ctrl+Backspace deleted the last unit): show the word
+        // alone. Only the stale local candidate list is dropped -- ending the
+        // presenter here would send HideCandidateWnd, which resets the very
+        // Server composition this payload preserves; the Server has already
+        // taken its window down.
+        if (_pCandidateListUIPresenter)
+        {
+            _pCandidateListUIPresenter->_ClearList();
+        }
+        if (GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Empty)
+        {
+            // This style renders no inline preedit, so the word stays hidden
+            // exactly as it does while raw spelling remains.
+            pCompositionProcessorEngine->SetRenderedPreedit(std::wstring{}, 0);
+            return S_OK;
+        }
+        // Keep the rendered preedit in step with the composition text: the arrow
+        // keys map the raw caret through it, and the value from before the
+        // deletion would point past the shorter word.
+        pCompositionProcessorEngine->SetRenderedPreedit(payload.word, payload.word.size());
+        CStringRange wordString;
+        wordString.Set(payload.word.c_str(), payload.word.length());
+        return _AddComposingAndChar(ec, pContext, &wordString);
     }
     return _HandleCompositionInputWorker(pCompositionProcessorEngine, ec, pContext, FANY_IME_NO_REQUEST_ID);
 }
@@ -960,6 +996,60 @@ HRESULT CMetasequoiaIME::_HandleCompositionBackspace(TfEditCookie ec, _In_ ITfCo
 Exit:
     tfSelection.range->Release();
     return workerResult;
+}
+
+//+---------------------------------------------------------------------------
+//
+// _HandleCompositionBackspaceSegment
+//
+// Ctrl+Backspace deletes one input unit. The Server owns the unit boundaries and
+// answers with the authoritative remaining spelling, so TSF rebuilds from that
+// payload instead of deleting a locally guessed amount. Hosts that cannot apply
+// the payload (UILess, an older Server without the negotiated capability, or a
+// missing reply) fall back to the plain single-character Backspace.
+//
+//----------------------------------------------------------------------------
+
+HRESULT CMetasequoiaIME::_HandleCompositionBackspaceSegment(TfEditCookie ec, _In_ ITfContext *pContext,
+                                                            uint64_t requestId)
+{
+    if (!_IsComposing())
+    {
+        // The composition disappeared between classifying the key and running
+        // this session; there is nothing to rebuild from the payload.
+        return S_OK;
+    }
+
+    if (!Global::IsUiLessMode() && SupportsCompositionRestore() && requestId != FANY_IME_NO_REQUEST_ID)
+    {
+        struct FanyImeNamedpipeDataToTsf *receivedData =
+            TryReadDataFromServerPipeWithTimeout(requestId, /*abortTransportOnTimeout=*/false);
+        if (receivedData->msg_type == Global::DataFromServerMsgType::CompositionRestored)
+        {
+            CreatingWordPayload payload;
+            if (ParseCreatingWordPayload(receivedData->candidate_string, payload))
+            {
+                const HRESULT workerResult = _ApplyCreatingWordPayload(ec, pContext, payload);
+                if (!_IsComposing())
+                {
+                    // The deletion consumed the last remaining state: the
+                    // composition ends inside this hold, so its auto-repeats
+                    // must stay with the guard instead of deleting document
+                    // text (#347).
+                    _backspaceHoldArmed = true;
+                }
+                return workerResult;
+            }
+        }
+        // The Server answered with something other than the restored spelling,
+        // or with nothing at all. This request's reply slot is already consumed
+        // (or was empty), so the fallback must not wait for it again.
+        return _HandleCompositionBackspace(ec, pContext, FANY_IME_NO_REQUEST_ID);
+    }
+
+    // UILess hosts and unnegotiated clients keep the ordinary reply pipe: the
+    // single-character fallback consumes the UiLess composition frame.
+    return _HandleCompositionBackspace(ec, pContext, requestId);
 }
 
 //+---------------------------------------------------------------------------
