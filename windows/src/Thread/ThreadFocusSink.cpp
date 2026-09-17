@@ -109,6 +109,9 @@ STDAPI CMetasequoiaIME::OnKillThreadFocus()
     // focus token would already reject it on interception; clearing here keeps
     // the stale action from outliving the session it describes.
     _ClearSmartPunctuationAction();
+    // The same burst owns the Backspace hold guard; it must never suppress
+    // Backspace in whatever context gains focus next (#347).
+    _backspaceHoldArmed = false;
     _focusLostToWindowsTextInputHost = false;
     (void)_CaptureWindowsTextInputHostFocusLoss();
 

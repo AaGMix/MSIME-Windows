@@ -4,6 +4,7 @@
 #include "CandidateListUIPresenter.h"
 #include "CompositionProcessorEngine.h"
 #include "KeyHandlerEditSession.h"
+#include "KeyRepeatGuard.h"
 #include "Compartment.h"
 #include "MetasequoiaIMEBaseStructure.h"
 #include <debugapi.h>
@@ -11,6 +12,7 @@
 #include <string>
 #include "Ipc.h"
 #include "FanyUtils.h"
+#include "FanyDefines.h"
 #include "FanyLog.h"
 #include "../Utils/PerfTimer.h"
 #include <chrono>
@@ -640,6 +642,54 @@ __inline UINT VKeyFromVKPacketAndWchar(UINT vk, WCHAR wch)
 
 //+---------------------------------------------------------------------------
 //
+// _IsCompositionActiveForKeyGuard
+//
+// The "real" composition liveness used by the synchronous key paths (the
+// deferred classifier tests its projection instead). word_for_creating_word
+// covers the intermediate state where the last selected segment's raw spelling
+// still belongs to the Server and the composition would otherwise look empty.
+//----------------------------------------------------------------------------
+
+bool CMetasequoiaIME::_IsCompositionActiveForKeyGuard()
+{
+    if (_IsComposing() != FALSE)
+    {
+        return true;
+    }
+    if (_pCompositionProcessorEngine != nullptr && _pCompositionProcessorEngine->GetVirtualKeyLength() > 0)
+    {
+        return true;
+    }
+    return !GlobalIme::word_for_creating_word.empty();
+}
+
+//+---------------------------------------------------------------------------
+//
+// _ApplyBackspaceHoldGuard
+//
+// State transition for every VK_BACK key-down the sinks classify. A fresh
+// press (no repeat bit) re-evaluates whether this hold began inside a
+// composition; a repeat is claimed only when the hold did and the composition
+// is already gone, so the key can never fall through to the host and delete
+// document text (#347).
+//----------------------------------------------------------------------------
+
+bool CMetasequoiaIME::_ApplyBackspaceHoldGuard(WPARAM wParam, LPARAM lParam)
+{
+    if (static_cast<UINT>(wParam) != VK_BACK)
+    {
+        return false;
+    }
+    if (!IsAutoRepeat(lParam))
+    {
+        _backspaceHoldArmed = _IsCompositionActiveForKeyGuard();
+        return false;
+    }
+    return ShouldSuppressBackspaceRepeat(_backspaceHoldArmed, _IsCompositionActiveForKeyGuard(), true);
+}
+
+//+---------------------------------------------------------------------------
+//
 // _IsKeyEaten
 //
 //----------------------------------------------------------------------------
@@ -961,6 +1011,9 @@ STDAPI CMetasequoiaIME::OnSetFocus(BOOL fForeground)
 {
     fForeground;
 
+    // A hold must never carry its guard into another input context.
+    _backspaceHoldArmed = false;
+
     return S_OK;
 }
 
@@ -1051,6 +1104,16 @@ void CMetasequoiaIME::_ApplyDeferredKeyProjection(const _KEYSTROKE_STATE &keySta
     _deferredProjectedCaret = shadow.caret;
     _deferredProjectedCandidateActive = shadow.candidateActive;
     _deferredProjectedUnicodeMode = shadow.unicodeMode;
+
+    if (keyState.Function == FUNCTION_BACKSPACE && shadow.inputLength == 0)
+    {
+        // This queued Backspace ends the composition when it replays, even
+        // though the real composition still contains it. Arm the repeat guard
+        // from the projection too, so the repeats already waiting behind it
+        // are classified as IME-owned from the projected state instead of
+        // falling back to the host while the real state lags behind.
+        _backspaceHoldArmed = true;
+    }
 }
 
 void CMetasequoiaIME::_ApplyDeferredPreservedKeyProjection(REFGUID preservedKey)
@@ -1190,7 +1253,7 @@ void CMetasequoiaIME::_ArmDeferredRecoveryForTransport(_In_opt_ ITfContext *pCon
     _ScheduleDeferredKeyDownDrain();
 }
 
-bool CMetasequoiaIME::_ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM wParam,
+bool CMetasequoiaIME::_ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM wParam, LPARAM lParam,
                                                _In_opt_ const WCHAR *translatedWch, _In_opt_ const UINT *modifiersDown,
                                                _Out_ WCHAR *classifiedWch, _Out_ UINT *classifiedCode,
                                                _Out_ _KEYSTROKE_STATE *keyState)
@@ -1268,6 +1331,25 @@ bool CMetasequoiaIME::_ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM
         keyState->Function = function;
         return true;
     };
+
+    // Backspace hold guard (#347): inside a hold that began in composition, a
+    // repeat that arrives after the projected composition is gone must still be
+    // claimed. Handing it back here would make it application text and delete
+    // document content; instead it is queued as an ordinary FUNCTION_BACKSPACE
+    // and swallowed by _DispatchKeyDown when it replays.
+    //
+    // This is ShouldSuppressBackspaceRepeat against the projected state, widened
+    // by one case: an empty projected buffer is claimed even while
+    // word_for_creating_word is still set. That is the retraction window of #35,
+    // where the queued Backspace may restore the spelling and leave the
+    // composition alive -- the regular classifier cannot claim VK_BACK once the
+    // projected length is 0, so the replay side has to re-test the real state
+    // instead of letting the host delete document text here.
+    if (static_cast<UINT>(wParam) == VK_BACK && _backspaceHoldArmed && IsAutoRepeat(lParam) &&
+        shadow.inputLength == 0 && !shadow.candidateActive)
+    {
+        return setKeyState(CATEGORY_COMPOSING, FUNCTION_BACKSPACE);
+    }
 
     _KEYSTROKE_STATE inputState = {};
     WCHAR inputWch = *classifiedWch;
@@ -1439,6 +1521,19 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
         return S_OK;
     }
 
+    // Backspace hold guard (#347). This sink sees every key-down, including the
+    // ones later handed back to the application, so the arm state is refreshed
+    // here as well as in _DispatchKeyDown. A suppressed repeat never reaches
+    // the host; the pending smart-punctuation action still observes it as one
+    // more key that invalidates the last conversion.
+    if (_ApplyBackspaceHoldGuard(wParam, lParam))
+    {
+        const WCHAR guardWch = ConvertVKey(VK_BACK);
+        *pIsEaten = TRUE;
+        _NoteKeyForSmartPunctuation(VK_BACK, guardWch, true, FUNCTION_BACKSPACE);
+        return S_OK;
+    }
+
     if (_HasDeferredKeyBarrier())
     {
         _KEYSTROKE_STATE deferredState = {};
@@ -1476,10 +1571,10 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
             }
         }
 
-        *pIsEaten =
-            _ClassifyDeferredKeyDown(pContext, wParam, nullptr, nullptr, &deferredWch, &deferredCode, &deferredState)
-                ? TRUE
-                : FALSE;
+        *pIsEaten = _ClassifyDeferredKeyDown(pContext, wParam, lParam, nullptr, nullptr, &deferredWch, &deferredCode,
+                                             &deferredState)
+                        ? TRUE
+                        : FALSE;
         // Classify always fills code/wch before failing. Track rejection even
         // when the key is handed back to the app (typical for VK_BACK).
         _NoteKeyForSmartPunctuation(deferredCode, deferredWch, *pIsEaten ? true : false, deferredState.Function);
@@ -1640,6 +1735,7 @@ void CMetasequoiaIME::_ClearDeferredKeyDowns()
     _deferredProjectedUnicodeMode = false;
     _shiftHotkeyArmed = false;
     _ctrlHotkeyArmed = false;
+    _backspaceHoldArmed = false;
 }
 
 void CMetasequoiaIME::_CompleteDeferredKeyReplay(uint64_t replayToken)
@@ -2031,6 +2127,27 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
         }
     }
 
+    // Backspace hold guard (#347), ahead of the smart-punctuation probe and the
+    // deferred branches: a repeat that follows a composition emptied by the
+    // same hold is consumed locally — no shared memory, no IPC request, no edit
+    // session. Replayed keys pass through here too, so the queued repeats are
+    // swallowed as well.
+    if (_ApplyBackspaceHoldGuard(wParam, lParam))
+    {
+        const WCHAR guardWch = ConvertVKey(VK_BACK);
+        *pIsEaten = TRUE;
+        _NoteKeyForSmartPunctuation(VK_BACK, guardWch, true, FUNCTION_BACKSPACE);
+        DebugTsfIssue47(L"backspace-repeat-suppressed", FANY_IME_NO_REQUEST_ID, VK_BACK, guardWch, CATEGORY_COMPOSING,
+                        FUNCTION_BACKSPACE, 1, _IsComposing(),
+                        _pCompositionProcessorEngine ? _pCompositionProcessorEngine->GetVirtualKeyLength() : 0, S_OK,
+                        deferredReplayToken);
+        if (deferredReplayToken != 0)
+        {
+            _CompleteDeferredKeyReplay(deferredReplayToken);
+        }
+        return KeyDownDispatchResult::Complete;
+    }
+
     _KEYSTROKE_STATE KeystrokeState = {};
     WCHAR wch = '\0';
     UINT code = 0;
@@ -2076,7 +2193,7 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
     if (canDefer && _HasDeferredKeyBarrier())
     {
         if (!_DeferredKeyQueueHasCapacity() ||
-            !_ClassifyDeferredKeyDown(pContext, wParam, translatedWch, &capturedModifiers, &wch, &code,
+            !_ClassifyDeferredKeyDown(pContext, wParam, lParam, translatedWch, &capturedModifiers, &wch, &code,
                                       &KeystrokeState))
         {
             // Mirror OnTestKeyDown: uneaten keys (esp. Backspace) must still
@@ -2172,7 +2289,7 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
         // classification. Reclassify against the FIFO's future state before
         // retaining the key.
         if (!_DeferredKeyQueueHasCapacity() ||
-            !_ClassifyDeferredKeyDown(pContext, wParam, translatedWch, &capturedModifiers, &wch, &code,
+            !_ClassifyDeferredKeyDown(pContext, wParam, lParam, translatedWch, &capturedModifiers, &wch, &code,
                                       &KeystrokeState) ||
             !_QueueDeferredKeyDown(pContext, wParam, lParam, wch, capturedModifiers, KeystrokeState))
         {

@@ -927,6 +927,13 @@ HRESULT CMetasequoiaIME::_HandleCompositionBackspace(TfEditCookie ec, _In_ ITfCo
             if (ParseCreatingWordPayload(receivedData->candidate_string, payload))
             {
                 workerResult = _ApplyCreatingWordPayload(ec, pContext, payload);
+                if (!_IsComposing())
+                {
+                    // The retraction consumed the last state: the composition
+                    // ends inside this hold, so its auto-repeats must stay with
+                    // the guard instead of deleting document text (#347).
+                    _backspaceHoldArmed = true;
+                }
                 tfSelection.range->Release();
                 return workerResult;
             }
@@ -943,6 +950,9 @@ HRESULT CMetasequoiaIME::_HandleCompositionBackspace(TfEditCookie ec, _In_ ITfCo
         }
         else
         {
+            // The composition ends inside this hold: arm the repeat guard so
+            // its auto-repeats cannot fall through to the host (#347).
+            _backspaceHoldArmed = true;
             _HandleCancel(ec, pContext);
         }
     }

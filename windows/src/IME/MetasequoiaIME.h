@@ -473,9 +473,10 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     void _ApplyDeferredPreservedKeyProjection(REFGUID preservedKey);
     bool _RefreshDeferredRecoveryPrefix(_In_ ITfContext *pContext);
     void _ArmDeferredRecoveryForTransport(_In_opt_ ITfContext *pContext);
-    bool _ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM wParam, _In_opt_ const WCHAR *translatedWch,
-                                  _In_opt_ const UINT *modifiersDown, _Out_ WCHAR *classifiedWch,
-                                  _Out_ UINT *classifiedCode, _Out_ _KEYSTROKE_STATE *keyState);
+    bool _ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM wParam, LPARAM lParam,
+                                  _In_opt_ const WCHAR *translatedWch, _In_opt_ const UINT *modifiersDown,
+                                  _Out_ WCHAR *classifiedWch, _Out_ UINT *classifiedCode,
+                                  _Out_ _KEYSTROKE_STATE *keyState);
     bool _QueueDeferredKeyDown(_In_ ITfContext *pContext, WPARAM wParam, LPARAM lParam, WCHAR translatedWch,
                                UINT modifiersDown, const _KEYSTROKE_STATE &keyState);
     bool _QueueDeferredPreservedKey(_In_ ITfContext *pContext, REFGUID preservedKey);
@@ -580,6 +581,9 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     BOOL _IsKeyEaten(_In_ ITfContext *pContext, UINT codeIn, _Out_ UINT *pCodeOut, _Out_writes_(1) WCHAR *pwch,
                      _Out_opt_ _KEYSTROKE_STATE *pKeyState, _In_opt_ const WCHAR *translatedWch = nullptr,
                      bool freshCompositionState = false);
+
+    bool _IsCompositionActiveForKeyGuard();
+    bool _ApplyBackspaceHoldGuard(WPARAM wParam, LPARAM lParam);
 
     BOOL _IsRangeCovered(TfEditCookie ec, _In_ ITfRange *pRangeTest, _In_ ITfRange *pRangeCover);
     VOID _DeleteCandidateList(BOOL fForce, _In_opt_ ITfContext *pContext);
@@ -755,6 +759,16 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     uint64_t _deferredKeyFocusGeneration;
     bool _deferredKeyDrainPosted;
     bool _serverUnavailableFallbackActive;
+
+    // True while the current Backspace hold began inside a composition. The
+    // auto-repeats that arrive after that composition is gone must be swallowed
+    // instead of falling through to the host and deleting document text (#347).
+    // Re-evaluated on every non-repeat Backspace press and cleared on focus
+    // changes, thread-focus loss and top-context changes; see KeyRepeatGuard.h
+    // for the repeat-bit rule. Deliberately not cleared in
+    // ITfThreadMgrEventSink::OnSetFocus: Chromium swaps its document manager on
+    // almost every edit, which would disarm the guard mid-hold.
+    bool _backspaceHoldArmed;
 
     // Bare Shift/Ctrl toggle arming (Weasel-style: release within timeout).
     bool _shiftHotkeyArmed;

@@ -10,3 +10,8 @@ add_executable(test_client_fallback client_fallback.cpp)
 target_include_directories(test_client_fallback PRIVATE ../src)
 target_compile_features(test_client_fallback PRIVATE cxx_std_17)
 add_test(NAME client_fallback COMMAND test_client_fallback)
+
+add_executable(test_key_repeat_guard key_repeat_guard.cpp)
+target_include_directories(test_key_repeat_guard PRIVATE ../src)
+target_compile_features(test_key_repeat_guard PRIVATE cxx_std_17)
+add_test(NAME key_repeat_guard COMMAND test_key_repeat_guard)
