@@ -1,6 +1,7 @@
 #include "common_utils.h"
 
 #include <aclapi.h>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <sddl.h>
@@ -63,6 +64,41 @@ std::wstring QueryEnvironmentW(const wchar_t *name)
         return {};
     }
     value.resize(written);
+    return value;
+}
+
+// The installer records the data directory the user picked during setup. KEY_WOW64_64KEY is
+// mandatory: a 32-bit reader would otherwise be redirected to Wow6432Node, where the 64-bit
+// setup never wrote anything.
+std::wstring QueryInstalledDataDir()
+{
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Metasequoia\\MetasequoiaIME", 0,
+                      KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS)
+    {
+        return {};
+    }
+
+    DWORD type = 0;
+    DWORD bytes = 0;
+    if (RegQueryValueExW(key, L"DataDir", nullptr, &type, nullptr, &bytes) != ERROR_SUCCESS || type != REG_SZ ||
+        bytes < sizeof(wchar_t))
+    {
+        RegCloseKey(key);
+        return {};
+    }
+
+    std::wstring value(bytes / sizeof(wchar_t), L'\0');
+    const LSTATUS status =
+        RegQueryValueExW(key, L"DataDir", nullptr, &type, reinterpret_cast<LPBYTE>(value.data()), &bytes);
+    RegCloseKey(key);
+    if (status != ERROR_SUCCESS)
+    {
+        return {};
+    }
+    // REG_SZ is not required to carry a terminator, and the stored length may or may not include
+    // one; cut at the first NUL that is actually there.
+    value.resize(std::wcslen(value.c_str()));
     return value;
 }
 
@@ -194,12 +230,42 @@ std::wstring get_local_appdata_path_w()
 
 std::wstring get_ime_data_path_w()
 {
+    // Resolution order, shared with the engine (engine/core/data_path.h) and the TSF DLL:
+    // explicit environment override, then the location chosen during setup, then the default
+    // under LocalAppData. Resolved on every call, not cached: tests relocate the profile between
+    // cases inside one process.
+    const std::wstring from_env = QueryEnvironmentW(L"METASEQUOIA_IME_DATA_DIR");
+    if (IsUsableAbsolutePath(from_env))
+    {
+        return from_env;
+    }
+
+    const std::wstring installed = QueryInstalledDataDir();
+    if (IsUsableAbsolutePath(installed))
+    {
+        return installed;
+    }
+
     return get_local_appdata_path_w() + L"\\" + kAppName;
+}
+
+std::wstring get_ime_config_dir_w()
+{
+    // Configuration normally lives in the data directory. The separate override exists for tests
+    // that must redirect config writes without moving the dictionaries with them: the engine
+    // resolves its own data directory (engine/core/data_path.h), so METASEQUOIA_IME_DATA_DIR
+    // would take the dictionaries along. Nothing in the product sets this.
+    const std::wstring from_env = QueryEnvironmentW(L"METASEQUOIA_IME_CONFIG_DIR");
+    if (IsUsableAbsolutePath(from_env))
+    {
+        return from_env;
+    }
+    return get_ime_data_path_w();
 }
 
 void ensure_ime_data_writable()
 {
-    const std::wstring dir = get_ime_data_path_w();
+    const std::wstring dir = get_ime_config_dir_w();
     if (!IsUsableAbsolutePath(dir))
     {
         return;

@@ -78,4 +78,4 @@ TSF DLL 被加载进宿主程序进程，采用静态 CRT 构建，不依赖运�
 
 在 [Issues](https://github.com/metasequoiaime/MSIME-Windows/issues) 中反馈。为便于定位，请附上：输入法版本号、Windows 版本（`Win + R` 输入 `winver`）、出问题的宿主程序、以及最小复现步骤。
 
-与按键、候选窗相关的问题，可以在 `%LOCALAPPDATA%\metasequoiaime\config.toml` 的 `[general]` 段设 `tsf_diagnostic_log = true`，复现一次后附上日志。日志中可能包含你输入的内容，贴出前请先自行检查。
+与按键、候选窗相关的问题，可以在数据目录下的 `config.toml`（默认 `%LOCALAPPDATA%\metasequoiaime\config.toml`，安装时若选了别的位置就在那里）的 `[general]` 段设 `tsf_diagnostic_log = true`，复现一次后附上日志。日志中可能包含你输入的内容，贴出前请先自行检查。

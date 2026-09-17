@@ -302,7 +302,7 @@ ASR 提供商可选豆包（流式）、OpenAI、SiliconFlow、Groq。豆包支�
 
 候选窗显示的中英互译来自内置词库，覆盖不全或译得不准时，可以自己加一层覆盖，不需要改内置词库。
 
-在 `%LOCALAPPDATA%\metasequoiaime\` 目录下新建 `custom_translations.txt`，每行一条，用 **Tab** 分隔源词和译文：
+在数据目录（默认 `%LOCALAPPDATA%\metasequoiaime\`，安装时若选了别的位置就是那里）下新建 `custom_translations.txt`，每行一条，用 **Tab** 分隔源词和译文：
 
 ```
 你好	hello

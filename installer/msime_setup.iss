@@ -74,7 +74,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "{commonpf32}\metasequoiaime\{code:GetVersionDir}"
 Name: "{commonpf64}\metasequoiaime\{code:GetVersionDir}"
 Name: "{commonpf64}\metasequoiaime\server"
-Name: "{localappdata}\metasequoiaime"; Permissions: users-modify
+; 用户数据（词库、配置、皮肤、前端资源）。默认在 LocalAppData，安装时可以改到别的盘，
+; 选择写进 HKLM 的 DataDir，Server / TSF DLL / 引擎三方都从那里读。
+Name: "{code:GetDataDir}"; Permissions: users-modify
 ; WebView2 子进程是中完整性，写不进内置 Administrator 的高完整性 LocalAppData。
 Name: "{commonappdata}\metasequoiaime"
 Name: "{commonappdata}\metasequoiaime\webview2"; Permissions: users-modify
@@ -123,21 +125,21 @@ Source: "{#MySourceRoot}\server_exe\*"; \
 #ifdef LightPackage
 ; 轻量包只覆盖前端 HTML，不带词库/辅助码/出厂配置。
 Source: "{#MySourceRoot}\app_data\html\*"; \
-    DestDir: "{localappdata}\metasequoiaime\html"; \
+    DestDir: "{code:GetDataDir}\html"; \
     Flags: ignoreversion recursesubdirs createallsubdirs uninsneveruninstall
 #else
 ; 包内故意不带 config.toml。通配复制再排除一次，防止以后又把用户配置打进包内。
-Source: "{#MySourceRoot}\app_data\*"; DestDir: "{localappdata}\metasequoiaime"; \
+Source: "{#MySourceRoot}\app_data\*"; DestDir: "{code:GetDataDir}"; \
     Excludes: "\config.toml,\config.base.toml,\config.default.toml"; \
     Flags: ignoreversion recursesubdirs createallsubdirs uninsneveruninstall
 
 ; 用户配置只在首次安装时从出厂模板生成。升级时绝不覆盖已有 config.toml；
 ; Server 启动时再以 config.default.toml 合并：保留用户改过的值，带入新版新增项。
 Source: "{#MySourceRoot}\app_data\config.default.toml"; \
-    DestDir: "{localappdata}\metasequoiaime"; DestName: "config.toml"; \
+    DestDir: "{code:GetDataDir}"; DestName: "config.toml"; \
     Flags: onlyifdoesntexist uninsneveruninstall
 Source: "{#MySourceRoot}\app_data\config.default.toml"; \
-    DestDir: "{localappdata}\metasequoiaime"; DestName: "config.default.toml"; \
+    DestDir: "{code:GetDataDir}"; DestName: "config.default.toml"; \
     Flags: ignoreversion uninsneveruninstall
 #endif
 
@@ -155,17 +157,212 @@ Root: HKLM; Subkey: "Software\Metasequoia\MetasequoiaIME"; \
     ValueType: string; ValueName: "ServerPath"; \
     ValueData: "{commonpf64}\metasequoiaime\server\{#MyAppExeName}"; \
     Flags: uninsdeletevalue
+; 用户数据目录的唯一权威来源。Server、TSF DLL 和引擎都按
+; METASEQUOIA_IME_DATA_DIR → 这个键 → %LOCALAPPDATA%\metasequoiaime 的顺序解析；
+; 32 位 TSF DLL 用 KEY_WOW64_64KEY 读，所以这里必须写在 64 位视图里
+; （ArchitecturesInstallIn64BitMode 已经保证了这一点）。
+Root: HKLM; Subkey: "Software\Metasequoia\MetasequoiaIME"; \
+    ValueType: string; ValueName: "DataDir"; ValueData: "{code:GetDataDir}"; \
+    Flags: uninsdeletevalue
 
 [Code]
+const
+  { 放在数据目录里，标记「这个目录是安装器建的」。覆盖安装和卸载只有看到它才敢
+    整目录清理——用户可能把数据目录指到一个本来就有自己文件的文件夹。}
+  DataDirMarkerName = '.metasequoiaime-data';
+
 var
   VersionDirName: String;
+  DataDirValue: String;
+  PreviousDataDir: String;
+  DataDirPage: TInputDirWizardPage;
   NetworkPage: TInputOptionWizardPage;
   CloudCandidatesIndex: Integer;
   UserConfigExistedBeforeInstall: Boolean;
 
+{ 上一次安装（或历史版本）的数据目录。没有注册表值就是历史默认位置。}
+function ResolvePreviousDataDir: String;
+var
+  Recorded: String;
+begin
+  if PreviousDataDir = '' then
+  begin
+    Recorded := '';
+    if
+      RegQueryStringValue(
+        HKLM,
+        'Software\Metasequoia\MetasequoiaIME',
+        'DataDir',
+        Recorded
+      ) and (Trim(Recorded) <> '')
+    then
+      PreviousDataDir := RemoveBackslashUnlessRoot(Trim(Recorded))
+    else
+      PreviousDataDir := ExpandConstant('{localappdata}\metasequoiaime');
+  end;
+  Result := PreviousDataDir;
+end;
+
+{ 本次安装要用的数据目录。静默安装可以用 /DATADIR="D:\..." 指定；
+  两者都没有时沿用上一次的位置。}
+function GetDataDir(Param: String): String;
+var
+  FromCommandLine: String;
+begin
+  if DataDirValue = '' then
+  begin
+    FromCommandLine := Trim(ExpandConstant('{param:DATADIR|}'));
+    if FromCommandLine <> '' then
+      DataDirValue := RemoveBackslashUnlessRoot(FromCommandLine)
+    else
+      DataDirValue := ResolvePreviousDataDir;
+  end;
+  Result := DataDirValue;
+end;
+
+function DataDirMarkerPath(const Directory: String): String;
+begin
+  Result := AddBackslash(Directory) + DataDirMarkerName;
+end;
+
+{ 只有这两种目录允许整目录清理：带标记的（我们建的），
+  以及历史默认位置（老版本装的，那时还没有标记文件）。}
+function OwnsDataDir(const Directory: String): Boolean;
+begin
+  Result :=
+    (Directory <> '') and
+    (FileExists(DataDirMarkerPath(Directory)) or
+     (CompareText(
+        Directory,
+        ExpandConstant('{localappdata}\metasequoiaime')) = 0));
+end;
+
+procedure WriteDataDirMarker(const Directory: String);
+var
+  Lines: TArrayOfString;
+begin
+  if FileExists(DataDirMarkerPath(Directory)) then
+    exit;
+  SetArrayLength(Lines, 1);
+  Lines[0] := 'Metasequoia IME user data directory.';
+  SaveStringsToFile(DataDirMarkerPath(Directory), Lines, False);
+end;
+
 function UserConfigPath: String;
 begin
-  Result := ExpandConstant('{localappdata}\metasequoiaime\config.toml');
+  Result := AddBackslash(GetDataDir('')) + 'config.toml';
+end;
+
+function IsPathInside(const Child, Parent: String): Boolean;
+begin
+  Result :=
+    (CompareText(Child, Parent) = 0) or
+    (CompareText(
+       Copy(AddBackslash(Child), 1, Length(AddBackslash(Parent))),
+       AddBackslash(Parent)) = 0);
+end;
+
+function DirectoryIsEmpty(const Directory: String): Boolean;
+var
+  FindRec: TFindRec;
+begin
+  Result := True;
+  if not DirExists(Directory) then
+    exit;
+  if FindFirst(AddBackslash(Directory) + '*', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+        begin
+          Result := False;
+          exit;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
+{ 返回空串表示这个路径可以用；否则返回要展示给用户的原因。}
+function DataDirRejectionReason(const Directory: String): String;
+var
+  Critical: array[0..6] of String;
+  Index: Integer;
+  ProbePath: String;
+begin
+  Result := '';
+
+  if (Length(Directory) < 4) or (Directory[2] <> ':') or (Directory[3] <> '\') then
+  begin
+    Result := '请填写本机磁盘上的完整路径，例如 D:\MetasequoiaIME。';
+    exit;
+  end;
+  if not DirExists(Copy(Directory, 1, 3)) then
+  begin
+    Result := '找不到驱动器 ' + Copy(Directory, 1, 2) + '，请换一个位置。';
+    exit;
+  end;
+  if CompareText(RemoveBackslashUnlessRoot(Directory), Copy(Directory, 1, 2)) = 0 then
+  begin
+    Result := '不能直接使用驱动器根目录，请指定一个子目录。';
+    exit;
+  end;
+
+  { 覆盖安装会清理数据目录里的旧资源，卸载会整个删掉它。
+    因此它既不能落在程序目录里，也不能反过来包住系统或用户的关键目录。}
+  if
+    IsPathInside(Directory, ExpandConstant('{commonpf64}\metasequoiaime')) or
+    IsPathInside(Directory, ExpandConstant('{commonpf32}\metasequoiaime'))
+  then
+  begin
+    Result := '数据目录不能放在输入法的程序目录里面。';
+    exit;
+  end;
+
+  Critical[0] := ExpandConstant('{win}');
+  Critical[1] := ExpandConstant('{commonpf64}');
+  Critical[2] := ExpandConstant('{commonpf32}');
+  Critical[3] := ExpandConstant('{localappdata}');
+  Critical[4] := ExpandConstant('{userappdata}');
+  { Inno 没有对应用户主目录的常量，用环境变量展开。取不到时下面的空值检查会跳过这一项。}
+  Critical[5] := ExpandConstant('{%USERPROFILE|}');
+  Critical[6] := ExpandConstant('{commonappdata}');
+  for Index := 0 to 6 do
+  begin
+    if (Critical[Index] <> '') and IsPathInside(Critical[Index], Directory) then
+    begin
+      Result :=
+        '这个目录包含了系统或用户的重要目录（' + Critical[Index] + '），' +
+        '卸载时会连它一起删除。请另选一个专用目录。';
+      exit;
+    end;
+  end;
+
+  if not ForceDirectories(Directory) then
+  begin
+    Result := '无法创建目录 ' + Directory + '，请检查权限或换一个位置。';
+    exit;
+  end;
+  ProbePath := AddBackslash(Directory) + 'msime-write-probe.tmp';
+  if not SaveStringToFile(ProbePath, 'probe', False) then
+  begin
+    Result := '目录 ' + Directory + ' 不可写，请换一个位置。';
+    exit;
+  end;
+  DeleteFile(ProbePath);
+end;
+
+{ CreateInputDirPage 自带的浏览按钮调用 BrowseForFolder 时不给新建文件夹按钮，用户没法在对话框里
+  当场建一个目录。接管它的 OnClick，换成带新建按钮的那种对话框。}
+procedure DataDirBrowseClick(Sender: TObject);
+var
+  Chosen: String;
+begin
+  Chosen := Trim(DataDirPage.Values[0]);
+  if BrowseForFolder('请选择输入法数据的存放位置：', Chosen, True) then
+    DataDirPage.Values[0] := Chosen;
 end;
 
 { 云候选是唯一一个装完就会联网的功能：输入过程中把当前拼写发给 Google 的 input-tools 服务。
@@ -175,10 +372,25 @@ end;
   升级时跳过：那时 config.toml 已经属于用户，安装器不该替他重新决定。}
 procedure InitializeWizard;
 begin
+  { 词库、用户配置、皮肤和前端资源都在这个目录下，整包有几百 MB，
+    所以要让用户能把它放到别的盘。程序本体仍然装在 Program Files：
+    Server 带 uiAccess=true，只有装在受信任目录里这个标志才生效。}
+  DataDirPage := CreateInputDirPage(
+    wpLicense,
+    '选择数据位置',
+    '输入法数据存放在哪里',
+    '请选择输入法数据（词库、配置、皮肤）的存放位置。',
+    True,
+    'metasequoiaime'
+  );
+  DataDirPage.Add('');
+  DataDirPage.Values[0] := ResolvePreviousDataDir;
+  DataDirPage.Buttons[0].OnClick := @DataDirBrowseClick;
+
 #ifndef LightPackage
   UserConfigExistedBeforeInstall := FileExists(UserConfigPath);
   NetworkPage := CreateInputOptionPage(
-    wpLicense,
+    DataDirPage.ID,
     '联网功能',
     '选择安装后哪些功能可以联网',
     '拼音切分、候选排序和词频学习全部在本机完成，不联网。' + #13#10 +
@@ -259,10 +471,54 @@ begin
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Chosen: String;
+  Reason: String;
 begin
   Result := True;
+
+  if (DataDirPage <> nil) and (CurPageID = DataDirPage.ID) then
+  begin
+    Chosen := RemoveBackslashUnlessRoot(Trim(DataDirPage.Values[0]));
+    Reason := DataDirRejectionReason(Chosen);
+    if Reason <> '' then
+    begin
+      MsgBox(Reason, mbError, MB_OK);
+      Result := False;
+      exit;
+    end;
+    { 用户可能指到一个本来就有东西的文件夹。装进去没问题（清理和卸载都认标记文件），
+      但得先说清楚里面的既有文件不归输入法管。}
+    if
+      (not DirectoryIsEmpty(Chosen)) and
+      (not OwnsDataDir(Chosen)) and
+      (MsgBox(
+         '目录 ' + Chosen + ' 里已经有其他文件。' + #13#10 +
+         '输入法会在其中创建自己的文件，不会动你原有的内容，卸载时也只删除自己的部分。' + #13#10 + #13#10 +
+         '确定使用这个目录吗？',
+         mbConfirmation, MB_YESNO) <> IDYES)
+    then
+    begin
+      Result := False;
+      exit;
+    end;
+    DataDirValue := Chosen;
+    exit;
+  end;
+
   if (CurPageID = wpFinished) and (not WizardSilent) then
     LaunchInstalledComponents;
+end;
+
+function UpdateReadyMemo(
+  Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo,
+  MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+begin
+  Result := MemoDirInfo + NewLine + NewLine +
+    '数据目录（词库、用户配置、皮肤）：' + NewLine + Space + GetDataDir('');
+  if CompareText(GetDataDir(''), ResolvePreviousDataDir) <> 0 then
+    Result := Result + NewLine + NewLine +
+      '现有数据将从这里迁移：' + NewLine + Space + ResolvePreviousDataDir;
 end;
 
 function GetVersionDir(Param: String): String;
@@ -316,10 +572,13 @@ end;
 
 function IsPreservedAppDataItem(const FileName: String): Boolean;
 begin
+  { 标记文件也要留下。它虽然会在 ssPostInstall 重写一遍，但安装若在中途失败，
+    没有它的数据目录就不再被认作我们建的，后续的清理和卸载都会跳过。}
   Result :=
     IsUserDatabaseFile(FileName) or
     IsUserConfigFile(FileName) or
-    IsUserSkinDirectory(FileName);
+    IsUserSkinDirectory(FileName) or
+    (CompareText(FileName, DataDirMarkerName) = 0);
 end;
 
 function InitializeUninstall(): Boolean;
@@ -330,6 +589,8 @@ begin
     'VersionDir',
     VersionDirName
   );
+  { uninsdeletevalue 会在卸载过程中删掉 DataDir，所以要先读出来缓存住。}
+  ResolvePreviousDataDir;
   Result := True;
 end;
 
@@ -408,7 +669,9 @@ begin
   // at the real path (the non-ASCII path bug) keep that leftover and cannot save.
   // Note: brace comments do not nest in Inno Setup, so a constant like the one
   // above would close a { } comment early -- keep these as line comments.
-  AppDataPath := ExpandConstant('{localappdata}\metasequoiaime');
+  // Also required when the data directory sits on another volume: files the elevated setup
+  // copied there inherit the parent's ACL, which may not let a Medium-IL Server write them.
+  AppDataPath := GetDataDir('');
   ForceDirectories(AppDataPath);
   Exec(
     ExpandConstant('{sys}\icacls.exe'),
@@ -498,8 +761,12 @@ var
   FindRec: TFindRec;
   ItemPath: String;
 begin
-  AppDataPath := ExpandConstant('{localappdata}\metasequoiaime');
+  AppDataPath := GetDataDir('');
   if not DirExists(AppDataPath) then
+    exit;
+  { 只清理我们自己建的目录。用户可能把数据目录指到一个本来就有文件的文件夹，
+    那里除了输入法自己的文件之外的一切都不归我们删。}
+  if not OwnsDataDir(AppDataPath) then
     exit;
 
   if FindFirst(AddBackslash(AppDataPath) + '*', FindRec) then
@@ -554,7 +821,7 @@ var
   Index: Integer;
   Path: String;
 begin
-  AppDataPath := ExpandConstant('{localappdata}\metasequoiaime');
+  AppDataPath := GetDataDir('');
   { 先删 sidecar；若仍被占用，可在动主库和其他应用数据前安全中止。}
   FileNames[0] := 'msime.db-wal';
   FileNames[1] := 'msime.db-shm';
@@ -588,7 +855,7 @@ var
   DataPath: String;
   ResultCode: Integer;
 begin
-  DataPath := ExpandConstant('{localappdata}\metasequoiaime');
+  DataPath := GetDataDir('');
   if not FileExists(AddBackslash(DataPath) + 'msime_user.db') then
   begin
     Log('User dictionary replay skipped: msime_user.db does not exist.');
@@ -641,18 +908,93 @@ begin
   end;
 end;
 
-function PrepareToInstall(var NeedsRestart: Boolean): String;
-#ifndef LightPackage
+{ 用户改了数据目录：把上一处的用户数据搬过来。只搬真正属于用户、装不回来的东西——
+  词库主体、前端资源和辅助码都会由本次安装重新写入新目录。
+  用 robocopy 而不是 RenameFile：跨盘移动目录时 MoveFile 会直接失败。}
+function MigrateUserDataDir(const OldDir, NewDir: String): String;
 var
+  ResultCode: Integer;
+  Moved: Boolean;
+begin
+  Result := '';
+  if (OldDir = '') or (CompareText(OldDir, NewDir) = 0) or (not DirExists(OldDir)) then
+    exit;
+
+  Log('Migrating user data from ' + OldDir + ' to ' + NewDir);
+  ForceDirectories(NewDir);
+
+  Moved := Exec(
+    ExpandConstant('{sys}\robocopy.exe'),
+    '"' + RemoveBackslashUnlessRoot(OldDir) + '" "' + RemoveBackslashUnlessRoot(NewDir) + '" ' +
+    'msime_user.db msime_user.db-wal msime_user.db-shm msime_user.db-journal ' +
+    'config.toml config.base.toml /MOVE /R:2 /W:1 /NJH /NJS /NP /NFL /NDL',
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  ) and (ResultCode < 8);
+
+  { 外部皮肤是用户自己放进来的，同样搬走。}
+  if DirExists(AddBackslash(OldDir) + 'skins') then
+    Moved :=
+      Exec(
+        ExpandConstant('{sys}\robocopy.exe'),
+        '"' + AddBackslash(OldDir) + 'skins" "' + AddBackslash(NewDir) + 'skins" ' +
+        '/E /MOVE /R:2 /W:1 /NJH /NJS /NP /NFL /NDL',
+        '',
+        SW_HIDE,
+        ewWaitUntilTerminated,
+        ResultCode
+      ) and (ResultCode < 8) and Moved;
+
+  if not Moved then
+  begin
+    Log('User data migration reported failures; leaving ' + OldDir + ' in place.');
+    { 用户词库没搬成必须让安装失败。否则新版本会对着一个空的 msime_user.db 启动，
+      ssPostInstall 的回放只会记一句 skipped，用户的自造词和词频就这么静悄悄没了——
+      这正是 ReplayUserDictionary 失败时也要中止安装的那条理由。
+      其他文件（config.toml、皮肤）搬不动只记日志：它们丢了可以重建。}
+    if FileExists(AddBackslash(OldDir) + 'msime_user.db') then
+      Result :=
+        '无法把用户词库从 ' + OldDir + ' 移动到 ' + NewDir + '。' + #13#10 +
+        '请确认输入法相关进程已全部退出、目标磁盘可写且空间足够，然后重试安装。' + #13#10 +
+        '你的用户词库仍留在 ' + OldDir + '，本次安装没有改动它。';
+    exit;
+  end;
+
+  { 旧目录里剩下的是可重建的资源（词库、html、cache 等），只在确定是我们建的时候才整个删掉。}
+  if OwnsDataDir(OldDir) then
+    TryDeleteTree(OldDir);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  DataDirProblem: String;
+#ifndef LightPackage
   FailedPath: String;
 #endif
 begin
+  { 静默安装不会走向导页，/DATADIR= 传进来的值在这里才第一次被检查。}
+  DataDirProblem := DataDirRejectionReason(GetDataDir(''));
+  if DataDirProblem <> '' then
+  begin
+    Result := '数据目录 ' + GetDataDir('') + ' 不可用：' + DataDirProblem;
+    exit;
+  end;
+
   { 先锁定本次目录名，再清理能够释放的旧版本 DLL。}
   VersionDirName := GetVersionDir('');
   StopImeProcesses;
+  { 进程停了才能动数据文件：msime_user.db 会被 Server 打开着。}
+  DataDirProblem := MigrateUserDataDir(ResolvePreviousDataDir, GetDataDir(''));
+  if DataDirProblem <> '' then
+  begin
+    Result := DataDirProblem;
+    exit;
+  end;
 #ifdef LightPackage
   { 轻量包不替换词库：只清 HTML 和 Server/TSF，保留本机 msime.db 等。}
-  TryDeleteTree(ExpandConstant('{localappdata}\metasequoiaime\html'));
+  TryDeleteTree(AddBackslash(GetDataDir('')) + 'html');
 #else
   { 不能让旧 WAL/SHM 与即将复制的新主数据库混用。}
   if not RemoveOldTargetDatabaseFiles(FailedPath) then
@@ -683,6 +1025,8 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    { 先打标记，再调整权限：之后的覆盖安装和卸载靠它判断这个目录是不是我们建的。}
+    WriteDataDirMarker(GetDataDir(''));
 #ifndef LightPackage
     ReplayUserDictionary;
     ApplyNetworkChoiceToUserConfig;
@@ -725,7 +1069,10 @@ begin
     end;
     TryDeleteTree(ExpandConstant('{commonpf32}\metasequoiaime'));
     TryDeleteTree(ExpandConstant('{commonpf64}\metasequoiaime'));
-    TryDeleteTree(ExpandConstant('{localappdata}\metasequoiaime'));
+    { 数据目录可能被用户指到了别的盘，甚至指到一个本来就有文件的文件夹：
+      只有确认是安装器建的（带标记文件，或历史默认位置）才整个删除。}
+    if OwnsDataDir(ResolvePreviousDataDir) then
+      TryDeleteTree(ResolvePreviousDataDir);
     TryDeleteTree(ExpandConstant('{commonappdata}\metasequoiaime'));
   end;
 end;

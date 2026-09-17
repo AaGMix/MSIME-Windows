@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <cwchar>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -27,6 +28,53 @@ inline std::optional<std::wstring> wide_environment_variable(const wchar_t *name
 
     const std::unique_ptr<wchar_t, decltype(&std::free)> owned_buffer(buffer, &std::free);
     return std::wstring(owned_buffer.get());
+}
+
+// The installer lets the user put user data on another volume and records that choice here.
+// KEY_WOW64_64KEY is mandatory: the 32-bit TSF DLL and any 32-bit host would otherwise be
+// redirected to Wow6432Node, where the 64-bit setup never wrote anything.
+inline std::optional<std::wstring> read_installed_data_directory()
+{
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Metasequoia\\MetasequoiaIME", 0,
+                      KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS)
+    {
+        return std::nullopt;
+    }
+
+    DWORD type = 0;
+    DWORD bytes = 0;
+    if (RegQueryValueExW(key, L"DataDir", nullptr, &type, nullptr, &bytes) != ERROR_SUCCESS || type != REG_SZ ||
+        bytes < sizeof(wchar_t))
+    {
+        RegCloseKey(key);
+        return std::nullopt;
+    }
+
+    std::wstring value(bytes / sizeof(wchar_t), L'\0');
+    const LSTATUS status =
+        RegQueryValueExW(key, L"DataDir", nullptr, &type, reinterpret_cast<LPBYTE>(value.data()), &bytes);
+    RegCloseKey(key);
+    if (status != ERROR_SUCCESS)
+    {
+        return std::nullopt;
+    }
+    // The stored length may or may not include the terminator, and REG_SZ is not required to be
+    // terminated at all; cut the string at the first NUL that is actually present.
+    value.resize(std::wcslen(value.c_str()));
+    if (value.empty())
+    {
+        return std::nullopt;
+    }
+    return value;
+}
+
+inline std::optional<std::wstring> installed_data_directory()
+{
+    // data_directory() sits on dictionary lookup paths; the install location cannot change while a
+    // process lives, so read it once.
+    static const std::optional<std::wstring> cached = read_installed_data_directory();
+    return cached;
 }
 } // namespace detail
 #endif
@@ -63,6 +111,17 @@ inline std::filesystem::path data_directory()
 #endif
 
 #ifdef _WIN32
+    // Chosen during setup. It outranks LOCALAPPDATA but not the environment override, so tests and
+    // isolated runs keep working on a machine that has the product installed.
+    if (const auto installed_path = detail::installed_data_directory())
+    {
+        const std::filesystem::path path(*installed_path);
+        if (path.is_absolute())
+        {
+            return path;
+        }
+    }
+
     if (const auto local_app_data = detail::wide_environment_variable(L"LOCALAPPDATA"))
     {
         const std::filesystem::path root(*local_app_data);
