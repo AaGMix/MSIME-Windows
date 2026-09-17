@@ -301,6 +301,8 @@ export function setupToggleButton(btnId: string, onChanged?: (active: boolean) =
   }
 
   const toggleState = () => {
+    // 置灰开关（如智能标点子开关在总开关关闭时）保留展示状态，但不接受点击或键盘激活。
+    if (toggle.getAttribute('aria-disabled') === 'true') return;
     toggle.classList.toggle('active');
     const active = toggle.classList.contains('active');
     toggle.setAttribute('aria-checked', String(active));
@@ -330,6 +332,25 @@ export function setFuzzyRuleOptionsDisabled(disabled: boolean): void {
   });
   document.getElementById('fuzzyDetails')?.classList.toggle('is-disabled', disabled);
   document.getElementById('fuzzyDisabledHint')?.classList.toggle('is-hidden', !disabled);
+}
+
+// 智能标点子开关随总开关联动：置灰 + 禁用 + 提示，勾选状态保留展示。
+// input.ts（点击总开关）与 config-sync.ts（快照回填）共用这一份 DOM 名单。
+const SMART_PUNCTUATION_OPTION_IDS = [
+  'smartPunctuationSpaceConvertToggleBtn',
+  'smartPunctuationRepeatToChineseToggleBtn',
+  'smartPunctuationDirectDigitToggleBtn',
+  'smartPunctuationDirectLetterToggleBtn'
+];
+
+export function setSmartPunctuationOptionsDisabled(disabled: boolean): void {
+  for (const id of SMART_PUNCTUATION_OPTION_IDS) {
+    const toggle = document.getElementById(id);
+    toggle?.setAttribute('aria-disabled', String(disabled));
+    if (toggle) toggle.tabIndex = disabled ? -1 : 0;
+  }
+  document.getElementById('smartPunctuationDetails')?.classList.toggle('is-disabled', disabled);
+  document.getElementById('smartPunctuationDisabledHint')?.classList.toggle('is-hidden', !disabled);
 }
 
 export function applyCandidateArrange(value: string | undefined): void {

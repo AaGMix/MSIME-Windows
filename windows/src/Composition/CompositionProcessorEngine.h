@@ -104,6 +104,10 @@ class CCompositionProcessorEngine
     // keep ',' '.' ':' as ASCII instead of mapping to Chinese punctuation.
     static BOOL IsSmartAsciiPunctuationKey(WCHAR wch);
     std::wstring ResolvePunctuation(WCHAR wch, WCHAR precedingChar);
+    // Reversible smart punctuation mapping (Chinese form -> ASCII form). Each
+    // symbol on its own maps; an auto-completed pair never arms the conversion.
+    static bool IsSmartPunctuationChinese(WCHAR ch);
+    static WCHAR GetSmartPunctuationAscii(WCHAR chinese);
     // Paired-punctuation auto-close emits both halves of a nest pair on the
     // opening key, so the closing key never reaches GetPunctuation to decrement
     // the depth. Undo the opening's increment here to keep the completed pair

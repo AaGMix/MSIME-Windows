@@ -3460,6 +3460,43 @@ HRESULT EnsureCompositionVisualTreeSettingsWnd(HWND hwnd)
     return dcompDeviceSettingsWnd->Commit();
 }
 
+// 死宿主（InitWebviewSettingsWnd 无调用者）的智能标点子键分发。单独成函数，避免在
+// OnControllerCreatedSettingsWnd 的深层 if/else 链里插入折行——那条链一旦出现折行，
+// clang-format 会连带重排整个 lambda 的缩进（行宽 120 的罚分择优）。
+static void ApplySmartPunctuationSubkey(const std::string &path, bool value)
+{
+    if (path == "input.smart_punctuation_space_convert")
+    {
+        if (SetConfiguredSmartPunctuationSpaceConvertEnabled(value))
+        {
+            BroadcastToTsfWorkerThreadViaNamedpipe(
+                Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationSpaceConvertChanged,
+                value ? L"1" : L"0");
+            PostSettingsConfig();
+        }
+    }
+    else if (path == "input.smart_punctuation_direct_digit")
+    {
+        if (SetConfiguredSmartPunctuationDirectDigitEnabled(value))
+        {
+            BroadcastToTsfWorkerThreadViaNamedpipe(
+                Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectDigitChanged,
+                value ? L"1" : L"0");
+            PostSettingsConfig();
+        }
+    }
+    else if (path == "input.smart_punctuation_direct_letter")
+    {
+        if (SetConfiguredSmartPunctuationDirectLetterEnabled(value))
+        {
+            BroadcastToTsfWorkerThreadViaNamedpipe(
+                Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectLetterChanged,
+                value ? L"1" : L"0");
+            PostSettingsConfig();
+        }
+    }
+}
+
 /**
  * @brief Handle settings window webview2 controller creation
  *
@@ -4041,6 +4078,18 @@ HRESULT OnControllerCreatedSettingsWnd(            //
                                     PostSettingsConfig();
                                 }
                             }
+                            else if (path == "input.smart_punctuation_space_convert")
+                            {
+                                ApplySmartPunctuationSubkey(path, json::value_to<bool>(data.at("value")));
+                            }
+                            else if (path == "input.smart_punctuation_direct_digit")
+                            {
+                                ApplySmartPunctuationSubkey(path, json::value_to<bool>(data.at("value")));
+                            }
+                            else if (path == "input.smart_punctuation_direct_letter")
+                            {
+                                ApplySmartPunctuationSubkey(path, json::value_to<bool>(data.at("value")));
+                            }
                             else if (path == "input.smart_punctuation_repeat_to_chinese")
                             {
                                 const bool value = json::value_to<bool>(data.at("value"));
@@ -4538,6 +4587,9 @@ void PostSettingsConfig()
             {"word_to_character", GetConfiguredWordToCharacterEnabled()},
             {"word_to_character_keys", GetConfiguredWordToCharacterKeys()},
             {"smart_punctuation", GetConfiguredSmartPunctuationEnabled()},
+            {"smart_punctuation_space_convert", GetConfiguredSmartPunctuationSpaceConvertEnabled()},
+            {"smart_punctuation_direct_digit", GetConfiguredSmartPunctuationDirectDigitEnabled()},
+            {"smart_punctuation_direct_letter", GetConfiguredSmartPunctuationDirectLetterEnabled()},
             {"smart_punctuation_repeat_to_chinese", GetConfiguredSmartPunctuationRepeatToChineseEnabled()},
             {"paired_punctuation", GetConfiguredPairedPunctuationEnabled()},
             {"punctuation_lock", GetConfiguredPunctuationLock()}}},

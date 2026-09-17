@@ -515,3 +515,103 @@ TEST_CASE(fuzzy_pinyin_first_enable_seeds_rules_once)
 
     fs::remove_all(unique_root, ec);
 }
+
+// 智能标点的五个键：默认值三形态（无文件 / 模板缺键 / 出厂模板）、逐键往返、重读保持。
+// 默认组合是「全部关闭」：整个智能标点家族需要用户显式开启，升级用户不改配置保持零回归。
+TEST_CASE(smart_punctuation_conversion_keys_default_and_round_trip)
+{
+    namespace fs = std::filesystem;
+    const fs::path unique_root =
+        fs::temp_directory_path() / (L"msime-智能标点测试-" + std::to_wstring(GetCurrentProcessId()));
+    const fs::path local_app_data = unique_root / L"profile";
+    const fs::path data_dir = local_app_data / L"metasequoiaime";
+
+    std::error_code ec;
+    fs::remove_all(unique_root, ec);
+
+    // 无文件形态：配置目录里既没有 config.toml 也没有模板，InitImeConfig 读不到文件，
+    // 全局量保持静态默认——五个键全部为关，不依赖任何模板内容。
+    {
+        ScopedEnv local_app_data_env(L"LOCALAPPDATA", local_app_data.wstring());
+        InitImeConfig();
+        REQUIRE(!GetConfiguredSmartPunctuationEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationSpaceConvertEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationDirectDigitEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationDirectLetterEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationRepeatToChineseEnabled());
+    }
+
+    SeedTemplate(data_dir);
+
+    {
+        ScopedEnv local_app_data_env(L"LOCALAPPDATA", local_app_data.wstring());
+
+        // 出厂模板形态：五个键都从模板读出，缺键时 value_or 与模板一致（全关）。
+        InitImeConfig();
+        REQUIRE(!GetConfiguredSmartPunctuationEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationSpaceConvertEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationDirectDigitEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationDirectLetterEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationRepeatToChineseEnabled());
+
+        // 模板缺键：手写一份没有任何 smart_punctuation_* 键的配置，重读回落到默认值（全关）。
+        WriteText(data_dir / L"config.toml", "[input]\nschema = \"quanpin\"\n");
+        InitImeConfig();
+        REQUIRE(!GetConfiguredSmartPunctuationEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationSpaceConvertEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationDirectDigitEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationDirectLetterEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationRepeatToChineseEnabled());
+
+        // 逐键往返：只翻目标键，另外两个直出键与相邻键不被动。
+        REQUIRE(SetConfiguredSmartPunctuationSpaceConvertEnabled(true));
+        REQUIRE(GetConfiguredSmartPunctuationSpaceConvertEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationDirectDigitEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationDirectLetterEnabled());
+        REQUIRE(SetConfiguredSmartPunctuationDirectDigitEnabled(true));
+        REQUIRE(GetConfiguredSmartPunctuationDirectDigitEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationDirectLetterEnabled());
+        REQUIRE(SetConfiguredSmartPunctuationDirectLetterEnabled(true));
+        REQUIRE(GetConfiguredSmartPunctuationDirectLetterEnabled());
+        REQUIRE(GetConfiguredSmartPunctuationSpaceConvertEnabled());
+
+        // 重读保持：三个键都真实落盘且跨 InitImeConfig 存活。
+        InitImeConfig();
+        REQUIRE(GetConfiguredSmartPunctuationSpaceConvertEnabled());
+        REQUIRE(GetConfiguredSmartPunctuationDirectDigitEnabled());
+        REQUIRE(GetConfiguredSmartPunctuationDirectLetterEnabled());
+        {
+            const std::string text = ReadText(data_dir / L"config.toml");
+            REQUIRE(text.find("smart_punctuation_space_convert = true") != std::string::npos);
+            REQUIRE(text.find("smart_punctuation_direct_digit = true") != std::string::npos);
+            REQUIRE(text.find("smart_punctuation_direct_letter = true") != std::string::npos);
+        }
+
+        // 显式切换回默认：逐键可逆，总开关与撤销键不动（默认全关）。
+        REQUIRE(SetConfiguredSmartPunctuationSpaceConvertEnabled(false));
+        REQUIRE(SetConfiguredSmartPunctuationDirectDigitEnabled(false));
+        REQUIRE(SetConfiguredSmartPunctuationDirectLetterEnabled(false));
+        REQUIRE(!GetConfiguredSmartPunctuationSpaceConvertEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationDirectDigitEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationDirectLetterEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationEnabled());
+        REQUIRE(!GetConfiguredSmartPunctuationRepeatToChineseEnabled());
+    }
+
+    fs::remove_all(unique_root, ec);
+}
+
+// 出厂模板（安装包真正分发的那份）必须携带五个键：模板缺键会在升级合并时被静默丢弃，
+// 用户改过的值下次升级消失且无任何报错。默认全部关闭，整个智能标点家族需要显式开启。
+TEST_CASE(shipped_template_carries_smart_punctuation_conversion_keys)
+{
+    std::ifstream input(MSIME_DEFAULT_CONFIG_PATH, std::ios::binary);
+    REQUIRE(static_cast<bool>(input));
+    const std::string installed((std::istreambuf_iterator<char>(input)), {});
+    const auto parsed = toml::parse(installed);
+    REQUIRE(!parsed["input"]["smart_punctuation"].value_or(true));
+    REQUIRE(!parsed["input"]["smart_punctuation_space_convert"].value_or(true));
+    REQUIRE(!parsed["input"]["smart_punctuation_direct_digit"].value_or(true));
+    REQUIRE(!parsed["input"]["smart_punctuation_direct_letter"].value_or(true));
+    REQUIRE(!parsed["input"]["smart_punctuation_repeat_to_chinese"].value_or(true));
+}

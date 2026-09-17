@@ -138,8 +138,11 @@ bool g_paging_mouse_wheel_enabled = false;
 bool g_candidate_arrow_navigation_enabled = true;
 bool g_word_to_character_enabled = false;
 std::string g_word_to_character_keys = "brackets";
-bool g_smart_punctuation_enabled = true;
-bool g_smart_punctuation_repeat_to_chinese_enabled = true;
+bool g_smart_punctuation_enabled = false;
+bool g_smart_punctuation_space_convert_enabled = false;
+bool g_smart_punctuation_direct_digit_enabled = false;
+bool g_smart_punctuation_direct_letter_enabled = false;
+bool g_smart_punctuation_repeat_to_chinese_enabled = false;
 bool g_paired_punctuation_enabled = true;
 std::string g_punctuation_lock = "follow";
 std::string g_candidate_window_layout = "vertical";
@@ -1080,9 +1083,12 @@ bool LoadImeConfig()
         {
             g_word_to_character_enabled = false;
         }
-        g_smart_punctuation_enabled = tbl["input"]["smart_punctuation"].value_or(true);
+        g_smart_punctuation_enabled = tbl["input"]["smart_punctuation"].value_or(false);
+        g_smart_punctuation_space_convert_enabled = tbl["input"]["smart_punctuation_space_convert"].value_or(false);
+        g_smart_punctuation_direct_digit_enabled = tbl["input"]["smart_punctuation_direct_digit"].value_or(false);
+        g_smart_punctuation_direct_letter_enabled = tbl["input"]["smart_punctuation_direct_letter"].value_or(false);
         g_smart_punctuation_repeat_to_chinese_enabled =
-            tbl["input"]["smart_punctuation_repeat_to_chinese"].value_or(true);
+            tbl["input"]["smart_punctuation_repeat_to_chinese"].value_or(false);
         g_paired_punctuation_enabled = tbl["input"]["paired_punctuation"].value_or(true);
         {
             const std::string punctuation_lock = tbl["input"]["punctuation_lock"].value_or(std::string("follow"));
@@ -2823,6 +2829,51 @@ bool SetConfiguredSmartPunctuationRepeatToChineseEnabled(bool enabled)
         return false;
     }
     g_smart_punctuation_repeat_to_chinese_enabled = enabled;
+    return true;
+}
+
+bool GetConfiguredSmartPunctuationSpaceConvertEnabled()
+{
+    return g_smart_punctuation_space_convert_enabled;
+}
+
+bool SetConfiguredSmartPunctuationSpaceConvertEnabled(bool enabled)
+{
+    if (!WriteConfiguredValue("input", "smart_punctuation_space_convert", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_smart_punctuation_space_convert_enabled = enabled;
+    return true;
+}
+
+bool GetConfiguredSmartPunctuationDirectDigitEnabled()
+{
+    return g_smart_punctuation_direct_digit_enabled;
+}
+
+bool SetConfiguredSmartPunctuationDirectDigitEnabled(bool enabled)
+{
+    if (!WriteConfiguredValue("input", "smart_punctuation_direct_digit", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_smart_punctuation_direct_digit_enabled = enabled;
+    return true;
+}
+
+bool GetConfiguredSmartPunctuationDirectLetterEnabled()
+{
+    return g_smart_punctuation_direct_letter_enabled;
+}
+
+bool SetConfiguredSmartPunctuationDirectLetterEnabled(bool enabled)
+{
+    if (!WriteConfiguredValue("input", "smart_punctuation_direct_letter", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_smart_punctuation_direct_letter_enabled = enabled;
     return true;
 }
 

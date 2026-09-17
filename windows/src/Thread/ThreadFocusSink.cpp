@@ -105,6 +105,10 @@ STDAPI CMetasequoiaIME::OnKillThreadFocus()
     {
         return S_OK;
     }
+    // Losing thread focus ends the input burst the action was armed in. The
+    // focus token would already reject it on interception; clearing here keeps
+    // the stale action from outliving the session it describes.
+    _ClearSmartPunctuationAction();
     _focusLostToWindowsTextInputHost = false;
     (void)_CaptureWindowsTextInputHostFocusLoss();
 

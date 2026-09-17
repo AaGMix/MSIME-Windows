@@ -68,7 +68,14 @@ enum KEYSTROKE_FUNCTION
     FUNCTION_UPDATE_VOICE_COMPOSITION,
     FUNCTION_COMMIT_VOICE_COMPOSITION,
     FUNCTION_CANCEL_VOICE_COMPOSITION,
-    FUNCTION_TOGGLE_CHARACTER_SET
+    FUNCTION_TOGGLE_CHARACTER_SET,
+
+    // Reversible smart punctuation: both are local document rewrites handled
+    // by an edit session, never sent over IPC. CONVERT is the space that turns
+    // the just-committed Chinese punctuation into ASCII; REVERT is the same
+    // punctuation key pressed right after that conversion.
+    FUNCTION_SMART_PUNCTUATION_CONVERT,
+    FUNCTION_SMART_PUNCTUATION_REVERT
 };
 
 //---------------------------------------------------------------------

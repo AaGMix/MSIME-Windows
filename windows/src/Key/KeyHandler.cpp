@@ -21,6 +21,28 @@ thread_local std::wstring g_toggleImeFallbackBuffer;
 // close a tracked pair. Quotes are keyed symmetrically: '"' resolves to either
 // half depending on the legacy left/right toggle, so the resolved character
 // says nothing about intent and the key itself has to answer.
+bool IsPairedPunctuationClosing(WCHAR ch)
+{
+    // Only a Chinese closing half can close a tracked pair. ASCII halves
+    // (direct-mode ',' '.' ':' or the numpad dot) and unrelated Chinese marks
+    // ('。' ':' ';' ...) must return 0: _TryStepOverPairedPunctuation clears
+    // the whole stack on mismatch, so feeding it anything but a real closing
+    // half silently degrades the step-over convenience for the pair the user
+    // is still inside.
+    switch (ch)
+    {
+    case L'”':
+    case L'’':
+    case L'】':
+    case L'》':
+    case L'〉':
+    case L'）':
+        return true;
+    default:
+        return false;
+    }
+}
+
 WCHAR GetPairedPunctuationStepOverCandidate(WCHAR wch, const std::wstring &resolved)
 {
     if (resolved.size() != 1)
@@ -35,7 +57,7 @@ WCHAR GetPairedPunctuationStepOverCandidate(WCHAR wch, const std::wstring &resol
     {
         return L'’';
     }
-    return resolved[0];
+    return IsPairedPunctuationClosing(resolved[0]) ? resolved[0] : 0;
 }
 
 DWORD_PTR MapRawCaretToPreedit(const CStringRange &raw, DWORD_PTR rawCaret, const std::wstring &preedit,
@@ -1024,11 +1046,6 @@ HRESULT CMetasequoiaIME::_HandleCompositionPunctuation(TfEditCookie ec, _In_ ITf
 {
     HRESULT hr = S_OK;
 
-    if (_QueueRepeatedSmartPunctuationReplacement(wch))
-    {
-        return S_OK;
-    }
-
     //
     // Get punctuation char from composition processor engine
     //
@@ -1145,6 +1162,21 @@ HRESULT CMetasequoiaIME::_HandleCompositionPunctuation(TfEditCookie ec, _In_ ITf
         punctuationStr.push_back(pairedClosing);
     }
 
+    // Fingerprint for the reversible space conversion: the character that will
+    // sit immediately before the committed punctuation. A commit text that
+    // already carries a prefix (candidate or composition) answers directly;
+    // otherwise read the document before it changes. ASCII commits are
+    // skipped because _ResolveSmartPunctuation already recorded their state.
+    // An auto-completed pair answers nothing: it never arms a conversion.
+    WCHAR beforeChar = 0;
+    if (pairedClosing == 0 && !punctuationStr.empty() &&
+        CCompositionProcessorEngine::IsSmartPunctuationChinese(punctuationStr.back()))
+    {
+        const size_t punctuationIndex = punctuationStr.size() - 1;
+        beforeChar =
+            punctuationIndex >= 1 ? punctuationStr[punctuationIndex - 1] : _GetPrecedingDocumentChar(ec, pContext);
+    }
+
     CStringRange punctuationString;
     punctuationString.Set(punctuationStr.c_str(), punctuationStr.length());
 
@@ -1189,6 +1221,12 @@ HRESULT CMetasequoiaIME::_HandleCompositionPunctuation(TfEditCookie ec, _In_ ITf
         _PushPairedPunctuation(pairedOpening, pairedClosing);
         _QueuePairedPunctuationCaretMove(-1);
     }
+
+    // Remember what reached the document: the next space may convert the
+    // Chinese punctuation, and the key that produced a direct ASCII output may
+    // revert it. An auto-completed pair does not arm it -- only a symbol that
+    // reached the document on its own converts.
+    _NoteCommittedChinesePunctuation(punctuationStr, pairedClosing != 0, beforeChar);
 
     return S_OK;
 }

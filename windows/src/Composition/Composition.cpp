@@ -85,6 +85,36 @@ HRESULT SafeRangeShiftEnd(_In_ ITfRange *range, TfEditCookie ec, LONG count, _Ou
     }
 }
 
+// Places the caret after a smart-punctuation replacement. SetText leaves the
+// range covering the replaced text, so walking one character from its start
+// lands after the single ASCII mark, or between the two halves of a converted
+// pair: both forms want the caret after one character of replacement text.
+void PlaceSmartPunctuationCaret(TfEditCookie ec, _In_ ITfContext *pContext, _In_ ITfRange *range)
+{
+    if (range == nullptr || pContext == nullptr)
+    {
+        return;
+    }
+    if (FAILED(range->Collapse(ec, TF_ANCHOR_START)))
+    {
+        return;
+    }
+    LONG shifted = 0;
+    if (FAILED(SafeRangeShiftEnd(range, ec, 1, &shifted)) || shifted != 1)
+    {
+        return;
+    }
+    if (FAILED(range->Collapse(ec, TF_ANCHOR_END)))
+    {
+        return;
+    }
+    TF_SELECTION selection = {};
+    selection.range = range;
+    selection.style.ase = TF_AE_NONE;
+    selection.style.fInterimChar = FALSE;
+    pContext->SetSelection(ec, 1, &selection);
+}
+
 bool AreCaretModifiersPhysicallyDown()
 {
     // VK_LWIN/VK_RWIN matter as much as Shift here: Win+Left is the window snap
@@ -166,6 +196,69 @@ WCHAR CMetasequoiaIME::_GetPrecedingDocumentChar(TfEditCookie ec, _In_ ITfContex
     return preceding;
 }
 
+int CMetasequoiaIME::_GetPrecedingDocumentChars(TfEditCookie ec, _In_ ITfContext *pContext,
+                                                _Out_writes_(count) WCHAR *buffer, int count)
+{
+    if (pContext == nullptr || buffer == nullptr || count <= 0)
+    {
+        return 0;
+    }
+
+    ITfRange *pAnchor = nullptr;
+    bool releaseAnchor = false;
+
+    if (_IsComposing() && _pComposition != nullptr)
+    {
+        if (FAILED(_pComposition->GetRange(&pAnchor)) || pAnchor == nullptr)
+        {
+            return 0;
+        }
+        releaseAnchor = true;
+    }
+    else
+    {
+        TF_SELECTION tfSelection = {};
+        ULONG fetched = 0;
+        const HRESULT hr = pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &tfSelection, &fetched);
+        if (FAILED(hr) || fetched != 1 || tfSelection.range == nullptr)
+        {
+            return 0;
+        }
+        pAnchor = tfSelection.range;
+        releaseAnchor = true;
+    }
+
+    ITfRange *pClone = nullptr;
+    int readCount = 0;
+    HRESULT hr = pAnchor->Clone(&pClone);
+    if (SUCCEEDED(hr) && pClone != nullptr)
+    {
+        hr = pClone->Collapse(ec, TF_ANCHOR_START);
+        if (SUCCEEDED(hr))
+        {
+            LONG shifted = 0;
+            hr = SafeRangeShiftStart(pClone, ec, -count, &shifted);
+            if (SUCCEEDED(hr) && shifted < 0)
+            {
+                // Terminals and other shallow text stores accept the shift but
+                // expose no text, which reads back as 0 characters.
+                ULONG fetched = 0;
+                if (SUCCEEDED(SafeRangeGetText(pClone, ec, 0, buffer, static_cast<ULONG>(count), &fetched)))
+                {
+                    readCount = static_cast<int>(fetched);
+                }
+            }
+        }
+        pClone->Release();
+    }
+
+    if (releaseAnchor && pAnchor != nullptr)
+    {
+        pAnchor->Release();
+    }
+    return readCount;
+}
+
 WCHAR CMetasequoiaIME::_GetFollowingDocumentChar(TfEditCookie ec, _In_ ITfContext *pContext)
 {
     if (pContext == nullptr)
@@ -218,6 +311,34 @@ WCHAR CMetasequoiaIME::_GetPrecedingCharForSmartPunctuation(TfEditCookie ec, _In
         return _smartPunctuationShadowChar;
     }
     return _GetPrecedingDocumentChar(ec, pContext);
+}
+
+bool CMetasequoiaIME::_SmartPunctuationFingerprintMatches(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR beforeChar)
+{
+    if (beforeChar == 0)
+    {
+        // Nothing was recorded at commit time, so there is no fingerprint to
+        // check against.
+        return true;
+    }
+
+    // Read the two characters left of the caret: the punctuation itself and,
+    // before it, the character this check compares. A shallow text store
+    // accepts the shift but reads back nothing, and there the pending state is
+    // the only evidence available.
+    WCHAR buffer[2] = {};
+    const int readCount = _GetPrecedingDocumentChars(ec, pContext, buffer, 2);
+    if (readCount == 0)
+    {
+        return true;
+    }
+    if (readCount == 1)
+    {
+        // Only the punctuation itself exists at the document start; anything
+        // else means the document moved under the action.
+        return false;
+    }
+    return buffer[0] == beforeChar;
 }
 
 WCHAR CMetasequoiaIME::_GetPairedPunctuationClosingFor(WCHAR opening)
@@ -296,9 +417,9 @@ bool CMetasequoiaIME::_TryStepOverPairedPunctuation(TfEditCookie ec, _In_ ITfCon
     }
 
     _pairedPunctuationStack.pop_back();
-    // Nothing is committed on this path, so the smart-punctuation state that
-    // resolving the key recorded describes a commit that never happened.
-    _ResetSmartPunctuationHistory();
+    // Nothing is committed on this path, so any pending smart-punctuation
+    // action now describes a commit the user has stepped past.
+    _ClearSmartPunctuationAction();
     _InvalidateSmartPunctuationShadow();
     _QueuePairedPunctuationCaretMove(1);
     return true;
@@ -463,63 +584,90 @@ void CMetasequoiaIME::_RunPairedPunctuationCaretMove()
     _InvalidateSmartPunctuationShadow();
 }
 
-void CMetasequoiaIME::_ResetSmartPunctuationHistory()
+void CMetasequoiaIME::_ClearSmartPunctuationAction()
 {
-    _smartPunctuationKey = 0;
-    _smartPunctuationPrecedingChar = 0;
-    _smartPunctuationCommittedAscii = false;
-    _smartPunctuationAsciiRejected = false;
-    _smartPunctuationCommitTick = 0;
-    _smartPunctuationFocusToken = 0;
-    _smartPunctuationForegroundWindow = nullptr;
+    _smartPunctuationAction = {};
 }
 
-bool CMetasequoiaIME::_QueueRepeatedSmartPunctuationReplacement(WCHAR wch)
+bool CMetasequoiaIME::_CanInterceptSmartPunctuationConvert()
 {
-    // Backspace rejection means the ASCII form is already gone. Treating the
-    // next press as "replace the still-visible ASCII punct" would SendInput a
-    // Backspace into the preceding character instead.
-    if (!_smartPunctuationCommittedAscii || _smartPunctuationAsciiRejected || _smartPunctuationKey != wch ||
-        _smartPunctuationCommitTick == 0 || _msgWndHandle == nullptr || _pCompositionProcessorEngine == nullptr ||
-        _IsComposing() || _candidateMode != CANDIDATE_NONE ||
+    const SmartPunctuationAction &state = _smartPunctuationAction;
+    if (state.kind != SmartPunctuationAction::Kind::ChineseCommitted ||
+        !Global::SmartPunctuationEnabled.load(std::memory_order_relaxed))
+    {
+        return false;
+    }
+    if (!Global::SmartPunctuationSpaceConvertEnabled.load(std::memory_order_relaxed))
+    {
+        return false;
+    }
+    // No time window: the state only survives until the next key, focus change
+    // or foreground change, which is already narrower than an input-stream
+    // burst, and a clock would cut off a slow but deliberate space.
+    return _IsFocusSessionCurrent(state.focusToken) && GetForegroundWindow() == state.foregroundWindow;
+}
+
+bool CMetasequoiaIME::_CanInterceptSmartPunctuationRevert(WCHAR wch)
+{
+    const SmartPunctuationAction &state = _smartPunctuationAction;
+    if (state.kind != SmartPunctuationAction::Kind::AsciiConverted || wch == 0 || wch != state.triggerKey ||
         !Global::SmartPunctuationEnabled.load(std::memory_order_relaxed) ||
         !Global::SmartPunctuationRepeatToChineseEnabled.load(std::memory_order_relaxed))
     {
         return false;
     }
-
-    const ULONGLONG now = GetTickCount64();
-    if (now - _smartPunctuationCommitTick > SMART_PUNCTUATION_REPEAT_INTERVAL_MS ||
-        !_IsFocusSessionCurrent(_smartPunctuationFocusToken) ||
-        GetForegroundWindow() != _smartPunctuationForegroundWindow)
+    if (state.tick == 0 || GetTickCount64() - state.tick > SMART_PUNCTUATION_REPEAT_INTERVAL_MS)
     {
         return false;
     }
+    return _IsFocusSessionCurrent(state.focusToken) && GetForegroundWindow() == state.foregroundWindow;
+}
 
-    const WCHAR *chinese = _pCompositionProcessorEngine->GetPunctuation(wch);
-    if (chinese == nullptr || chinese[0] == L'\0' || chinese[1] != L'\0')
+void CMetasequoiaIME::_WriteDirectSmartPunctuationState(WCHAR triggerKey, WCHAR chinese, WCHAR ascii, WCHAR beforeChar)
+{
+    _smartPunctuationAction = {};
+    _smartPunctuationAction.kind = SmartPunctuationAction::Kind::AsciiConverted;
+    _smartPunctuationAction.triggerKey = triggerKey;
+    _smartPunctuationAction.chineseLeft = chinese;
+    _smartPunctuationAction.asciiLeft = ascii;
+    _smartPunctuationAction.beforeChar = beforeChar;
+    _smartPunctuationAction.tick = GetTickCount64();
+    _smartPunctuationAction.focusToken = _CaptureFocusSessionToken();
+    _smartPunctuationAction.foregroundWindow = GetForegroundWindow();
+}
+
+void CMetasequoiaIME::_NoteCommittedChinesePunctuation(const std::wstring &committedText, bool autoClosedPair,
+                                                       WCHAR beforeChar)
+{
+    if (committedText.empty() || !Global::SmartPunctuationEnabled.load(std::memory_order_relaxed))
     {
-        return false;
+        // The feature being off at commit time must not arm a conversion that
+        // a later re-enable would consume.
+        return;
+    }
+    if (autoClosedPair)
+    {
+        // An auto-completed pair is out of scope on purpose. The two halves sit
+        // on either side of the caret, so rewriting just the left one would
+        // leave the right one orphaned (〔《>〕). The space inserts normally.
+        return;
+    }
+    const WCHAR tail = committedText.back();
+    if (!CCompositionProcessorEngine::IsSmartPunctuationChinese(tail))
+    {
+        // ASCII commits (direct output, numpad '.') keep whatever
+        // _ResolveSmartPunctuation recorded so the same key can revert them.
+        return;
     }
 
-    _pendingSmartPunctuationReplacement = chinese[0];
-    _pendingSmartPunctuationFocusToken = _smartPunctuationFocusToken;
-    _pendingSmartPunctuationForegroundWindow = _smartPunctuationForegroundWindow;
-    _pendingSmartPunctuationDeadline = _smartPunctuationCommitTick + SMART_PUNCTUATION_REPEAT_INTERVAL_MS;
-
-    const uint64_t focusToken = _pendingSmartPunctuationFocusToken;
-    if (!PostMessage(_msgWndHandle, WM_ReplaceRepeatedSmartPunctuation, static_cast<WPARAM>(focusToken & 0xFFFFFFFFULL),
-                     static_cast<LPARAM>((focusToken >> 32) & 0xFFFFFFFFULL)))
-    {
-        _pendingSmartPunctuationReplacement = 0;
-        _pendingSmartPunctuationFocusToken = 0;
-        _pendingSmartPunctuationForegroundWindow = nullptr;
-        _pendingSmartPunctuationDeadline = 0;
-        return false;
-    }
-
-    _ResetSmartPunctuationHistory();
-    return true;
+    _smartPunctuationAction = {};
+    _smartPunctuationAction.kind = SmartPunctuationAction::Kind::ChineseCommitted;
+    _smartPunctuationAction.chineseLeft = tail;
+    _smartPunctuationAction.triggerKey = CCompositionProcessorEngine::GetSmartPunctuationAscii(tail);
+    _smartPunctuationAction.beforeChar = beforeChar;
+    _smartPunctuationAction.tick = GetTickCount64();
+    _smartPunctuationAction.focusToken = _CaptureFocusSessionToken();
+    _smartPunctuationAction.foregroundWindow = GetForegroundWindow();
 }
 
 void CMetasequoiaIME::_InvalidateSmartPunctuationShadow()
@@ -583,77 +731,26 @@ void CMetasequoiaIME::_UpdateSmartPunctuationShadow(UINT code, WCHAR wch, bool i
     _smartPunctuationShadowValid = true;
 }
 
-void CMetasequoiaIME::_NoteKeyForSmartPunctuation(UINT code, WCHAR wch, bool isEaten)
+void CMetasequoiaIME::_NoteKeyForSmartPunctuation(UINT code, WCHAR wch, bool isEaten, KEYSTROKE_FUNCTION function)
 {
-    // The replacement message normally runs before another input event. If it
-    // does not, never let a later key leave the queued Backspace targeting an
-    // unrelated character.
-    if (_pendingSmartPunctuationReplacement != 0)
-    {
-        _pendingSmartPunctuationReplacement = 0;
-        _pendingSmartPunctuationFocusToken = 0;
-        _pendingSmartPunctuationForegroundWindow = nullptr;
-        _pendingSmartPunctuationDeadline = 0;
-    }
-
     _UpdateSmartPunctuationShadow(code, wch, isEaten);
     // Self-generated caret moves never reach here: the sinks bail out on the
     // extra-info marker before noting the key, so stepping over a pair does not
     // clear the very stack it is walking.
     _NoteKeyForPairedPunctuation(code);
 
-    if (_smartPunctuationKey == 0)
+    // The two intercept keys must survive until the edit session reads them:
+    // the space that converts the last Chinese punctuation, and the punctuation
+    // key that reverts a conversion. Only the classification result protects
+    // the state; the claim predicates are broader than the modes that allow a
+    // claim, so a passthrough key (English punctuation, full-width, composing,
+    // candidate) must still clear a pending action rather than leave it armed
+    // for the next space.
+    if (function == FUNCTION_SMART_PUNCTUATION_CONVERT || function == FUNCTION_SMART_PUNCTUATION_REVERT)
     {
         return;
     }
-
-    switch (code)
-    {
-    case VK_SHIFT:
-    case VK_LSHIFT:
-    case VK_RSHIFT:
-    case VK_CONTROL:
-    case VK_LCONTROL:
-    case VK_RCONTROL:
-    case VK_MENU:
-    case VK_LMENU:
-    case VK_RMENU:
-    case VK_CAPITAL:
-        // ':' needs Shift; modifier presses are not edits.
-        return;
-    case VK_BACK:
-        // Only deleting the ASCII form says that form was unwanted. Deleting
-        // the Chinese punctuation that replaced it must not undo the rejection.
-        if (_smartPunctuationCommittedAscii)
-        {
-            _smartPunctuationAsciiRejected = true;
-            // ASCII punct is gone; disarm repeat-to-Chinese replacement so a
-            // quick retype takes the reject path instead of SendInput(VK_BACK).
-            _smartPunctuationCommitTick = 0;
-            _smartPunctuationFocusToken = 0;
-            _smartPunctuationForegroundWindow = nullptr;
-            // UpdateShadow already cleared the punctuation shadow. Restore the
-            // preceding character recorded at commit so a retype can still match
-            // the reject spot when the host text store cannot re-read it.
-            if (_smartPunctuationPrecedingChar != 0)
-            {
-                _smartPunctuationShadowChar = _smartPunctuationPrecedingChar;
-                _smartPunctuationShadowValid = true;
-            }
-        }
-        return;
-    case VK_DECIMAL:
-        // Numpad '.' bypasses smart punctuation entirely.
-        _ResetSmartPunctuationHistory();
-        return;
-    default:
-        break;
-    }
-
-    if (wch != _smartPunctuationKey)
-    {
-        _ResetSmartPunctuationHistory();
-    }
+    _ClearSmartPunctuationAction();
 }
 
 std::wstring CMetasequoiaIME::_ResolveSmartPunctuation(WCHAR wch, WCHAR precedingChar)
@@ -663,44 +760,36 @@ std::wstring CMetasequoiaIME::_ResolveSmartPunctuation(WCHAR wch, WCHAR precedin
         return {};
     }
 
+    // A fresh punctuation resolution replaces whatever conversion is pending:
+    // the previous commit is no longer the most recent input.
+    _ClearSmartPunctuationAction();
+
     const bool smartEnabled = Global::SmartPunctuationEnabled.load(std::memory_order_relaxed);
     std::wstring resolved = _pCompositionProcessorEngine->ResolvePunctuation(wch, precedingChar);
     if (!CCompositionProcessorEngine::IsSmartAsciiPunctuationKey(wch) || !smartEnabled)
     {
-        _ResetSmartPunctuationHistory();
+        if (!resolved.empty())
+        {
+            _smartPunctuationShadowChar = resolved.back();
+            _smartPunctuationShadowValid = true;
+        }
         return resolved;
     }
 
-    bool committedAscii = resolved.size() == 1 && resolved[0] == wch;
-    // The rejection is sticky for as long as this spot survives, so repeated
-    // delete/retype cycles keep producing Chinese punctuation.
-    const bool asciiRejected = _smartPunctuationAsciiRejected && _smartPunctuationKey == wch &&
-                               _smartPunctuationPrecedingChar == precedingChar;
-    if (asciiRejected && committedAscii)
-    {
-        const WCHAR *chinese = _pCompositionProcessorEngine->GetPunctuation(wch);
-        if (chinese != nullptr && *chinese != L'\0')
-        {
-            resolved.assign(chinese);
-            committedAscii = false;
-        }
-    }
-
-    _smartPunctuationKey = wch;
-    _smartPunctuationPrecedingChar = precedingChar;
-    _smartPunctuationCommittedAscii = committedAscii;
-    _smartPunctuationAsciiRejected = asciiRejected;
+    // ResolvePunctuation returns the ASCII key only when the sub-switch for
+    // the preceding character class is on; record it so the same key can
+    // revert to Chinese within the window.
+    const bool committedAscii = resolved.size() == 1 && resolved[0] == wch &&
+                                (Global::SmartPunctuationDirectDigitEnabled.load(std::memory_order_relaxed) ||
+                                 Global::SmartPunctuationDirectLetterEnabled.load(std::memory_order_relaxed));
     if (committedAscii)
     {
-        _smartPunctuationCommitTick = GetTickCount64();
-        _smartPunctuationFocusToken = _CaptureFocusSessionToken();
-        _smartPunctuationForegroundWindow = GetForegroundWindow();
-    }
-    else
-    {
-        _smartPunctuationCommitTick = 0;
-        _smartPunctuationFocusToken = 0;
-        _smartPunctuationForegroundWindow = nullptr;
+        const WCHAR *chinese = _pCompositionProcessorEngine->GetPunctuation(wch);
+        const WCHAR chineseChar = (chinese != nullptr && chinese[0] != L'\0' && chinese[1] == L'\0') ? chinese[0] : 0;
+        if (chineseChar != 0)
+        {
+            _WriteDirectSmartPunctuationState(wch, chineseChar, wch, precedingChar);
+        }
     }
     if (!resolved.empty())
     {
@@ -708,6 +797,233 @@ std::wstring CMetasequoiaIME::_ResolveSmartPunctuation(WCHAR wch, WCHAR precedin
         _smartPunctuationShadowValid = true;
     }
     return resolved;
+}
+
+HRESULT CMetasequoiaIME::_ExecuteSmartPunctuationAction(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR wch,
+                                                        KEYSTROKE_FUNCTION function)
+{
+    const SmartPunctuationAction state = _smartPunctuationAction;
+    // The action consumes the pending state either way: success keeps the
+    // converted form armed for the revert, failure falls back to committing
+    // the key normally. An early return must not leave the key armed.
+    _ClearSmartPunctuationAction();
+
+    const bool smartEnabled = Global::SmartPunctuationEnabled.load(std::memory_order_relaxed);
+    if (function == FUNCTION_SMART_PUNCTUATION_CONVERT)
+    {
+        CStringRange spaceString;
+        spaceString.Set(L" ", 1);
+        const auto insertPlainSpace = [&]() -> HRESULT { return _AddCharAndFinalize(ec, pContext, &spaceString); };
+
+        if (!smartEnabled || state.kind != SmartPunctuationAction::Kind::ChineseCommitted || state.chineseLeft == 0)
+        {
+            return insertPlainSpace();
+        }
+
+        WCHAR left = _GetPrecedingDocumentChar(ec, pContext);
+        if (left == 0)
+        {
+            // Terminals and proxy stores expose no document text; the
+            // commit-time state is the only evidence of what is on screen.
+            left = state.chineseLeft;
+        }
+        if (left != state.chineseLeft)
+        {
+            // The caret moved (mouse click) or something else edited the
+            // document. Rewriting a punctuation that was not just committed
+            // would turn historical text into ASCII.
+            return insertPlainSpace();
+        }
+        if (!_SmartPunctuationFingerprintMatches(ec, pContext, state.beforeChar))
+        {
+            // Same punctuation, different neighbourhood: the caret sits on a
+            // historical copy rather than the spot just committed.
+            return insertPlainSpace();
+        }
+
+        if (!CCompositionProcessorEngine::IsSmartPunctuationChinese(left) ||
+            !Global::SmartPunctuationSpaceConvertEnabled.load(std::memory_order_relaxed))
+        {
+            return insertPlainSpace();
+        }
+        const WCHAR asciiOpen = CCompositionProcessorEngine::GetSmartPunctuationAscii(left);
+        if (asciiOpen == 0)
+        {
+            return insertPlainSpace();
+        }
+
+        TF_SELECTION tfSelection = {};
+        ULONG fetched = 0;
+        HRESULT hr = pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &tfSelection, &fetched);
+        if (FAILED(hr) || fetched != 1 || tfSelection.range == nullptr)
+        {
+            return insertPlainSpace();
+        }
+
+        // Cover the Chinese punctuation just committed: one character left of
+        // the caret.
+        LONG shiftedStart = 0;
+        hr = tfSelection.range->Collapse(ec, TF_ANCHOR_START);
+        if (SUCCEEDED(hr))
+        {
+            hr = SafeRangeShiftStart(tfSelection.range, ec, -1, &shiftedStart);
+            if (SUCCEEDED(hr) && shiftedStart != -1)
+            {
+                hr = E_FAIL;
+            }
+        }
+        const WCHAR replacement[1] = {asciiOpen};
+        bool converted = false;
+        if (SUCCEEDED(hr))
+        {
+            converted = SUCCEEDED(SafeRangeSetText(tfSelection.range, ec, 0, replacement, 1));
+        }
+        if (!converted)
+        {
+            tfSelection.range->Release();
+            return insertPlainSpace();
+        }
+
+        PlaceSmartPunctuationCaret(ec, pContext, tfSelection.range);
+        tfSelection.range->Release();
+
+        _smartPunctuationAction = {};
+        _smartPunctuationAction.kind = SmartPunctuationAction::Kind::AsciiConverted;
+        _smartPunctuationAction.triggerKey = state.triggerKey;
+        _smartPunctuationAction.chineseLeft = state.chineseLeft;
+        _smartPunctuationAction.asciiLeft = asciiOpen;
+        // The revert happens at the same spot, so it checks the same
+        // fingerprint the commit recorded.
+        _smartPunctuationAction.beforeChar = state.beforeChar;
+        _smartPunctuationAction.tick = GetTickCount64();
+        _smartPunctuationAction.focusToken = _CaptureFocusSessionToken();
+        _smartPunctuationAction.foregroundWindow = GetForegroundWindow();
+        _smartPunctuationShadowChar = asciiOpen;
+        _smartPunctuationShadowValid = true;
+        return S_OK;
+    }
+
+    // Revert: the punctuation key that produced the ASCII form is pressed
+    // again inside the window. Replace it back with the Chinese form.
+    const auto insertChinesePunctuation = [&]() -> HRESULT {
+        std::wstring chinese;
+        const WCHAR *punctuation =
+            _pCompositionProcessorEngine != nullptr ? _pCompositionProcessorEngine->GetPunctuation(wch) : nullptr;
+        if (punctuation != nullptr && punctuation[0] != L'\0')
+        {
+            chinese.assign(punctuation);
+        }
+        else if (state.chineseLeft != 0)
+        {
+            chinese.assign(1, state.chineseLeft);
+        }
+        if (chinese.empty())
+        {
+            return E_FAIL;
+        }
+        CStringRange chineseString;
+        chineseString.Set(chinese.c_str(), chinese.length());
+        const HRESULT insertHr = _AddCharAndFinalize(ec, pContext, &chineseString);
+        if (SUCCEEDED(insertHr))
+        {
+            // The intercepted key never updated the shadow, so point it at the
+            // character that now actually reached the document.
+            _smartPunctuationShadowChar = chinese.back();
+            _smartPunctuationShadowValid = true;
+        }
+        return insertHr;
+    };
+
+    if (!smartEnabled || !Global::SmartPunctuationRepeatToChineseEnabled.load(std::memory_order_relaxed) ||
+        state.kind != SmartPunctuationAction::Kind::AsciiConverted || state.chineseLeft == 0)
+    {
+        return insertChinesePunctuation();
+    }
+
+    // The document read confirms what the state remembers: while the host
+    // exposes text, what sits around the caret must be the converted form.
+    // A read of 0 means the host exposes nothing and the state is trusted.
+    const WCHAR left = _GetPrecedingDocumentChar(ec, pContext);
+    if (left != 0 && left != state.asciiLeft)
+    {
+        return insertChinesePunctuation();
+    }
+    if (!_SmartPunctuationFingerprintMatches(ec, pContext, state.beforeChar))
+    {
+        return insertChinesePunctuation();
+    }
+    TF_SELECTION tfSelection = {};
+    ULONG fetched = 0;
+    HRESULT hr = pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &tfSelection, &fetched);
+    if (FAILED(hr) || fetched != 1 || tfSelection.range == nullptr)
+    {
+        return insertChinesePunctuation();
+    }
+
+    LONG shiftedStart = 0;
+    hr = tfSelection.range->Collapse(ec, TF_ANCHOR_START);
+    if (SUCCEEDED(hr))
+    {
+        hr = SafeRangeShiftStart(tfSelection.range, ec, -1, &shiftedStart);
+        if (SUCCEEDED(hr) && shiftedStart != -1)
+        {
+            hr = E_FAIL;
+        }
+    }
+
+    const WCHAR replacement[1] = {state.chineseLeft};
+    bool reverted = false;
+    if (SUCCEEDED(hr))
+    {
+        reverted = SUCCEEDED(SafeRangeSetText(tfSelection.range, ec, 0, replacement, 1));
+    }
+    if (!reverted)
+    {
+        tfSelection.range->Release();
+        return insertChinesePunctuation();
+    }
+
+    PlaceSmartPunctuationCaret(ec, pContext, tfSelection.range);
+    tfSelection.range->Release();
+    _smartPunctuationShadowChar = state.chineseLeft;
+    _smartPunctuationShadowValid = true;
+    return S_OK;
+}
+
+HRESULT CMetasequoiaIME::_ExecuteSmartPunctuationFallback(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR wch,
+                                                          KEYSTROKE_FUNCTION function)
+{
+    std::wstring fallback;
+    if (function == FUNCTION_SMART_PUNCTUATION_CONVERT)
+    {
+        fallback = L" ";
+    }
+    else
+    {
+        const WCHAR *punctuation =
+            _pCompositionProcessorEngine != nullptr ? _pCompositionProcessorEngine->GetPunctuation(wch) : nullptr;
+        if (punctuation != nullptr && punctuation[0] != L'\0')
+        {
+            fallback.assign(punctuation);
+        }
+    }
+    if (fallback.empty())
+    {
+        return E_FAIL;
+    }
+
+    CStringRange fallbackString;
+    fallbackString.Set(fallback.c_str(), fallback.length());
+    const HRESULT hr = _AddCharAndFinalize(ec, pContext, &fallbackString);
+    if (SUCCEEDED(hr))
+    {
+        _smartPunctuationShadowChar = fallback.back();
+        _smartPunctuationShadowValid = true;
+    }
+    // The key was claimed and can no longer be handed back, so the pending
+    // action is consumed either way.
+    _ClearSmartPunctuationAction();
+    return hr;
 }
 
 //+---------------------------------------------------------------------------

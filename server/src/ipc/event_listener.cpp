@@ -3041,6 +3041,15 @@ void RegisteredPipeMonitorThread(HANDLE clientPipe, UINT pipeRole, uint64_t hand
                 hello.client_id, Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationChanged,
                 GetConfiguredSmartPunctuationEnabled() ? L"1" : L"0");
             SendToTsfWorkerThreadClientViaNamedpipe(
+                hello.client_id, Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationSpaceConvertChanged,
+                GetConfiguredSmartPunctuationSpaceConvertEnabled() ? L"1" : L"0");
+            SendToTsfWorkerThreadClientViaNamedpipe(
+                hello.client_id, Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectDigitChanged,
+                GetConfiguredSmartPunctuationDirectDigitEnabled() ? L"1" : L"0");
+            SendToTsfWorkerThreadClientViaNamedpipe(
+                hello.client_id, Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectLetterChanged,
+                GetConfiguredSmartPunctuationDirectLetterEnabled() ? L"1" : L"0");
+            SendToTsfWorkerThreadClientViaNamedpipe(
                 hello.client_id, Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationRepeatToChineseChanged,
                 GetConfiguredSmartPunctuationRepeatToChineseEnabled() ? L"1" : L"0");
             SendToTsfWorkerThreadClientViaNamedpipe(
