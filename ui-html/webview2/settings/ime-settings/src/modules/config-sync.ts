@@ -1,6 +1,6 @@
 import { onHostMessage } from '../utils/host-messages';
 import { serializeHostMessage } from '../../../../shared/messages';
-import { applyCandidateArrange, applyDropdownValue as applyDropdown, applyToggleState as applyToggle, setFuzzyRuleOptionsDisabled } from './shared';
+import { applyCandidateArrange, applyDropdownValue as applyDropdown, applyToggleState as applyToggle, setFuzzyRuleOptionsDisabled, setSmartPunctuationOptionsDisabled } from './shared';
 
 let lastSnapshot: Record<string, any> | null = null;
 const readyModules = new Set<string>();
@@ -108,14 +108,21 @@ function applyConfigData(data: Record<string, any>, target?: string): void {
       radio.checked = data.input.word_to_character_keys === keys;
     }
   }
+  // 智能标点：先回填总开关再回填子项；总开关关闭时子项置灰禁用，勾选状态仍按已存值展示。
   if (typeof data?.input?.smart_punctuation === 'boolean') {
     applyToggleState('smartPunctuationToggleBtn', data.input.smart_punctuation);
+    setSmartPunctuationOptionsDisabled(!data.input.smart_punctuation);
   }
-  if (typeof data?.input?.smart_punctuation_repeat_to_chinese === 'boolean') {
-    applyToggleState(
-      'smartPunctuationRepeatToChineseToggleBtn',
-      data.input.smart_punctuation_repeat_to_chinese
-    );
+  const smartPunctuationOptions: [string, string][] = [
+    ['smartPunctuationSpaceConvertToggleBtn', 'smart_punctuation_space_convert'],
+    ['smartPunctuationRepeatToChineseToggleBtn', 'smart_punctuation_repeat_to_chinese'],
+    ['smartPunctuationDirectDigitToggleBtn', 'smart_punctuation_direct_digit'],
+    ['smartPunctuationDirectLetterToggleBtn', 'smart_punctuation_direct_letter']
+  ];
+  for (const [id, key] of smartPunctuationOptions) {
+    const value = data?.input?.[key];
+    if (typeof value !== 'boolean') continue;
+    applyToggleState(id, value);
   }
   if (typeof data?.input?.paired_punctuation === 'boolean') {
     applyToggleState('pairedPunctuationToggleBtn', data.input.paired_punctuation);

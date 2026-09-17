@@ -39,21 +39,20 @@ const DWORD WM_DrainDeferredKeyDown = WM_USER + 18;
 const DWORD WM_InsertText = WM_USER + 19;
 const DWORD WM_RefreshLanguageBarTheme = WM_USER + 20;
 const DWORD WM_PairedPunctuationCaretMove = WM_USER + 21;
-const DWORD WM_ReplaceRepeatedSmartPunctuation = WM_USER + 22;
 const DWORD WM_BareShiftRelease = WM_USER + 23;
 const DWORD WM_UpdateVoiceComposition = WM_USER + 24;
 const DWORD WM_CommitVoiceComposition = WM_USER + 25;
 const DWORD WM_CancelVoiceComposition = WM_USER + 26;
 const DWORD WM_ApplyPunctuationLock = WM_USER + 27;
-constexpr ULONG_PTR SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO = 0x4D535050u;
-// The paired-punctuation caret move is synthesized the same way. Both markers
-// mean "this tip generated the event": the key sinks and the bare-Shift hook
-// must pass them straight through, or the synthetic arrow re-enters our own
-// direction-key handling instead of reaching the application.
 constexpr ULONG_PTR PAIRED_PUNCTUATION_SENDINPUT_EXTRA_INFO = 0x4D535051u;
+// Synthetic input that this tip generates carries a marker meaning "this tip
+// generated the event": the key sinks and the bare-Shift hook must pass it
+// straight through, or the synthetic arrow re-enters our own direction-key
+// handling instead of reaching the application. Only the paired-punctuation
+// caret move is synthesized today.
 constexpr bool IsSelfGeneratedSendInputExtraInfo(ULONG_PTR extraInfo)
 {
-    return extraInfo == SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO || extraInfo == PAIRED_PUNCTUATION_SENDINPUT_EXTRA_INFO;
+    return extraInfo == PAIRED_PUNCTUATION_SENDINPUT_EXTRA_INFO;
 }
 constexpr ULONGLONG SMART_PUNCTUATION_REPEAT_INTERVAL_MS = 2000;
 constexpr UINT_PTR TIMER_CONNECT_ALL_NAMEDPIPE = 1;
@@ -200,6 +199,11 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
                                           uint64_t requestId, const std::wstring &prefetchedText);
     // Character immediately before the caret / composition start (0 if unavailable).
     WCHAR _GetPrecedingDocumentChar(TfEditCookie ec, _In_ ITfContext *pContext);
+    // The characters immediately before the caret / composition start, oldest
+    // first, up to `count`. Returns how many were actually read; a shallow text
+    // store accepts the shift but exposes nothing, which reads back as 0.
+    int _GetPrecedingDocumentChars(TfEditCookie ec, _In_ ITfContext *pContext, _Out_writes_(count) WCHAR *buffer,
+                                   int count);
     // Character immediately after the caret (0 if unavailable). Only meaningful
     // outside a composition.
     WCHAR _GetFollowingDocumentChar(TfEditCookie ec, _In_ ITfContext *pContext);
@@ -222,9 +226,31 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     // Smart punctuation: backspacing the ASCII punctuation we just committed
     // means that form was unwanted, so the spot stays on Chinese punctuation.
     std::wstring _ResolveSmartPunctuation(WCHAR wch, WCHAR precedingChar);
-    bool _QueueRepeatedSmartPunctuationReplacement(WCHAR wch);
-    void _NoteKeyForSmartPunctuation(UINT code, WCHAR wch, bool isEaten);
-    void _ResetSmartPunctuationHistory();
+    // Reversible conversion: a space after the just-committed Chinese
+    // punctuation converts it to ASCII, and the same punctuation key right
+    // after the conversion reverts it. Both run inside an edit session; the
+    // key sinks only consult this state to decide whether to claim the key.
+    // Key-claim predicates. These answer "may this key be eaten?", never
+    // "may the pending state survive?" — the latter must use the key's
+    // classification result, so an unclaimed passthrough key still clears it.
+    bool _CanInterceptSmartPunctuationConvert();
+    bool _CanInterceptSmartPunctuationRevert(WCHAR wch);
+    void _ClearSmartPunctuationAction();
+    void _NoteCommittedChinesePunctuation(const std::wstring &committedText, bool autoClosedPair, WCHAR beforeChar);
+    void _WriteDirectSmartPunctuationState(WCHAR triggerKey, WCHAR chinese, WCHAR ascii, WCHAR beforeChar);
+    HRESULT _RequestSmartPunctuationEditSession(_In_ ITfContext *pContext, WCHAR wch, KEYSTROKE_FUNCTION function,
+                                                uint64_t expectedFocusGeneration);
+    HRESULT _ExecuteSmartPunctuationAction(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR wch,
+                                           KEYSTROKE_FUNCTION function);
+    // Terminal fallback when the smart-punctuation edit session could not be
+    // requested at all: write the key's own character back so it is not lost.
+    HRESULT _ExecuteSmartPunctuationFallback(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR wch,
+                                             KEYSTROKE_FUNCTION function);
+    // Commit-time fingerprint: the character that preceded the punctuation. A
+    // mismatch means the caret was moved onto historical text that looks the
+    // same as the spot just committed.
+    bool _SmartPunctuationFingerprintMatches(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR beforeChar);
+    void _NoteKeyForSmartPunctuation(UINT code, WCHAR wch, bool isEaten, KEYSTROKE_FUNCTION function);
     void _UpdateSmartPunctuationShadow(UINT code, WCHAR wch, bool isEaten);
     void _InvalidateSmartPunctuationShadow();
     HRESULT _HandleCompositionDoubleSingleByte(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR wch);
@@ -545,18 +571,36 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     CCandidateListUIPresenter *_pCandidateListUIPresenter;
     BOOL _isCandidateWithWildcard : 1;
 
-    // Last smart-punctuation commit, used to detect a backspace rejection.
-    WCHAR _smartPunctuationKey = 0;
-    WCHAR _smartPunctuationPrecedingChar = 0;
-    bool _smartPunctuationCommittedAscii = false;
-    bool _smartPunctuationAsciiRejected = false;
-    ULONGLONG _smartPunctuationCommitTick = 0;
-    uint64_t _smartPunctuationFocusToken = 0;
-    HWND _smartPunctuationForegroundWindow = nullptr;
-    WCHAR _pendingSmartPunctuationReplacement = 0;
-    uint64_t _pendingSmartPunctuationFocusToken = 0;
-    HWND _pendingSmartPunctuationForegroundWindow = nullptr;
-    ULONGLONG _pendingSmartPunctuationDeadline = 0;
+    // Reversible smart punctuation: the last Chinese punctuation commit
+    // (waiting for a following space) or the last ASCII conversion (waiting
+    // for the same punctuation key to revert it). Focus token and foreground
+    // window keep a stale state from firing in another document or app.
+    struct SmartPunctuationAction
+    {
+        enum class Kind
+        {
+            None,
+            ChineseCommitted,
+            AsciiConverted
+        };
+
+        Kind kind = Kind::None;
+        WCHAR triggerKey = 0;
+        WCHAR chineseLeft = 0;
+        WCHAR asciiLeft = 0;
+        // Character that preceded the punctuation at commit time. A mouse
+        // click can park the caret right after a punctuation identical to the
+        // one just committed; this fingerprint separates "the same spot" from
+        // "a historical twin". 0 means the store gave nothing to record.
+        WCHAR beforeChar = 0;
+        // Written by both states, but only read for AsciiConverted (the revert
+        // window). ChineseCommitted relies on the next key or the focus/window
+        // checks to expire instead of a clock.
+        ULONGLONG tick = 0;
+        uint64_t focusToken = 0;
+        HWND foregroundWindow = nullptr;
+    };
+    SmartPunctuationAction _smartPunctuationAction;
 
     // Last character known to have reached the application. Hosts such as the
     // VS Code terminal back the context with a proxy text store that only ever

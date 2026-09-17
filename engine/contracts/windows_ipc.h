@@ -243,13 +243,15 @@ constexpr std::uint32_t FocusSessionReady = 8;
 constexpr std::uint32_t PipeReady = 9;
 // Unsolicited text insert (voice ASR, etc.). Does not finalize candidates.
 constexpr std::uint32_t InsertText = 10;
-// Smart punctuation after ASCII letters/digits (',' '.' ':'). Payload "0"/"1".
+// Master switch for the reversible Chinese/ASCII punctuation conversion:
+// space after a committed Chinese punctuation converts it. Payload "0"/"1".
 constexpr std::uint32_t SmartPunctuationChanged = 11;
 // Auto-complete opening paired punctuation and leave the caret inside. Payload "0"/"1".
 constexpr std::uint32_t PairedPunctuationChanged = 12;
 // Whether ';' is an input key for the Microsoft shuangpin profile.
 constexpr std::uint32_t MicrosoftShuangpinChanged = 13;
-// Replace a repeated smart ASCII punctuation with its Chinese mapping.
+// Revert a converted ASCII punctuation back to Chinese when the same
+// punctuation key is pressed within the revert window. Payload "0"/"1".
 constexpr std::uint32_t SmartPunctuationRepeatToChineseChanged = 14;
 // Streaming ASR: replace the inline composition with this full snapshot.
 constexpr std::uint32_t UpdateVoiceComposition = 15;
@@ -265,7 +267,22 @@ constexpr std::uint32_t CapsLockChanged = 19;
 constexpr std::uint32_t TsfDiagnosticLogChanged = 20;
 // Payload "0" follow IME, "1" always Chinese punctuation, "2" always English punctuation.
 constexpr std::uint32_t PunctuationLockChanged = 21;
-constexpr std::uint32_t MaxKnown = PunctuationLockChanged;
+// A space after a committed Chinese punctuation converts it to ASCII. Covers
+// plain punctuation and individually-occurring paired symbols. Payload "0"/"1".
+constexpr std::uint32_t SmartPunctuationSpaceConvertChanged = 22;
+// 23 was the paired-symbol space conversion, removed because an auto-closed
+// pair loses its caret position. The number stays unused: this branch already
+// shipped test builds, so reusing it would let an old test build misinterpret
+// a new frame.
+// Direct ASCII punctuation output for ',' '.' ':' after ASCII digits. Payload "0"/"1".
+// Opcode 24 used to cover letters and digits together. Keeping the number and narrowing
+// it to digits is a semantic subset, not a reuse: a new DLL reading an old "1" frame
+// still does the right thing (digits direct, letters not), while the old DLL ignores the
+// new 25 because it filters everything above its MaxKnown.
+constexpr std::uint32_t SmartPunctuationDirectDigitChanged = 24;
+// Direct ASCII punctuation output for ',' '.' ':' after ASCII letters. Payload "0"/"1".
+constexpr std::uint32_t SmartPunctuationDirectLetterChanged = 25;
+constexpr std::uint32_t MaxKnown = SmartPunctuationDirectLetterChanged;
 // Source compatibility for the Server's historical spellings.
 constexpr std::uint32_t SwitchToEn = SwitchToEnglish;
 constexpr std::uint32_t SwitchToCn = SwitchToChinese;

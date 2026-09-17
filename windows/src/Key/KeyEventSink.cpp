@@ -783,6 +783,35 @@ BOOL CMetasequoiaIME::_IsKeyEaten(         //
         {
             return TRUE;
         }
+
+        // Reversible smart punctuation: a space right after a committed Chinese
+        // punctuation converts it, and the punctuation key that produced an
+        // ASCII conversion reverts it. The state already carries the focus and
+        // foreground checks; here only the input modes are added, and the
+        // classification must match _DispatchKeyDown's probe exactly so a
+        // claimed key is never handed back.
+        if (isPunctuation && !isDoubleSingleByte && !isComposing && candidateMode == CANDIDATE_NONE &&
+            !Global::JapaneseInputModeEnabled.load(std::memory_order_relaxed))
+        {
+            if (wch == L' ' && _CanInterceptSmartPunctuationConvert())
+            {
+                if (pKeyState)
+                {
+                    pKeyState->Category = CATEGORY_COMPOSING;
+                    pKeyState->Function = FUNCTION_SMART_PUNCTUATION_CONVERT;
+                }
+                return TRUE;
+            }
+            if (*pCodeOut != VK_DECIMAL && _CanInterceptSmartPunctuationRevert(wch))
+            {
+                if (pKeyState)
+                {
+                    pKeyState->Category = CATEGORY_COMPOSING;
+                    pKeyState->Function = FUNCTION_SMART_PUNCTUATION_REVERT;
+                }
+                return TRUE;
+            }
+        }
     }
 
     //
@@ -1422,17 +1451,38 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
             // always sees them.
             deferredWch = ConvertVKey(static_cast<UINT>(wParam));
             deferredCode = VKeyFromVKPacketAndWchar(static_cast<UINT>(wParam), deferredWch);
-            _NoteKeyForSmartPunctuation(deferredCode, deferredWch, false);
+            _NoteKeyForSmartPunctuation(deferredCode, deferredWch, false, FUNCTION_NONE);
             *pIsEaten = FALSE;
             return S_OK;
         }
+
+        // Reversible smart punctuation is a local action and must not wait for
+        // the FIFO to drain. OnTestKeyDown is the sink that decides whether
+        // OnKeyDown — and therefore the KeyDown probe — ever runs, so the same
+        // _IsKeyEaten claim the probe replays has to be made here too. The
+        // deferred classifier knows nothing about it (the request key would
+        // otherwise be queued as an ordinary convert/punctuation key).
+        {
+            _KEYSTROKE_STATE smartState = {};
+            WCHAR smartWch = L'\0';
+            UINT smartCode = 0;
+            if (_IsKeyEaten(pContext, static_cast<UINT>(wParam), &smartCode, &smartWch, &smartState) &&
+                (smartState.Function == FUNCTION_SMART_PUNCTUATION_CONVERT ||
+                 smartState.Function == FUNCTION_SMART_PUNCTUATION_REVERT))
+            {
+                *pIsEaten = TRUE;
+                _NoteKeyForSmartPunctuation(smartCode, smartWch, true, smartState.Function);
+                return S_OK;
+            }
+        }
+
         *pIsEaten =
             _ClassifyDeferredKeyDown(pContext, wParam, nullptr, nullptr, &deferredWch, &deferredCode, &deferredState)
                 ? TRUE
                 : FALSE;
         // Classify always fills code/wch before failing. Track rejection even
         // when the key is handed back to the app (typical for VK_BACK).
-        _NoteKeyForSmartPunctuation(deferredCode, deferredWch, *pIsEaten ? true : false);
+        _NoteKeyForSmartPunctuation(deferredCode, deferredWch, *pIsEaten ? true : false, deferredState.Function);
         return S_OK;
     }
 
@@ -1451,7 +1501,7 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
     // Every keydown reaches this sink, including the ones handed back to the
     // application (backspace with no composition), so the smart-punctuation
     // rejection state is tracked here rather than in the eaten-key path.
-    _NoteKeyForSmartPunctuation(code, wch, *pIsEaten ? true : false);
+    _NoteKeyForSmartPunctuation(code, wch, *pIsEaten ? true : false, KeystrokeState.Function);
 
     DebugTsfIssue47(L"test-keydown-classified", FANY_IME_NO_REQUEST_ID, code, wch, KeystrokeState.Category,
                     KeystrokeState.Function, *pIsEaten ? 1 : 0, _IsComposing(),
@@ -1987,6 +2037,25 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
     uint64_t requestId = FANY_IME_NO_REQUEST_ID;
     const UINT capturedModifiers = modifiersDown ? *modifiersDown : CaptureIpcModifiers();
 
+    // Reversible smart punctuation is a local document edit: classify through
+    // the same _IsKeyEaten the Test sink used, then run it directly instead of
+    // queueing an IPC key or entering the deferred FIFO. This runs before the
+    // barrier branches because the action does not depend on the Server.
+    if (canDefer && translatedWch == nullptr && prevalidatedKeyState == nullptr)
+    {
+        _KEYSTROKE_STATE probeState = {};
+        WCHAR probeWch = L'\0';
+        UINT probeCode = 0;
+        if (_IsKeyEaten(pContext, static_cast<UINT>(wParam), &probeCode, &probeWch, &probeState) &&
+            (probeState.Function == FUNCTION_SMART_PUNCTUATION_CONVERT ||
+             probeState.Function == FUNCTION_SMART_PUNCTUATION_REVERT))
+        {
+            *pIsEaten = TRUE;
+            _RequestSmartPunctuationEditSession(pContext, probeWch, probeState.Function, expectedFocusGeneration);
+            return KeyDownDispatchResult::Complete;
+        }
+    }
+
     if (canDefer && translatedWch == nullptr && prevalidatedKeyState == nullptr && !_HasDeferredKeyBarrier())
     {
         GUID hotkeyGuid = {};
@@ -2017,7 +2086,7 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
                 wch = translatedWch ? *translatedWch : ConvertVKey(static_cast<UINT>(wParam));
                 code = VKeyFromVKPacketAndWchar(static_cast<UINT>(wParam), wch);
             }
-            _NoteKeyForSmartPunctuation(code, wch, false);
+            _NoteKeyForSmartPunctuation(code, wch, false, FUNCTION_NONE);
             *pIsEaten = FALSE;
             DebugTsfIssue47(L"keydown-deferred-rejected", FANY_IME_NO_REQUEST_ID, code, wch, KeystrokeState.Category,
                             KeystrokeState.Function, 0, _IsComposing(),
@@ -2032,7 +2101,7 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
         }
         // Queued keys note on replay; note now too so a Backspace that is
         // somehow classified+queued still records rejection before drain.
-        _NoteKeyForSmartPunctuation(code, wch, true);
+        _NoteKeyForSmartPunctuation(code, wch, true, KeystrokeState.Function);
         *pIsEaten =
             _QueueDeferredKeyDown(pContext, wParam, lParam, wch, capturedModifiers, KeystrokeState) ? TRUE : FALSE;
         DebugTsfIssue47(*pIsEaten ? L"keydown-deferred-queued" : L"keydown-deferred-queue-failed",
@@ -2068,7 +2137,7 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
         );
     }
     // Idempotent with the OnTestKeyDown call; replayed keys only pass here.
-    _NoteKeyForSmartPunctuation(code, wch, *pIsEaten ? true : false);
+    _NoteKeyForSmartPunctuation(code, wch, *pIsEaten ? true : false, KeystrokeState.Function);
 
     DebugTsfIssue47(L"keydown-classified", FANY_IME_NO_REQUEST_ID, code, wch, KeystrokeState.Category,
                     KeystrokeState.Function, *pIsEaten ? 1 : 0, _IsComposing(),
@@ -2268,10 +2337,15 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
                 punctuationCommitText = L".";
             }
             else if (CCompositionProcessorEngine::IsSmartAsciiPunctuationKey(wch) &&
-                     Global::SmartPunctuationEnabled.load(std::memory_order_relaxed))
+                     Global::SmartPunctuationEnabled.load(std::memory_order_relaxed) &&
+                     (Global::SmartPunctuationDirectDigitEnabled.load(std::memory_order_relaxed) ||
+                      Global::SmartPunctuationDirectLetterEnabled.load(std::memory_order_relaxed)))
             {
                 // Defer mapping until the edit session can inspect the
-                // preceding document character (letters/digits → ASCII).
+                // preceding document character (digits and/or letters →
+                // ASCII). With both direct sub-switches off, ResolvePunctuation
+                // would return the Chinese punctuation anyway, so the immediate
+                // mapping below is equivalent and skips a pointless session.
                 punctuationCommitText.clear();
             }
             else

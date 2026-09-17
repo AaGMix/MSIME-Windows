@@ -731,19 +731,73 @@ void CCompositionProcessorEngine::BalanceNestPairAfterAutoClose(WCHAR openingCod
     }
 }
 
+namespace
+{
+// Chinese -> ASCII mapping for the reversible smart punctuation conversion.
+// Every symbol converts only when it reaches the document on its own. The
+// paired marks are listed so a lone " or 【 / 《 / （ -- what auto-complete off
+// produces -- converts like any other mark; the auto-completed pair form is
+// deliberately left out of the feature and never arms a conversion (see
+// _NoteCommittedChinesePunctuation), because rewriting one half of 〘|〙
+// would orphan the other.
+struct SmartPunctuationMapping
+{
+    WCHAR chinese;
+    WCHAR ascii;
+};
+
+constexpr SmartPunctuationMapping kSmartPunctuationMap[] = {
+    {L'。', L'.'}, {L'，', L','}, {L'！', L'!'}, {L'？', L'?'}, {L'；', L';'}, {L'：', L':'},
+    {L'、', L'/'}, {L'“', L'"'},  {L'”', L'"'},  {L'‘', L'\''}, {L'’', L'\''}, {L'【', L'['},
+    {L'】', L']'}, {L'《', L'<'}, {L'》', L'>'}, {L'（', L'('}, {L'）', L')'},
+};
+} // namespace
+
 BOOL CCompositionProcessorEngine::IsSmartAsciiPunctuationKey(WCHAR wch)
 {
     // Matches rime-ice punctuator/digit_separators: ",.:"
     return wch == L',' || wch == L'.' || wch == L':';
 }
 
+bool CCompositionProcessorEngine::IsSmartPunctuationChinese(WCHAR ch)
+{
+    for (const SmartPunctuationMapping &mapping : kSmartPunctuationMap)
+    {
+        if (mapping.chinese == ch)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+WCHAR CCompositionProcessorEngine::GetSmartPunctuationAscii(WCHAR chinese)
+{
+    for (const SmartPunctuationMapping &mapping : kSmartPunctuationMap)
+    {
+        if (mapping.chinese == chinese)
+        {
+            return mapping.ascii;
+        }
+    }
+    return 0;
+}
+
 std::wstring CCompositionProcessorEngine::ResolvePunctuation(WCHAR wch, WCHAR precedingChar)
 {
-    if (Global::SmartPunctuationEnabled.load(std::memory_order_relaxed) && IsSmartAsciiPunctuationKey(wch) &&
-        ((precedingChar >= L'0' && precedingChar <= L'9') || (precedingChar >= L'A' && precedingChar <= L'Z') ||
-         (precedingChar >= L'a' && precedingChar <= L'z')))
+    // Direct ASCII output is opt-in (smart_punctuation_direct_digit and
+    // smart_punctuation_direct_letter, both default off): the default path
+    // leaves ',' '.' ':' to the reversible space conversion.
+    if (Global::SmartPunctuationEnabled.load(std::memory_order_relaxed) && IsSmartAsciiPunctuationKey(wch))
     {
-        return std::wstring(1, wch);
+        const bool afterDigit = precedingChar >= L'0' && precedingChar <= L'9';
+        const bool afterLetter =
+            (precedingChar >= L'A' && precedingChar <= L'Z') || (precedingChar >= L'a' && precedingChar <= L'z');
+        if ((afterDigit && Global::SmartPunctuationDirectDigitEnabled.load(std::memory_order_relaxed)) ||
+            (afterLetter && Global::SmartPunctuationDirectLetterEnabled.load(std::memory_order_relaxed)))
+        {
+            return std::wstring(1, wch);
+        }
     }
 
     const WCHAR *punctuation = GetPunctuation(wch);

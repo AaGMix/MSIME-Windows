@@ -1,5 +1,5 @@
 import { serializeHostMessage } from '../../../../shared/messages';
-import { applyDropdownValue, applyToggleState, setFuzzyRuleOptionsDisabled, setupDropdownMenu, setupToggleButton } from './shared';
+import { applyDropdownValue, applyToggleState, setFuzzyRuleOptionsDisabled, setSmartPunctuationOptionsDisabled, setupDropdownMenu, setupToggleButton } from './shared';
 import { updateConfig } from './config-sync';
 import { updateCandidatePreviewHelpcode } from './appearance';
 import { setupCredentialTest } from './credential-test';
@@ -259,9 +259,6 @@ export function setupInput(): void {
       updateConfig('input.punctuation_lock', 'follow');
     }
   });
-  setupToggleButton('smartPunctuationToggleBtn', (active) => {
-    updateConfig('input.smart_punctuation', active);
-  });
   setupToggleButton('autocorrectTranspositionToggleBtn', (active) => {
     updateConfig('quanpin.autocorrect_transposition', active);
   });
@@ -269,9 +266,7 @@ export function setupInput(): void {
     updateConfig('quanpin.autocorrect_neighbor', active);
   });
   setupFuzzySection();
-  setupToggleButton('smartPunctuationRepeatToChineseToggleBtn', (active) => {
-    updateConfig('input.smart_punctuation_repeat_to_chinese', active);
-  });
+  setupSmartPunctuationSection();
   setupToggleButton('pairedPunctuationToggleBtn', (active) => {
     updateConfig('input.paired_punctuation', active);
   });
@@ -399,5 +394,32 @@ function setupFuzzyRuleOptions(): void {
     checkbox.addEventListener('change', () => {
       if (checkbox.value.startsWith('fuzzy_')) updateConfig(`input.${checkbox.value}`, checkbox.checked);
     });
+  });
+}
+
+// 智能标点分区：折叠头 + 总开关 + 四个子开关。折叠交互与模糊音一致，默认收起。
+function setupSmartPunctuationSection(): void {
+  setupToggleButton('smartPunctuationToggleBtn', (active) => {
+    updateConfig('input.smart_punctuation', active);
+    setSmartPunctuationOptionsDisabled(!active);
+  });
+  setupToggleButton('smartPunctuationSpaceConvertToggleBtn', (active) => {
+    updateConfig('input.smart_punctuation_space_convert', active);
+  });
+  setupToggleButton('smartPunctuationRepeatToChineseToggleBtn', (active) => {
+    updateConfig('input.smart_punctuation_repeat_to_chinese', active);
+  });
+  setupToggleButton('smartPunctuationDirectDigitToggleBtn', (active) => {
+    updateConfig('input.smart_punctuation_direct_digit', active);
+  });
+  setupToggleButton('smartPunctuationDirectLetterToggleBtn', (active) => {
+    updateConfig('input.smart_punctuation_direct_letter', active);
+  });
+  const expand = document.getElementById('smartPunctuationExpand');
+  const details = document.getElementById('smartPunctuationDetails');
+  expand?.addEventListener('click', () => {
+    const expanded = expand.getAttribute('aria-expanded') !== 'true';
+    expand.setAttribute('aria-expanded', String(expanded));
+    details?.classList.toggle('open', expanded);
   });
 }

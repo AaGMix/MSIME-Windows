@@ -262,6 +262,62 @@ class CPunctuationCommitEditSession : public CEditSessionBase
     uint64_t _deferredReplayToken;
 };
 
+class CSmartPunctuationEditSession : public CEditSessionBase
+{
+  public:
+    CSmartPunctuationEditSession(CMetasequoiaIME *pTextService, ITfContext *pContext, WCHAR wch,
+                                 KEYSTROKE_FUNCTION function, uint64_t focusToken)
+        : CEditSessionBase(pTextService, pContext), _wch(wch), _function(function), _focusToken(focusToken)
+    {
+    }
+
+    STDMETHODIMP DoEditSession(TfEditCookie ec) override
+    {
+        // The document/state may already belong to another focus session by
+        // the time the request is serviced; the key was claimed synchronously,
+        // so there is nothing to hand back to the host here.
+        if (!_pTextService->_IsFocusSessionCurrent(_focusToken, _pContext))
+        {
+            return S_FALSE;
+        }
+        return _pTextService->_ExecuteSmartPunctuationAction(ec, _pContext, _wch, _function);
+    }
+
+  private:
+    WCHAR _wch;
+    KEYSTROKE_FUNCTION _function;
+    uint64_t _focusToken;
+};
+
+// Secondary session for the case where CSmartPunctuationEditSession could not
+// be serviced at all. It only writes the key's own character (space or Chinese
+// punctuation) so a synchronously claimed key is not silently lost, and it
+// validates the focus session itself instead of reusing the primary request
+// path (which would recurse into the same failure).
+class CSmartPunctuationFallbackEditSession : public CEditSessionBase
+{
+  public:
+    CSmartPunctuationFallbackEditSession(CMetasequoiaIME *pTextService, ITfContext *pContext, WCHAR wch,
+                                         KEYSTROKE_FUNCTION function, uint64_t focusToken)
+        : CEditSessionBase(pTextService, pContext), _wch(wch), _function(function), _focusToken(focusToken)
+    {
+    }
+
+    STDMETHODIMP DoEditSession(TfEditCookie ec) override
+    {
+        if (!_pTextService->_IsFocusSessionCurrent(_focusToken, _pContext))
+        {
+            return S_FALSE;
+        }
+        return _pTextService->_ExecuteSmartPunctuationFallback(ec, _pContext, _wch, _function);
+    }
+
+  private:
+    WCHAR _wch;
+    KEYSTROKE_FUNCTION _function;
+    uint64_t _focusToken;
+};
+
 class CDeferredApplicationTextEditSession : public CEditSessionBase
 {
   public:
@@ -577,6 +633,61 @@ HRESULT CMetasequoiaIME::_RequestDirectPunctuationEditSession(_In_ ITfContext *p
         _RetryDeferredKeyReplay(deferredReplayToken);
     }
     return FAILED(requestHr) ? requestHr : editSessionHr;
+}
+
+HRESULT CMetasequoiaIME::_RequestSmartPunctuationEditSession(_In_ ITfContext *pContext, WCHAR wch,
+                                                             KEYSTROKE_FUNCTION function,
+                                                             uint64_t expectedFocusGeneration)
+{
+    if (pContext == nullptr)
+    {
+        return E_INVALIDARG;
+    }
+    // The key belongs to a focus topology that is already gone. It was claimed
+    // by the Test sink, so drop it rather than edit the new topology.
+    if (expectedFocusGeneration == 0 || expectedFocusGeneration != _deferredKeyFocusGeneration)
+    {
+        return S_FALSE;
+    }
+
+    CSmartPunctuationEditSession *pEditSession =
+        new (std::nothrow) CSmartPunctuationEditSession(this, pContext, wch, function, _CaptureFocusSessionToken());
+    if (pEditSession == nullptr)
+    {
+        return E_OUTOFMEMORY;
+    }
+
+    HRESULT editSessionHr = E_FAIL;
+    const HRESULT requestHr =
+        pContext->RequestEditSession(_tfClientId, pEditSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &editSessionHr);
+    pEditSession->Release();
+    const HRESULT hr = FAILED(requestHr) ? requestHr : editSessionHr;
+    if (FAILED(hr))
+    {
+        // The key was claimed synchronously and can no longer be handed back to
+        // the host, so run a minimal second session that writes the key's own
+        // character. If even that fails the key is visibly lost — a host that
+        // refuses every write leaves no other option.
+        HRESULT fallbackHr = E_OUTOFMEMORY;
+        CSmartPunctuationFallbackEditSession *pFallbackSession = new (std::nothrow)
+            CSmartPunctuationFallbackEditSession(this, pContext, wch, function, _CaptureFocusSessionToken());
+        if (pFallbackSession != nullptr)
+        {
+            HRESULT fallbackEditSessionHr = E_FAIL;
+            const HRESULT fallbackRequestHr = pContext->RequestEditSession(
+                _tfClientId, pFallbackSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &fallbackEditSessionHr);
+            pFallbackSession->Release();
+            fallbackHr = FAILED(fallbackRequestHr) ? fallbackRequestHr : fallbackEditSessionHr;
+        }
+        if (FAILED(fallbackHr))
+        {
+            DebugTsfIssue47(L"smart-punctuation-fallback", FANY_IME_NO_REQUEST_ID, 0, wch, 0,
+                            static_cast<UINT>(function), 1, _IsComposing(),
+                            _pCompositionProcessorEngine ? _pCompositionProcessorEngine->GetVirtualKeyLength() : 0,
+                            fallbackHr);
+        }
+    }
+    return hr;
 }
 
 void CMetasequoiaIME::_QueuePendingServerCandidate(UINT msgType, _In_z_ const WCHAR *pCandidateString)
@@ -1747,6 +1858,9 @@ void CMetasequoiaIME::IpcWorkerThread(CMetasequoiaIME *pIME)
         if (validFrame &&
             (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationChanged ||
              buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationRepeatToChineseChanged ||
+             buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationSpaceConvertChanged ||
+             buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationDirectDigitChanged ||
+             buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationDirectLetterChanged ||
              buf.msg_type == Global::DataToTsfWorkerThreadMsgType::PairedPunctuationChanged ||
              buf.msg_type == Global::DataToTsfWorkerThreadMsgType::MicrosoftShuangpinChanged ||
              buf.msg_type == Global::DataToTsfWorkerThreadMsgType::InputModeChanged ||
@@ -1825,6 +1939,9 @@ void CMetasequoiaIME::IpcWorkerThread(CMetasequoiaIME *pIME)
             if (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::PagingCommaPeriodChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationRepeatToChineseChanged ||
+                buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationSpaceConvertChanged ||
+                buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationDirectDigitChanged ||
+                buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationDirectLetterChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::PairedPunctuationChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::MicrosoftShuangpinChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::InputModeChanged ||
@@ -1911,6 +2028,18 @@ void CMetasequoiaIME::IpcWorkerThread(CMetasequoiaIME *pIME)
         else if (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationRepeatToChineseChanged)
         {
             Global::SmartPunctuationRepeatToChineseEnabled.store(buf.data[0] == L'1', std::memory_order_relaxed);
+        }
+        else if (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationSpaceConvertChanged)
+        {
+            Global::SmartPunctuationSpaceConvertEnabled.store(buf.data[0] == L'1', std::memory_order_relaxed);
+        }
+        else if (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationDirectDigitChanged)
+        {
+            Global::SmartPunctuationDirectDigitEnabled.store(buf.data[0] == L'1', std::memory_order_relaxed);
+        }
+        else if (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::SmartPunctuationDirectLetterChanged)
+        {
+            Global::SmartPunctuationDirectLetterEnabled.store(buf.data[0] == L'1', std::memory_order_relaxed);
         }
         else if (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::PairedPunctuationChanged)
         {
@@ -2727,51 +2856,6 @@ LRESULT CALLBACK CMetasequoiaIME_WindowProc(HWND hWnd, UINT message, WPARAM wPar
         }
 
         pIME->_RunPairedPunctuationCaretMove();
-        break;
-    }
-    case WM_ReplaceRepeatedSmartPunctuation: {
-        const uint64_t focusToken = static_cast<uint64_t>(static_cast<uint32_t>(wParam)) |
-                                    (static_cast<uint64_t>(static_cast<uint32_t>(lParam)) << 32);
-        const WCHAR replacement = pIME->_pendingSmartPunctuationReplacement;
-        const bool requestCurrent = replacement != 0 && focusToken != 0 &&
-                                    focusToken == pIME->_pendingSmartPunctuationFocusToken &&
-                                    Global::SmartPunctuationRepeatToChineseEnabled.load(std::memory_order_relaxed) &&
-                                    pIME->_IsFocusSessionCurrent(focusToken) &&
-                                    GetForegroundWindow() == pIME->_pendingSmartPunctuationForegroundWindow &&
-                                    GetTickCount64() <= pIME->_pendingSmartPunctuationDeadline;
-
-        pIME->_pendingSmartPunctuationReplacement = 0;
-        pIME->_pendingSmartPunctuationFocusToken = 0;
-        pIME->_pendingSmartPunctuationForegroundWindow = nullptr;
-        pIME->_pendingSmartPunctuationDeadline = 0;
-        if (!requestCurrent)
-        {
-            break;
-        }
-
-        INPUT inputs[4] = {};
-        inputs[0].type = INPUT_KEYBOARD;
-        inputs[0].ki.wVk = VK_BACK;
-        inputs[0].ki.dwExtraInfo = SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO;
-        inputs[1] = inputs[0];
-        inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
-
-        inputs[2].type = INPUT_KEYBOARD;
-        inputs[2].ki.wScan = replacement;
-        inputs[2].ki.dwFlags = KEYEVENTF_UNICODE;
-        inputs[2].ki.dwExtraInfo = SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO;
-        inputs[3] = inputs[2];
-        inputs[3].ki.dwFlags |= KEYEVENTF_KEYUP;
-
-        if (SendInput(ARRAYSIZE(inputs), inputs, sizeof(INPUT)) == ARRAYSIZE(inputs))
-        {
-            pIME->_smartPunctuationShadowChar = replacement;
-            pIME->_smartPunctuationShadowValid = true;
-        }
-        else
-        {
-            pIME->_InvalidateSmartPunctuationShadow();
-        }
         break;
     }
     case WM_SETTINGCHANGE: {

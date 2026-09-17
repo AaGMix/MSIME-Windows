@@ -158,10 +158,16 @@ ime_mode_scope = "app"
 word_to_character = false
 # brackets: [ / ]; minus_equal: - / =. Mutually exclusive with paging on the same keys.
 word_to_character_keys = "brackets"
-# 智能标点：中文标点模式下，字母/数字后的 , . : 输出英文标点（类似小狼毫 digit_separators）
-smart_punctuation = true
-# 重复标点转中文：智能标点输出英文标点后，2 秒内再次输入同一标点时替换为中文标点
-smart_punctuation_repeat_to_chinese = true
+# 智能标点：中文标点模式下的标点自动转换（总开关，默认关闭）
+smart_punctuation = false
+# 中文标点后按空格转换：。，！？；：、 以及单独出现的 “ ” 【 】 《 》 （ ） 转为对应英文标点
+smart_punctuation_space_convert = false
+# 数字后直出：数字后输入 , . : 直接输出英文标点（如 3.14）
+smart_punctuation_direct_digit = false
+# 字母后直出：字母后输入 , . : 直接输出英文标点
+smart_punctuation_direct_letter = false
+# 同键转回中文：转换或直出的英文标点，2 秒内再按同一标点键转回中文
+smart_punctuation_repeat_to_chinese = false
 # 成对标点补全：输入左侧符号时自动补全右侧符号，并将光标置于中间
 paired_punctuation = true
 # 标点锁定，可选："follow"（随中英文切换）, "chinese"（始终中文标点）, "english"（始终英文标点）

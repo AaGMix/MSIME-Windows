@@ -290,13 +290,13 @@
   border-color: #555;
 }
 
-/* 输入 -> 模糊音（可折叠分区：结构与 appearance 主题模式一致，类名用 fuzzy 专名，
-   不跨模块借用 theme-surface-* 类） */
-.fuzzy-toggle-header {
+/* 输入 -> 可折叠分区（模糊音、智能标点共用；结构与 appearance 主题模式一致，
+   不跨模块借用 theme-surface-* 类）。总开关关闭时子项置灰并禁用。 */
+.toggle-section-header {
   margin-bottom: 0;
 }
 
-.fuzzy-expand {
+.toggle-section-expand {
   display: inline-flex;
   align-items: center;
   gap: 9px;
@@ -308,7 +308,7 @@
   cursor: pointer;
 }
 
-.fuzzy-chevron {
+.toggle-section-chevron {
   width: 7px;
   height: 7px;
   margin-top: -3px;
@@ -318,45 +318,46 @@
   transition: transform 0.16s ease, margin 0.16s ease;
 }
 
-.fuzzy-expand[aria-expanded="true"] .fuzzy-chevron {
+.toggle-section-expand[aria-expanded="true"] .toggle-section-chevron {
   margin-top: 3px;
   transform: rotate(225deg);
 }
 
-.fuzzy-details {
+.toggle-section-details {
   display: none;
   margin: 4px 0 0 18px;
 }
 
-.fuzzy-details.open {
+.toggle-section-details.open {
   display: block;
 }
 
-.fuzzy-details .section-header {
+.toggle-section-details .section-header {
   padding: 2px 0;
 }
 
-.fuzzy-details .section-title {
+.toggle-section-details .section-title {
   font-size: 15px;
   font-weight: 400;
 }
 
-.fuzzy-details .input-setting-description {
+.toggle-section-details .input-setting-description {
   margin-top: 0;
 }
 
-/* 总开关关闭：规则复选随 checkbox disabled 置灰，提示何时生效 */
-.fuzzy-details.is-disabled .content-page-option {
+/* 总开关关闭：模糊音复选随 checkbox disabled 置灰，智能标点子开关随 aria-disabled 置灰 */
+.toggle-section-details.is-disabled .content-page-option,
+.toggle-section-details.is-disabled .ftb-toggle-btn {
   opacity: 0.45;
   pointer-events: none;
 }
 
-.fuzzy-disabled-hint {
+.toggle-section-disabled-hint {
   margin-top: 8px;
   color: var(--text-muted);
   font-size: 12px;
 }
 
-.fuzzy-disabled-hint.is-hidden {
+.toggle-section-disabled-hint.is-hidden {
   display: none;
 }

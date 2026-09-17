@@ -164,10 +164,20 @@ inline bool IsPunctuationLocked()
 }
 
 inline std::atomic_bool PagingCommaPeriodEnabled{false};
-// Default on: matches rime-ice digit_separators behavior until Server syncs.
-inline std::atomic_bool SmartPunctuationEnabled{true};
-// Default on until the Server sends the persisted setting.
-inline std::atomic_bool SmartPunctuationRepeatToChineseEnabled{true};
+// Default off: the whole smart-punctuation family ships disabled and is only
+// enabled by an explicit user opt-in; the Server overwrites this on connect.
+inline std::atomic_bool SmartPunctuationEnabled{false};
+// Default off until the Server sends the persisted setting.
+inline std::atomic_bool SmartPunctuationRepeatToChineseEnabled{false};
+// Default off: a space right after a committed Chinese punctuation converts it
+// to its ASCII form (plain punctuation and individually-occurring pairs).
+inline std::atomic_bool SmartPunctuationSpaceConvertEnabled{false};
+// Default off: direct ASCII output for ',' '.' ':' after ASCII digits. Gated
+// in CCompositionProcessorEngine::ResolvePunctuation.
+inline std::atomic_bool SmartPunctuationDirectDigitEnabled{false};
+// Default off: direct ASCII output for ',' '.' ':' after ASCII letters. Gated
+// in CCompositionProcessorEngine::ResolvePunctuation.
+inline std::atomic_bool SmartPunctuationDirectLetterEnabled{false};
 // Default on until the Server sends the persisted setting.
 inline std::atomic_bool PairedPunctuationEnabled{true};
 inline std::atomic_bool MicrosoftShuangpinEnabled{false};

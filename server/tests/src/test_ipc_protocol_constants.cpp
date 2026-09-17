@@ -46,7 +46,12 @@ TEST_CASE(ipc_pipe_ready_is_a_distinct_server_reply)
     REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::CapsLockChanged, 19u);
     REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::TsfDiagnosticLogChanged, 20u);
     REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::PunctuationLockChanged, 21u);
-    REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::MaxKnown, 21u);
+    REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationSpaceConvertChanged, 22u);
+    REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectDigitChanged, 24u);
+    REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectLetterChanged, 25u);
+    // Opcode 23 (the removed paired-symbol space conversion) is intentionally
+    // left unused.
+    REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::MaxKnown, 25u);
     REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::FocusSessionReady >
             Global::DataFromServerMsgTypeToTsfWorkerThread::PagingCommaPeriodChanged);
     REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::PipeReady >
@@ -75,8 +80,14 @@ TEST_CASE(ipc_pipe_ready_is_a_distinct_server_reply)
             Global::DataFromServerMsgTypeToTsfWorkerThread::CapsLockChanged);
     REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::PunctuationLockChanged >
             Global::DataFromServerMsgTypeToTsfWorkerThread::TsfDiagnosticLogChanged);
+    REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationSpaceConvertChanged >
+            Global::DataFromServerMsgTypeToTsfWorkerThread::PunctuationLockChanged);
+    REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectDigitChanged >
+            Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationSpaceConvertChanged);
+    REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectLetterChanged >
+            Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectDigitChanged);
     REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::MaxKnown,
-               Global::DataFromServerMsgTypeToTsfWorkerThread::PunctuationLockChanged);
+               Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectLetterChanged);
 }
 
 TEST_CASE(ipc_client_suspension_is_a_distinct_nonterminal_route_reset)
