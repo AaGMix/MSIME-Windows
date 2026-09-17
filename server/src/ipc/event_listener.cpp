@@ -19,6 +19,7 @@
 #include "ipc/async_request_origin.h"
 #include "ipc/candidate_ui_owner.h"
 #include "ipc/candidate_text_policy.h"
+#include "ipc/candidate_translation_policy.h"
 #include "ipc/focus_session_policy.h"
 #include "ipc/input_key_policy.h"
 #include "engine/contracts/ipc_negotiation.h"
@@ -99,6 +100,14 @@ bool g_activate_uiless = false;
 bool g_session_uiless = false;
 std::unordered_map<std::string, std::string> g_candidate_translation_glosses;
 std::string g_candidate_translation_signature;
+
+// 副候选框：Ctrl+Enter 在高亮候选有多条译义时，把候选框整个换成那几条译义，让空格/
+// 数字键像选普通候选一样选一条上屏。输入串一个字都没动，所以退出这个子模式时把原来的
+// items / 页码 / 高亮位原样放回去就行，不需要重新查词。
+bool g_translation_candidates_active = false;
+std::vector<WordItem> g_translation_saved_items;
+int g_translation_saved_page_index = 0;
+int g_translation_saved_selected_index = 0;
 
 std::shared_ptr<IInputSession> PersistentInputSession()
 {
@@ -970,10 +979,14 @@ std::string BuildCurrentCandidatePage()
     ui.clear_page();
     const SchemeType current_scheme = g_inputSession->current_scheme_type();
     const bool uppercase_all_helpcodes = current_scheme == SchemeType::Quanpin;
-    const bool show_helpcodes = (current_scheme == SchemeType::Shuangpin && GetConfiguredShuangpinHelpcodeEnabled() &&
-                                 GetConfiguredShowShuangpinHelpcodeInCandidateWindow()) ||
-                                (current_scheme == SchemeType::Quanpin && GetConfiguredQuanpinHelpcodeEnabled() &&
-                                 GetConfiguredShowQuanpinHelpcodeInCandidateWindow());
+    // 副候选框里装的是译文，不是这次输入的候选：助记码、云/AI 角标和「右侧译文」都不适用，
+    // 而且 g_candidate_translation_glosses 还留着原候选的译文，照常查会把译文再标注一遍。
+    const bool translation_page = g_translation_candidates_active;
+    const bool show_helpcodes =
+        !translation_page && ((current_scheme == SchemeType::Shuangpin && GetConfiguredShuangpinHelpcodeEnabled() &&
+                               GetConfiguredShowShuangpinHelpcodeInCandidateWindow()) ||
+                              (current_scheme == SchemeType::Quanpin && GetConfiguredQuanpinHelpcodeEnabled() &&
+                               GetConfiguredShowQuanpinHelpcodeInCandidateWindow()));
 
     const int start = ui.current_page_start();
     const int loop = ui.current_page_count();
@@ -1015,7 +1028,7 @@ std::string BuildCurrentCandidatePage()
             view.badge = " 🤖";
         view.fixed_position = item.fixed_position > 0;
         EnglishIme::TranslationQuery translation_query;
-        if (BuildTranslationQuery(item, translation_query))
+        if (!translation_page && BuildTranslationQuery(item, translation_query))
         {
             const auto gloss = g_candidate_translation_glosses.find(TranslationIdentity(translation_query));
             if (gloss != g_candidate_translation_glosses.end())
@@ -1052,6 +1065,11 @@ void PrepareCandidateTranslationRequest()
     const bool japanese = g_inputSession && g_inputSession->current_scheme_type() == SchemeType::JapaneseRomaji;
     const bool enabled = GetConfiguredCandidateTranslationsEnabled() && !IsUiLessMode() && !japanese;
     auto &ui = Global::candidate_ui;
+    if (g_translation_candidates_active)
+    {
+        // 译文页不再查译文。已经取出的 glosses 也不能清，退出子模式后原候选还要用。
+        return;
+    }
     if (!enabled || ui.items.empty())
     {
         if (!g_candidate_translation_signature.empty() || !g_candidate_translation_glosses.empty())
@@ -1487,7 +1505,9 @@ std::string EnglishRankingContextKey()
 bool ExpandCandidatesKeepingPagePosition()
 {
     auto &ui = Global::candidate_ui;
-    if (IsSpecialModeCompositionActive(GlobalIme::composition.raw_input_with_cases) || !g_inputSession ||
+    // 译文页是一份固定的列表，session 里再多的候选也不属于它。
+    if (g_translation_candidates_active ||
+        IsSpecialModeCompositionActive(GlobalIme::composition.raw_input_with_cases) || !g_inputSession ||
         !g_inputSession->expand_initial_candidates())
     {
         return false;
@@ -1583,6 +1603,7 @@ void PrepareCandidateList(uint64_t client_id, uint64_t activation_epoch);
 void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t request_id);
 void ClearState();
 void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_epoch, int forced_index_in_page = -1);
+void WaitForCandidateRenderSync(UINT keycode);
 void ApplyCloudCandidate(const std::string &candidate, const std::string &pinyin, uint64_t generation,
                          const std::optional<metasequoia::OnlineQuery> &query);
 void ApplyAiCandidate(const std::string &candidate, const std::string &identity, uint64_t generation,
@@ -3523,7 +3544,8 @@ void ApplyCloudCandidate(const std::string &candidate, const std::string &pinyin
     if (!GetConfiguredCloudCandidatesEnabled())
         return;
     // A callback can become stale after enqueueing, while earlier key tasks run.
-    if (FindCloudRequestOrigin(pinyin, generation).client_id == 0 || !g_inputSession)
+    // 译文页占用着同一份 items，异步候选必须等它退出再合并，否则会把译文冲掉。
+    if (FindCloudRequestOrigin(pinyin, generation).client_id == 0 || !g_inputSession || g_translation_candidates_active)
         return;
 
     if (candidate.empty())
@@ -3592,7 +3614,7 @@ void ApplyAiCandidate(const std::string &candidate, const std::string &identity,
     const bool helpcode_active = has_session && g_inputSession->has_active_helpcode();
     const std::string current_identity = has_session ? g_inputSession->get_pinyin_segmentation() : std::string{};
     if (!enabled || candidate.empty() || !has_session || non_pinyin || !complete || helpcode_active ||
-        GlobalIme::composition.creating_word.active || current_identity != identity)
+        GlobalIme::composition.creating_word.active || current_identity != identity || g_translation_candidates_active)
     {
         (void)0;
         return;
@@ -3642,7 +3664,7 @@ void ApplyEnglishCandidates(std::vector<WordItem> candidates, const std::string 
         !EnglishIme::IsCurrent(input, generation, dedicated_mode) || g_inputSession == nullptr ||
         (!dedicated_mode && g_inputSession->current_scheme_type() != SchemeType::Quanpin &&
          g_inputSession->current_scheme_type() != SchemeType::Shuangpin) ||
-        expected_input != input || GlobalIme::composition.creating_word.active)
+        expected_input != input || GlobalIme::composition.creating_word.active || g_translation_candidates_active)
     {
         return;
     }
@@ -3726,7 +3748,7 @@ void ApplyEnglishCandidates(std::vector<WordItem> candidates, const std::string 
 void ApplyCandidateTranslations(std::vector<EnglishIme::TranslationResult> results, uint64_t generation, bool merge)
 {
     if (!EnglishIme::IsTranslationCurrent(generation) || !GetConfiguredCandidateTranslationsEnabled() ||
-        IsUiLessMode() || g_candidate_translation_signature.empty() ||
+        IsUiLessMode() || g_candidate_translation_signature.empty() || g_translation_candidates_active ||
         (g_inputSession && g_inputSession->current_scheme_type() == SchemeType::JapaneseRomaji))
         return;
 
@@ -3760,7 +3782,7 @@ void ApplyCandidateTranslations(std::vector<EnglishIme::TranslationResult> resul
 void ApplyEmojiCandidates(std::vector<WordItem> candidates, const std::string &input, uint64_t generation)
 {
     if (!GetConfiguredEmojiMixedInputEnabled() || !EmojiIme::IsCurrent(input, generation) ||
-        g_inputSession == nullptr ||
+        g_inputSession == nullptr || g_translation_candidates_active ||
         (g_inputSession->current_scheme_type() != SchemeType::Quanpin &&
          g_inputSession->current_scheme_type() != SchemeType::Shuangpin) ||
         g_inputSession->get_pinyin_sequence_with_cases() != input || GlobalIme::composition.creating_word.active)
@@ -3805,7 +3827,7 @@ void ApplyEmojiCandidates(std::vector<WordItem> candidates, const std::string &i
 void ApplyKaomojiCandidates(std::vector<WordItem> candidates, const std::string &input, uint64_t generation)
 {
     if (!GetConfiguredKaomojiMixedInputEnabled() || !KaomojiIme::IsCurrent(input, generation) ||
-        g_inputSession == nullptr ||
+        g_inputSession == nullptr || g_translation_candidates_active ||
         (g_inputSession->current_scheme_type() != SchemeType::Quanpin &&
          g_inputSession->current_scheme_type() != SchemeType::Shuangpin) ||
         g_inputSession->get_pinyin_sequence_with_cases() != input || GlobalIme::composition.creating_word.active)
@@ -3847,6 +3869,83 @@ void ApplyKaomojiCandidates(std::vector<WordItem> candidates, const std::string 
     RefreshCandidatePageUi(true);
 }
 
+// 把候选框换回 Ctrl+Enter 之前的那一屏。译文页期间输入串一个字都没动，session 里的候选
+// 还是原来那批，所以这里直接把存下来的 items / 页码 / 高亮位放回去即可；随后这颗按键继续
+// 走它本来的流程，就像译文页从来没出现过一样。
+void ExitTranslationCandidateMode()
+{
+    if (!g_translation_candidates_active)
+    {
+        return;
+    }
+    g_translation_candidates_active = false;
+    auto &ui = Global::candidate_ui;
+    ui.set_items(std::move(g_translation_saved_items));
+    g_translation_saved_items.clear();
+    ui.page_index = g_translation_saved_page_index;
+    ui.selected_index_in_page = g_translation_saved_selected_index;
+    g_translation_saved_page_index = 0;
+    g_translation_saved_selected_index = 0;
+    RefreshCandidatePageUi(false);
+}
+
+// Ctrl+Enter：上屏高亮候选右边的那条译文（副候选）。只有一条译义就直接上屏；有多条时把
+// 候选框整个换成这几条译义，空格/数字键照常选一条上屏（见 ProcessSelectionKey 的译文分支）。
+void HandleTranslationCommitKey(uint64_t client_id, uint64_t activation_epoch, uint64_t request_id)
+{
+    // 拿不到译文时回 NavigationIgnored：这颗键已经被 TSF 吃掉了，必须给一条回复，
+    // 而且这条回复既不上屏也不给 wch 补标点。
+    Global::MsgTypeToTsf = Global::DataFromServerMsgType::NavigationIgnored;
+    const bool japanese = g_inputSession && g_inputSession->current_scheme_type() == SchemeType::JapaneseRomaji;
+    if (g_translation_candidates_active || IsUiLessMode() || japanese || !GetConfiguredCandidateTranslationsEnabled() ||
+        Global::candidate_ui.items.empty())
+    {
+        SendCurrentDataToClient(client_id, activation_epoch, request_id);
+        return;
+    }
+
+    // 和数字/空格选词一样，先等画面追上已发布的那一页，否则取到的是用户没看见的那条译文。
+    WaitForCandidateRenderSync(VK_RETURN);
+    EnsureCandidatePageReady();
+
+    auto &ui = Global::candidate_ui;
+    const size_t index = static_cast<size_t>((std::max)(0, ui.selected_index_in_page));
+    if (index >= ui.page_glosses.size())
+    {
+        SendCurrentDataToClient(client_id, activation_epoch, request_id);
+        return;
+    }
+    const auto senses = FanyImeIpc::SplitTranslationGloss(wstring_to_string(ui.page_glosses[index]));
+    if (senses.empty())
+    {
+        SendCurrentDataToClient(client_id, activation_epoch, request_id);
+        return;
+    }
+
+    if (senses.size() == 1)
+    {
+        Global::MsgTypeToTsf = Global::DataFromServerMsgType::CommitExactText;
+        ui.selected_text = string_to_wstring(CandidateTextForOutput(senses.front()));
+        // Normal/CommitExactText 的回复由 SendCurrentDataToClient 负责收尾（ClearState）。
+        SendCurrentDataToClient(client_id, activation_epoch, request_id);
+        return;
+    }
+
+    g_translation_saved_items = ui.items;
+    g_translation_saved_page_index = ui.page_index;
+    g_translation_saved_selected_index = ui.selected_index_in_page;
+    std::vector<WordItem> translation_items;
+    translation_items.reserve(senses.size());
+    for (const auto &sense : senses)
+    {
+        translation_items.emplace_back(std::string{}, sense, 0, CandidateSource::Fallback);
+    }
+    ui.set_items(std::move(translation_items));
+    g_translation_candidates_active = true;
+    RefreshCandidatePageUi(true);
+    SendCurrentDataToClient(client_id, activation_epoch, request_id);
+}
+
 /**
  * @brief
  *
@@ -3876,6 +3975,25 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         SetEnglishInputMode(!g_english_input_mode);
         ClearState();
         return;
+    }
+
+    if (FanyImeIpc::IsTranslationCommitKey(Global::Keycode, Global::ModifiersDown))
+    {
+        HandleTranslationCommitKey(client_id, activation_epoch, request_id);
+        return;
+    }
+    // 译文页只认选词和翻页/移动高亮。其它任何键都先把候选框换回原来那一屏，然后照常处理，
+    // 所以退格、字母、回车、标点在译文页上的表现和没按过 Ctrl+Enter 时完全一致。
+    if (g_translation_candidates_active)
+    {
+        // Shift 放行是给 Shift+Tab 上一页留的；Ctrl/Alt 组合一律退出。
+        const bool stays_on_translation_page =
+            (Global::ModifiersDown & 0b00000110u) == 0 &&
+            (IsSelectionKey(Global::Keycode) || IsCandidateNavigationKey(Global::Keycode));
+        if (!stays_on_translation_page)
+        {
+            ExitTranslationCandidateMode();
+        }
     }
 
     if (g_r_mode_triggered && !GlobalIme::composition.raw_input_with_cases.empty() &&
@@ -4309,6 +4427,10 @@ void ClearState()
     UpdateEnglishInput("");
     g_candidate_translation_signature.clear();
     g_candidate_translation_glosses.clear();
+    g_translation_candidates_active = false;
+    g_translation_saved_items.clear();
+    g_translation_saved_page_index = 0;
+    g_translation_saved_selected_index = 0;
     EnglishIme::ClearTranslations();
     CloudTranslation::Clear();
     UpdateEmojiInput("");
@@ -4405,6 +4527,32 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
 
     static bool isNeedUpdateWeight = false;
     isNeedUpdateWeight = false;
+
+    if (g_translation_candidates_active)
+    {
+        // 译文页：选中的就是要上屏的完整文本，既不调频也不造词，更不能把译文当候选词学进库。
+        if (forced_index_in_page < 0 && (keycode == VK_SPACE || (keycode >= '1' && keycode <= '9')))
+        {
+            WaitForCandidateRenderSync(keycode);
+        }
+        EnsureCandidatePageReady();
+        auto &ui = Global::candidate_ui;
+        const int index = forced_index_in_page >= 0
+                              ? forced_index_in_page
+                              : (keycode == VK_SPACE ? ui.selected_index_in_page : static_cast<int>(keycode - '1'));
+        if (index < 0 || static_cast<size_t>(index) >= ui.page_words.size())
+        {
+            // 这一页没有这个序号：什么都不上屏，译文页原样留着。走 SELECT_BY_NUMBER 的
+            // TSF 路径只认 Normal / OutofRange 两种回复，这里必须是后者。
+            Global::MsgTypeToTsf = Global::DataFromServerMsgType::OutofRange;
+            return;
+        }
+        // 同理，上屏必须回 Normal：_HandleCandidateFinalize 只在 Normal 时写入文本，
+        // 而且它写的就是 candidate_string 本身，不会再补标点。
+        Global::MsgTypeToTsf = Global::DataFromServerMsgType::Normal;
+        ui.selected_text = ui.page_words[index];
+        return;
+    }
 
     // Keyboard selection must match the painted page. Mouse clicks carry an explicit index
     // (forced_index_in_page >= 0) and keep the old behavior: waiting cannot restore the intent of a

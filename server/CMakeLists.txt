@@ -171,6 +171,7 @@ set(SRC_FILES
     "./src/english/english_ime.cpp"
     "./src/english/english_ime.h"
     "./src/global/globals.h"
+    "./src/ipc/candidate_translation_policy.h"
     "./src/ipc/event_listener.cpp"
     "./src/ipc/event_listener.h"
     "./src/ipc/ipc.cpp"

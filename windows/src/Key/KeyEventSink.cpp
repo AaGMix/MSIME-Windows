@@ -214,6 +214,15 @@ bool IsEnglishInputModeToggle(UINT code, UINT modifiers)
     return code == 'E' && (modifiers & 0b00000111u) == 0b00000011u;
 }
 
+// Ctrl+Enter, without Shift/Alt/Windows: commit the translation shown to the right of the
+// highlighted candidate. The Server decides what that is (one translation commits directly,
+// several open a second candidate list), so this only has to reach it as a candidate key.
+bool IsTranslationCommitShortcut(UINT code, UINT modifiers)
+{
+    return code == VK_RETURN && (modifiers & 0b00000111u) == 0b00000010u && (GetAsyncKeyState(VK_LWIN) & 0x8000) == 0 &&
+           (GetAsyncKeyState(VK_RWIN) & 0x8000) == 0;
+}
+
 bool IsCharacterSetInputModeToggle(UINT code, UINT modifiers)
 {
     return FanyImeProtocol::IsCharacterSetShortcut(code, modifiers) && (GetAsyncKeyState(VK_LWIN) & 0x8000) == 0 &&
@@ -744,6 +753,18 @@ BOOL CMetasequoiaIME::_IsKeyEaten(         //
             return TRUE;
         }
 
+        // 候选框开着的时候 Ctrl+Enter 上屏高亮候选的译文；没有候选框时它仍然属于应用。
+        if (!freshCompositionState && _candidateMode != CANDIDATE_NONE &&
+            IsTranslationCommitShortcut(*pCodeOut, shortcutModifiers))
+        {
+            if (pKeyState)
+            {
+                pKeyState->Category = CATEGORY_CANDIDATE;
+                pKeyState->Function = FUNCTION_SERVER_CANDIDATE_KEY;
+            }
+            return TRUE;
+        }
+
         // Other Ctrl/Alt/Windows combinations belong to the application.
         // IME-owned shortcuts are handled before this normal key classifier.
         if ((shortcutModifiers & 0b00000110u) != 0 || (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
@@ -1221,6 +1242,17 @@ bool CMetasequoiaIME::_ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM
     {
         keyState->Category = CATEGORY_COMPOSING;
         keyState->Function = FUNCTION_CANCEL;
+        return true;
+    }
+
+    // 同上：译文上屏也要在这条 Ctrl/Alt 拦截之前分类，否则这颗键会被交还给应用。
+    const bool projectedCandidateActive =
+        _deferredKeyProjectionValid ? _deferredProjectedCandidateActive : (_candidateMode == CANDIDATE_ORIGINAL);
+    if (projectedImeOpen && !_IsKeyboardDisabled() && projectedCandidateActive &&
+        IsTranslationCommitShortcut(*classifiedCode, capturedModifiers))
+    {
+        keyState->Category = CATEGORY_CANDIDATE;
+        keyState->Function = FUNCTION_SERVER_CANDIDATE_KEY;
         return true;
     }
 
