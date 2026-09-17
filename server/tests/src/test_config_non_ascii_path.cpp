@@ -38,6 +38,23 @@ class ScopedEnv
     bool had_previous_ = false;
 };
 
+// LOCALAPPDATA alone no longer decides where the config lives: an installed product records its
+// data directory in HKLM, which outranks the profile. Pin the config directory explicitly so these
+// cases stay isolated on a machine that has the IME installed.
+class ScopedConfigLocation
+{
+  public:
+    explicit ScopedConfigLocation(const std::filesystem::path &local_app_data)
+        : local_app_data_(L"LOCALAPPDATA", local_app_data.wstring()),
+          config_dir_(L"METASEQUOIA_IME_CONFIG_DIR", (local_app_data / L"metasequoiaime").wstring())
+    {
+    }
+
+  private:
+    ScopedEnv local_app_data_;
+    ScopedEnv config_dir_;
+};
+
 std::filesystem::path MakeProfileRoot()
 {
     return std::filesystem::temp_directory_path() / (L"msime-配置测试-" + std::to_wstring(GetCurrentProcessId()));
@@ -79,7 +96,7 @@ TEST_CASE(config_round_trips_under_non_ascii_profile_path)
     SeedTemplate(data_dir);
 
     {
-        ScopedEnv local_app_data_env(L"LOCALAPPDATA", local_app_data.wstring());
+        ScopedConfigLocation local_app_data_env(local_app_data);
 
         InitImeConfig();
         REQUIRE(fs::exists(data_dir / L"config.toml"));
@@ -124,7 +141,7 @@ TEST_CASE(config_recovers_unparseable_file_and_saves)
     WriteText(data_dir / L"config.base.toml", ReadText(data_dir / L"config.default.toml"));
 
     {
-        ScopedEnv local_app_data_env(L"LOCALAPPDATA", local_app_data.wstring());
+        ScopedConfigLocation local_app_data_env(local_app_data);
         InitImeConfig();
         REQUIRE(SetConfiguredInputMode("japanese"));
         InitImeConfig();
@@ -146,7 +163,7 @@ TEST_CASE(config_overwrites_readonly_file)
     SeedTemplate(data_dir);
 
     {
-        ScopedEnv local_app_data_env(L"LOCALAPPDATA", local_app_data.wstring());
+        ScopedConfigLocation local_app_data_env(local_app_data);
         InitImeConfig();
         const fs::path config_path = data_dir / L"config.toml";
         REQUIRE(SetFileAttributesW(config_path.c_str(), FILE_ATTRIBUTE_READONLY));
@@ -196,7 +213,7 @@ TEST_CASE(config_migrates_legacy_acp_mangled_path)
     WriteText(mangled_dir / L"config.toml", leftover);
 
     {
-        ScopedEnv local_app_data_env(L"LOCALAPPDATA", local_app_data.wstring());
+        ScopedConfigLocation local_app_data_env(local_app_data);
         InitImeConfig();
         REQUIRE_EQ(GetConfiguredInputMode(), std::string("japanese"));
         REQUIRE(SetConfiguredInputScheme("wubi"));
@@ -229,7 +246,7 @@ TEST_CASE(quanpin_autocorrect_keys_persist_and_legacy_key_stays_ignored)
     REQUIRE(!ec);
 
     {
-        ScopedEnv local_app_data_env(L"LOCALAPPDATA", local_app_data.wstring());
+        ScopedConfigLocation local_app_data_env(local_app_data);
 
         InitImeConfig();
         REQUIRE(fs::exists(data_dir / L"config.toml"));
@@ -294,7 +311,7 @@ TEST_CASE(fuzzy_pinyin_rules_default_to_all_off)
     SeedTemplate(data_dir);
 
     {
-        ScopedEnv local_app_data_env(L"LOCALAPPDATA", local_app_data.wstring());
+        ScopedConfigLocation local_app_data_env(local_app_data);
 
         InitImeConfig();
         REQUIRE(fs::exists(data_dir / L"config.toml"));
@@ -349,7 +366,7 @@ TEST_CASE(fuzzy_pinyin_rule_keys_round_trip)
     SeedTemplate(data_dir);
 
     {
-        ScopedEnv local_app_data_env(L"LOCALAPPDATA", local_app_data.wstring());
+        ScopedConfigLocation local_app_data_env(local_app_data);
 
         InitImeConfig();
         REQUIRE_EQ(GetConfiguredFuzzyPinyinRuleStates().rules, 0u);
@@ -397,7 +414,7 @@ TEST_CASE(fuzzy_pinyin_master_switch_gates_aggregate_only)
     SeedTemplate(data_dir);
 
     {
-        ScopedEnv local_app_data_env(L"LOCALAPPDATA", local_app_data.wstring());
+        ScopedConfigLocation local_app_data_env(local_app_data);
 
         InitImeConfig();
         REQUIRE(SetConfiguredFuzzyPinyinEnabled(true)); // 首次启用：播种全部规则
@@ -446,7 +463,7 @@ TEST_CASE(fuzzy_pinyin_first_enable_seeds_rules_once)
     SeedTemplate(data_dir);
 
     {
-        ScopedEnv local_app_data_env(L"LOCALAPPDATA", local_app_data.wstring());
+        ScopedConfigLocation local_app_data_env(local_app_data);
 
         InitImeConfig();
         REQUIRE(!GetConfiguredFuzzyPinyinEnabled());
@@ -532,7 +549,7 @@ TEST_CASE(smart_punctuation_conversion_keys_default_and_round_trip)
     // 无文件形态：配置目录里既没有 config.toml 也没有模板，InitImeConfig 读不到文件，
     // 全局量保持静态默认——五个键全部为关，不依赖任何模板内容。
     {
-        ScopedEnv local_app_data_env(L"LOCALAPPDATA", local_app_data.wstring());
+        ScopedConfigLocation local_app_data_env(local_app_data);
         InitImeConfig();
         REQUIRE(!GetConfiguredSmartPunctuationEnabled());
         REQUIRE(!GetConfiguredSmartPunctuationSpaceConvertEnabled());
@@ -544,7 +561,7 @@ TEST_CASE(smart_punctuation_conversion_keys_default_and_round_trip)
     SeedTemplate(data_dir);
 
     {
-        ScopedEnv local_app_data_env(L"LOCALAPPDATA", local_app_data.wstring());
+        ScopedConfigLocation local_app_data_env(local_app_data);
 
         // 出厂模板形态：五个键都从模板读出，缺键时 value_or 与模板一致（全关）。
         InitImeConfig();

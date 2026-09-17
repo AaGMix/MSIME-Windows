@@ -14,6 +14,9 @@ namespace CommonUtils
 {
 std::wstring get_local_appdata_path_w();
 std::wstring get_ime_data_path_w();
+// Directory holding config.toml. Same as the data directory unless METASEQUOIA_IME_CONFIG_DIR
+// redirects it (tests only).
+std::wstring get_ime_config_dir_w();
 void ensure_ime_data_writable();
 // WebView2 cache lives under ProgramData so Medium-IL Edge children can write
 // it whether the host is a normal user or elevated. Falls back to LocalAppData.

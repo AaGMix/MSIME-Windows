@@ -10,7 +10,8 @@ std::string wstring_to_string(const std::wstring &wstr);
 std::string to_lower_copy(const std::string &str);
 std::wstring GetCurrentProcessName();
 std::string::size_type count_utf8_chars(const std::string &str);
-// Read input.default_ime_mode from %LOCALAPPDATA%\metasequoiaime\config.toml.
+// Read input.default_ime_mode from the shared config.toml in the IME data directory
+// (%LOCALAPPDATA%\metasequoiaime by default; the installer may place it on another volume).
 // Returns TRUE for Chinese (default), FALSE for English.
 BOOL ReadConfiguredDefaultImeModeChinese();
 // Read input.mode from the shared config. TRUE when Japanese input is active.

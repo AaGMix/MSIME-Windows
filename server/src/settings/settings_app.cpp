@@ -265,8 +265,7 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
     const NiuTransConfig &niutrans = GetConfiguredNiuTrans();
     const FrequencyAdjustmentConfig &frequency = GetConfiguredFrequencyAdjustment();
     const FloatingToolbarItemsConfig &toolbar = GetConfiguredFloatingToolbarItems();
-    const std::filesystem::path skins_root =
-        std::filesystem::path(CommonUtils::get_local_appdata_path_w()) / GlobalIme::AppName / L"skins";
+    const std::filesystem::path skins_root = std::filesystem::path(CommonUtils::get_ime_data_path_w()) / L"skins";
     if (refresh_skin_catalog)
     {
         g_candidate_skin_catalog = CandidateSkinCatalog::Scan(skins_root);
@@ -924,8 +923,7 @@ void HandleWebMessage(HWND hwnd, ICoreWebView2WebMessageReceivedEventArgs *args)
         }
         else if (type == "openSkinDirectory")
         {
-            const std::filesystem::path skins =
-                std::filesystem::path(CommonUtils::get_local_appdata_path_w()) / GlobalIme::AppName / L"skins";
+            const std::filesystem::path skins = std::filesystem::path(CommonUtils::get_ime_data_path_w()) / L"skins";
             std::error_code ec;
             std::filesystem::create_directories(skins, ec);
             if (!ec)
@@ -1086,12 +1084,11 @@ HRESULT OnControllerCreated(HWND hwnd, HRESULT result, ICoreWebView2CompositionC
 
     if (SUCCEEDED(g_webview.As(&g_webview3)))
     {
-        const std::filesystem::path assets = std::filesystem::path(CommonUtils::get_local_appdata_path_w()) /
-                                             GlobalIme::AppName / "html/webview2/settings/ime-settings/dist";
+        const std::filesystem::path assets =
+            std::filesystem::path(CommonUtils::get_ime_data_path_w()) / "html/webview2/settings/ime-settings/dist";
         g_webview3->SetVirtualHostNameToFolderMapping(L"imesettings", assets.c_str(),
                                                       COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
-        const std::filesystem::path skins =
-            std::filesystem::path(CommonUtils::get_local_appdata_path_w()) / GlobalIme::AppName / L"skins";
+        const std::filesystem::path skins = std::filesystem::path(CommonUtils::get_ime_data_path_w()) / L"skins";
         std::error_code ec;
         std::filesystem::create_directories(skins, ec);
         g_webview3->SetVirtualHostNameToFolderMapping(L"candidate-skins", skins.c_str(),

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstdlib>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -54,30 +55,98 @@ bool ParseTomlBool(const std::string &raw, bool fallback)
     return fallback;
 }
 
-std::filesystem::path SharedConfigPath()
+// Build a wide path and open it as such. A narrow std::string path would be opened through the
+// ANSI code page, which cannot round-trip a non-ASCII (e.g. Chinese) user profile path on a
+// non-UTF-8 system, so the TSF would read the wrong file or fail to find the config.
+// GetEnvironmentVariableW rather than _wgetenv: the CRT variant is deprecated (C4996) because
+// it hands out a pointer into a buffer another thread can invalidate, and this DLL runs inside
+// arbitrary hosts.
+std::wstring EnvironmentValue(const wchar_t *name)
 {
-    // Build a wide path and open it as such. A narrow std::string path would be opened through the
-    // ANSI code page, which cannot round-trip a non-ASCII (e.g. Chinese) user profile path on a
-    // non-UTF-8 system, so the TSF would read the wrong file or fail to find the config.
-    // GetEnvironmentVariableW rather than _wgetenv: the CRT variant is deprecated (C4996) because
-    // it hands out a pointer into a buffer another thread can invalidate, and this DLL runs inside
-    // arbitrary hosts.
-    std::wstring localAppDataPath(MAX_PATH, L'\0');
-    DWORD length =
-        GetEnvironmentVariableW(L"LOCALAPPDATA", localAppDataPath.data(), static_cast<DWORD>(localAppDataPath.size()));
-    if (length > localAppDataPath.size())
+    std::wstring value(MAX_PATH, L'\0');
+    DWORD length = GetEnvironmentVariableW(name, value.data(), static_cast<DWORD>(value.size()));
+    if (length > value.size())
     {
         // The variable is longer than MAX_PATH; length is now the required size including the NUL.
-        localAppDataPath.resize(length);
-        length = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppDataPath.data(),
-                                         static_cast<DWORD>(localAppDataPath.size()));
+        value.resize(length);
+        length = GetEnvironmentVariableW(name, value.data(), static_cast<DWORD>(value.size()));
     }
-    if (length == 0 || length > localAppDataPath.size())
+    if (length == 0 || length > value.size())
     {
         return {};
     }
-    localAppDataPath.resize(length);
-    return std::filesystem::path(localAppDataPath) / L"metasequoiaime" / L"config.toml";
+    value.resize(length);
+    return value;
+}
+
+// The data directory the user picked during setup. This DLL is also built 32-bit and loads into
+// 32-bit hosts, so KEY_WOW64_64KEY is mandatory: without it the read is redirected to
+// Wow6432Node, where the 64-bit setup never wrote anything.
+std::wstring InstalledDataDir()
+{
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Metasequoia\\MetasequoiaIME", 0,
+                      KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS)
+    {
+        return {};
+    }
+
+    DWORD type = 0;
+    DWORD bytes = 0;
+    if (RegQueryValueExW(key, L"DataDir", nullptr, &type, nullptr, &bytes) != ERROR_SUCCESS || type != REG_SZ ||
+        bytes < sizeof(wchar_t))
+    {
+        RegCloseKey(key);
+        return {};
+    }
+
+    std::wstring value(bytes / sizeof(wchar_t), L'\0');
+    const LSTATUS status =
+        RegQueryValueExW(key, L"DataDir", nullptr, &type, reinterpret_cast<LPBYTE>(value.data()), &bytes);
+    RegCloseKey(key);
+    if (status != ERROR_SUCCESS)
+    {
+        return {};
+    }
+    // REG_SZ carries no guaranteed terminator and the stored length may or may not include one.
+    value.resize(std::wcslen(value.c_str()));
+    return value;
+}
+
+// Same resolution order as the Server (server/src/utils/ime_paths.cpp) and the engine
+// (engine/core/data_path.h): environment override, then the location chosen during setup, then
+// the default under LocalAppData. All three must agree or the TSF reads a different config than
+// the one the Server writes.
+std::filesystem::path SharedDataDirectory()
+{
+    const std::wstring fromEnv = EnvironmentValue(L"METASEQUOIA_IME_DATA_DIR");
+    if (!fromEnv.empty() && std::filesystem::path(fromEnv).is_absolute())
+    {
+        return fromEnv;
+    }
+
+    const std::wstring installed = InstalledDataDir();
+    if (!installed.empty() && std::filesystem::path(installed).is_absolute())
+    {
+        return installed;
+    }
+
+    const std::wstring localAppData = EnvironmentValue(L"LOCALAPPDATA");
+    if (localAppData.empty())
+    {
+        return {};
+    }
+    return std::filesystem::path(localAppData) / L"metasequoiaime";
+}
+
+std::filesystem::path SharedConfigPath()
+{
+    const std::filesystem::path directory = SharedDataDirectory();
+    if (directory.empty())
+    {
+        return {};
+    }
+    return directory / L"config.toml";
 }
 } // namespace
 

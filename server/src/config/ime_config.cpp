@@ -1582,7 +1582,7 @@ void InitImeConfig()
     // Build the path from the wide accessor: std::filesystem::path(std::string) decodes with the
     // system ANSI code page, which corrupts a non-ASCII (e.g. Chinese) user profile path on a
     // non-UTF-8 ACP machine and makes every config read/write fail ("设置保存失败").
-    g_config_path = std::filesystem::path(CommonUtils::get_ime_data_path_w()) / L"config.toml";
+    g_config_path = std::filesystem::path(CommonUtils::get_ime_config_dir_w()) / L"config.toml";
     std::error_code create_error;
     std::filesystem::create_directories(g_config_path.parent_path(), create_error);
     CommonUtils::ensure_ime_data_writable();

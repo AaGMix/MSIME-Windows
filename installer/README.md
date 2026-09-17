@@ -31,6 +31,16 @@ pwsh -File ./Prepare-PackageFiles.ps1 -TargetVersion 1.2.3 -RepoRoot .. `
 - 词库不再从相邻的 `MetasequoiaImeDict` 工作目录取，CI 从产品锁指定的 `dict-*` release 下载并校验 SHA256，再放到脚本期望的位置
 - `windows-2025` runner 自带 Inno Setup 6.7.1，`Compile-Installer.ps1` 能自己找到 `ISCC.exe`。但它不带 `ChineseSimplified.isl`，`msime_setup.iss` 的 `[Languages]` 段依赖那个文件，所以 workflow 会在编译前按固定 revision 和校验和把它装进去
 
+## 数据目录
+
+程序本体固定装在 `Program Files\metasequoiaime`（Server 带 `uiAccess=true`，只有装在受信任目录里这个标志才生效），**用户数据目录可以在安装向导里改**：词库、`config.toml`、用户词库、皮肤和前端资源都在那里，整包几百 MB，装 C 盘吃紧的用户可以放到别的盘。
+
+- 默认值 `%LOCALAPPDATA%\metasequoiaime`；升级安装时默认沿用上次的位置
+- 选择写进 `HKLM\Software\Metasequoia\MetasequoiaIME` 的 `DataDir`。这是运行期唯一的权威来源：Server（`server/src/utils/ime_paths.cpp`）、TSF DLL（`windows/src/Utils/FanyUtils.cpp`）和引擎（`engine/core/data_path.h`）各自按 `METASEQUOIA_IME_DATA_DIR` 环境变量 → 该注册表值 → `%LOCALAPPDATA%\metasequoiaime` 的顺序解析，三处必须保持一致。32 位 TSF DLL 用 `KEY_WOW64_64KEY` 读，所以这个值必须写在 64 位视图里
+- 升级时改了位置，安装器会把用户词库（`msime_user.db` 及其 WAL/SHM）、`config.toml`、`config.base.toml` 和 `skins\` 搬到新目录，再删掉旧目录；词库和前端资源由本次安装重新写入，不搬
+- 安装器在数据目录里放一个 `.metasequoiaime-data` 标记文件。覆盖安装的清理和卸载的整目录删除**只在看到这个标记（或目录就是历史默认位置）时才执行**——用户可能把数据目录指到一个本来就有自己文件的文件夹
+- 静默安装用 `/DATADIR="D:\MetasequoiaIME"` 指定；该值在 `PrepareToInstall` 里和向导页走同一套校验
+
 ## 依赖
 
 - Windows 10/11，PowerShell 7（`pwsh`）
