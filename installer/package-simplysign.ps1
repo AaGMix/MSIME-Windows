@@ -125,36 +125,77 @@ function Get-SimplySignCertificate {
 
 function Invoke-SimplySign {
     param(
-        [Parameter(Mandatory)][string]$LiteralPath,
+        [Parameter(Mandatory)][string[]]$LiteralPath,
         [Parameter(Mandatory)]$Certificate
     )
 
-    if (-not (Test-Path -LiteralPath $LiteralPath -PathType Leaf)) {
-        throw "待签名文件不存在：$LiteralPath"
-    }
+    # 最外层的 @() 不能省：只有一个待签文件时管道结果是标量，.Count 在严格模式下会报错。
+    $resolvedPaths = @(
+        @(
+            foreach ($item in $LiteralPath) {
+                if (-not (Test-Path -LiteralPath $item -PathType Leaf)) {
+                    throw "待签名文件不存在：$item"
+                }
+                (Resolve-Path -LiteralPath $item).Path
+            }
+        ) | Sort-Object -Unique
+    )
 
-    $resolvedPath = (Resolve-Path -LiteralPath $LiteralPath).Path
     $thumbprint = $Certificate.Thumbprint -replace '\s', ''
-    Write-Host "正在使用 SimplySign 签名：$resolvedPath"
-    & $script:signTool sign /sha1 $thumbprint /s My /fd sha256 /tr $TimestampUrl /td sha256 /v $resolvedPath
+    Write-Host "正在使用 SimplySign 签名 $($resolvedPaths.Count) 个文件："
+    $resolvedPaths | ForEach-Object { Write-Host "  $_" }
+
+    # 一次 signtool 调用签完所有文件。SimplySign 可能对每次调用弹一次 PIN，逐个文件调用会让
+    # 整包签名变成十几次手机确认。签名配额按文件计，合并调用不会多花配额。
+    & $script:signTool sign /sha1 $thumbprint /s My /fd sha256 /tr $TimestampUrl /td sha256 /v @($resolvedPaths)
     if ($LASTEXITCODE -ne 0) {
-        throw "signtool.exe 签名失败，退出码：$LASTEXITCODE；文件：$resolvedPath"
+        throw "signtool.exe 签名失败，退出码：$LASTEXITCODE"
     }
 
-    & $script:signTool verify /pa /all /v $resolvedPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "signtool.exe 签名校验失败，退出码：$LASTEXITCODE；文件：$resolvedPath"
+    foreach ($resolvedPath in $resolvedPaths) {
+        & $script:signTool verify /pa /all /v $resolvedPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "signtool.exe 签名校验失败，退出码：$LASTEXITCODE；文件：$resolvedPath"
+        }
+
+        $signature = Get-AuthenticodeSignature -LiteralPath $resolvedPath
+        if (-not $signature.SignerCertificate -or
+            (($signature.SignerCertificate.Thumbprint -replace '\s', '') -ine $thumbprint)) {
+            throw "签名证书指纹与选择的 SimplySign 证书不一致：$resolvedPath"
+        }
+        if (-not $signature.TimeStamperCertificate) {
+            throw "签名中没有可信时间戳：$resolvedPath"
+        }
+        Write-Host "签名有效：$resolvedPath"
+    }
+}
+
+# 包内所有随安装包落到用户磁盘上的 EXE/DLL。只签 MetasequoiaImeServer.exe 是不够的：
+# 未签名的辅助进程（设置页、表情面板、看门狗等）和随包分发的 DLL 会被 Microsoft Defender
+# 的 SmartScreen/信誉判定拦下，而它们是用户实际会启动的程序。
+function Get-PayloadBinaryPaths {
+    $packageDirectories = @(
+        (Join-Path $PSScriptRoot 'server_exe'),
+        (Join-Path $PSScriptRoot 'tsf_dll')
+    )
+    foreach ($directory in $packageDirectories) {
+        if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+            throw "待签名目录不存在，请先运行 Prepare-PackageFiles.ps1：$directory"
+        }
     }
 
-    $signature = Get-AuthenticodeSignature -LiteralPath $resolvedPath
-    if (-not $signature.SignerCertificate -or
-        (($signature.SignerCertificate.Thumbprint -replace '\s', '') -ine $thumbprint)) {
-        throw "签名证书指纹与选择的 SimplySign 证书不一致：$resolvedPath"
+    $targets = @(
+        @(
+            foreach ($directory in $packageDirectories) {
+                Get-ChildItem -LiteralPath $directory -Recurse -File |
+                    Where-Object { $_.Extension -in @('.exe', '.dll') }
+            }
+        ) | Sort-Object FullName -Unique
+    )
+    if ($targets.Count -eq 0) {
+        throw '没有找到待签名的 EXE 或 DLL，请先运行 Prepare-PackageFiles.ps1。'
     }
-    if (-not $signature.TimeStamperCertificate) {
-        throw "签名中没有可信时间戳：$resolvedPath"
-    }
-    Write-Host "签名有效：$($signature.SignerCertificate.Subject)"
+    return @($targets.FullName)
 }
 
 # Fail before compiling anything if SimplySign is not connected. Merely having its desktop process
@@ -218,12 +259,10 @@ try {
         -NoticesDirectory . `
         -HelpCodeDirectory engine/helpcode
 
-    # This is the only payload binary requiring a real signature: uiAccess=true is ignored by
-    # Windows unless the executable carries a trusted Authenticode signature. The outer installer is
-    # signed after compilation. This deliberately matches the formal release workflow.
-    Invoke-SimplySign `
-        -LiteralPath (Join-Path $PSScriptRoot 'server_exe\MetasequoiaImeServer.exe') `
-        -Certificate $certificate
+    # 整包签名，而不只是 MetasequoiaImeServer.exe。它是唯一一个「必须」签的——uiAccess=true
+    # 没有可信签名就会被 Windows 忽略——但其余辅助进程和 DLL 不签名会被 Defender 拦截，
+    # 用户看到的就是输入法装完之后某个面板打不开。外层安装包在编译之后单独签。
+    Invoke-SimplySign -LiteralPath (Get-PayloadBinaryPaths) -Certificate $certificate
 
     & (Join-Path $PSScriptRoot 'Compile-Installer.ps1') -IsccPath $IsccPath
     if (-not (Test-Path -LiteralPath $compiledInstallerPath -PathType Leaf)) {

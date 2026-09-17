@@ -2,7 +2,7 @@
 
 本目录的脚本从 Windows 合仓目录收集产物、签名、用 Inno Setup 打成安装包。它服务两条流程：
 
-- **正式发布**：由 `MSIME-Windows` 的 release workflow 驱动，用真实证书签名 `MetasequoiaImeServer.exe`（保证 `uiAccess` 生效）和最终安装包；产物是挂在 Release 上的 `MetasequoiaIME_Setup_v<版本>.exe`，并携带与 Release 二进制匹配的 PDB 符号文件。见下面「CI 契约」
+- **正式发布**：由 `MSIME-Windows` 的 release workflow 驱动，用真实证书签名包内全部 EXE/DLL 和最终安装包；产物是挂在 Release 上的 `MetasequoiaIME_Setup_v<版本>.exe`，并携带与 Release 二进制匹配的 PDB 符号文件。见下面「CI 契约」
 - **本地测试**：手工跑，用本机自签名证书，用来在自己机器上验证安装流程。本文其余部分讲的是这条
 
 版本号不是固定的，由 `Prepare-PackageFiles.ps1` 的 `-TargetVersion` 决定，默认 `0.0.1`；正式发布时 CI 传入真实版本。
@@ -86,9 +86,16 @@ pwsh -File .\package-simplysign.ps1 1.2.3
 
 命令行版本会同时写入本轮 TSF DLL 的版本资源和安装包元数据（脚本结束后恢复源码模板）。脚本会
 增量编译 TSF、Server 和设置页，制作完整包，用 `http://time.certum.pl` 的 RFC 3161 时间戳签名
-`MetasequoiaImeServer.exe`（使 `uiAccess=true` 生效），编译 Inno Setup 安装包，再签名并校验
-最终安装包。产物位于 `Output\MetasequoiaIME_Setup_v1.2.3.exe`；脚本只产出文件，不会自动启动
+`server_exe\` 和 `tsf_dll\` 下的**全部 EXE/DLL**，编译 Inno Setup 安装包，再签名并校验最终
+安装包。产物位于 `Output\MetasequoiaIME_Setup_v1.2.3.exe`；脚本只产出文件，不会自动启动
 安装程序。
+
+**为什么整包都要签。** `MetasequoiaImeServer.exe` 是唯一一个技术上必须签的——`uiAccess=true`
+没有可信 Authenticode 签名就会被 Windows 忽略。但其余辅助进程（设置页、表情面板、手写面板、
+键盘面板、看门狗、词库回放）和随包分发的 DLL 不签名会被 Microsoft Defender 按信誉拦下，
+用户看到的现象是输入法装完了、某个面板却打不开。所有文件在一次 `signtool sign` 调用里签完：
+SimplySign 可能对每次调用弹一次 PIN，逐个文件调用会变成十几次手机确认；签名配额按文件计，
+合并调用不会多花配额。
 
 默认不把 PDB 放入安装包；需要与正式 CI 一致的符号包时加 `-IncludeSymbols`。如果 SimplySign
 同时暴露了多张有效的 Certum Code Signing 证书，脚本会列出它们并要求用
