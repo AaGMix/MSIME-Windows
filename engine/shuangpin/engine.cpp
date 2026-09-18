@@ -195,9 +195,9 @@ int ShuangpinEngine::insert_word_to_series_cache(const std::string &pinyin, cons
 }
 
 int ShuangpinEngine::insert_word_to_active_helpcode_cache(const std::string &pinyin, const std::string &word,
-                                                          CandidateSource source)
+                                                          CandidateSource source, const std::string &double_helpcodes)
 {
-    return dictionary_.insert_word_to_active_helpcode_cache(pinyin, word, source);
+    return dictionary_.insert_word_to_active_helpcode_cache(pinyin, word, source, double_helpcodes);
 }
 
 std::string ShuangpinEngine::search_sentence_from_ime_engine(const std::string &user_pinyin)
