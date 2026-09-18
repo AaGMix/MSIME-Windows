@@ -476,6 +476,8 @@ int run_test()
             const auto first = session.advance_composition_after_selection("xi", "西", "xi");
             require(first.continues_composition && session.get_pinyin_sequence() == "te'le",
                     "Partial selection lost the remaining manually delimited input.");
+            require(first.consumed_raw_input_with_cases == "xi",
+                    "Partial selection did not report the raw input it consumed.");
             const auto progress = session.update_creating_word_progress("", "", "西", first);
             require(!progress.completed && progress.pinyin == "xi" && progress.preedit == "西te'le",
                     "Partial selection produced the wrong phrase progress.");
@@ -488,6 +490,8 @@ int run_test()
                         modern_query->cache_key == host_query.cache_key,
                     "Portable and asynchronous hosts produced different online queries.");
             const auto last = session.advance_composition_after_selection("te'le", "特乐", "te'le");
+            require(!last.continues_composition && last.consumed_raw_input_with_cases == "te'le",
+                    "The final selection did not report the raw input it consumed.");
             const auto complete = session.update_creating_word_progress(progress.pinyin, progress.word, "特乐", last);
             require(complete.completed && complete.can_store && complete.pinyin == "xi'te'le" &&
                         complete.word == "西特乐",
@@ -499,6 +503,26 @@ int run_test()
             session.reset_state();
             session.recompute_candidates();
             require(!session.has_composition(), "Reset left a pending host composition alive.");
+        }
+
+        // A host that retracts a selected segment replays the reported spelling,
+        // so it must keep the casing the user typed rather than reuse the
+        // normalized pre-selection raw.
+        {
+            metasequoia::InputSession session(SchemeType::Quanpin);
+            session.set_pinyin_sequence("xi'te'le");
+            session.set_pinyin_sequence_with_cases("Xi'Te'Le");
+            session.recompute_candidates();
+            const auto transition = session.advance_composition_after_selection("xi", "西", "xi");
+            require(transition.continues_composition && transition.consumed_raw_input_with_cases == "Xi",
+                    "Consumed input lost the user's original casing.");
+            // Retracting that selection replays the reported spelling. The
+            // restored raw must survive the host-side round trip unchanged.
+            session.set_pinyin_sequence(transition.consumed_raw_input_with_cases);
+            session.set_pinyin_sequence_with_cases(transition.consumed_raw_input_with_cases);
+            session.recompute_candidates();
+            require(session.get_pinyin_sequence_with_cases() == "Xi" && session.get_pinyin_sequence() == "xi",
+                    "Restoring the consumed spelling did not round-trip through the session.");
         }
 
         metasequoia::InputSession default_session;
@@ -988,6 +1012,26 @@ int run_test()
     require(unicode_commit.handled && unicode_commit.commit == "一" && !unicode_session.has_composition() &&
                 unicode_session.local_input_mode() == metasequoia::LocalInputMode::None,
             "Committing a Unicode candidate did not leave the local mode.");
+
+    // Segment boundaries are the engine's unit model: quanpin reports one offset
+    // per displayed syllable, and a local mode reports none so the host keeps
+    // single-character editing (PRD R4).
+    {
+        require(unicode_session.handle_character('U', true).handled,
+                "Unicode mode could not be re-entered for the boundary check.");
+        require(unicode_session.segment_raw_boundaries().empty(),
+                "A local mode must report no pinyin segment boundaries.");
+        require(unicode_session.handle_command(metasequoia::Command::Cancel).handled,
+                "Cancel did not leave Unicode mode after the boundary check.");
+
+        metasequoia::InputSession boundary_session(SchemeType::Quanpin);
+        for (const char character : std::string("nihaoma"))
+        {
+            require(boundary_session.handle_character(character).handled, "Quanpin rejected a letter.");
+        }
+        require(boundary_session.segment_raw_boundaries() == std::vector<std::size_t>({0, 2, 5, 7}),
+                "Quanpin unit boundaries did not follow the displayed syllables.");
+    }
 
     require(unicode_session.handle_character('U', true).handled && unicode_session.handle_character('+').handled,
             "Unicode mode rejected its optional plus prefix.");

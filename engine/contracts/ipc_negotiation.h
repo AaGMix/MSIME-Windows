@@ -15,6 +15,11 @@ constexpr std::uint32_t FramedVoice = 1u << 2;
 // Optional: Ctrl+Shift+F KeyEvent toggles the configured character set without
 // changing composition. A consumer must opt in only after implementing it.
 constexpr std::uint32_t CharacterSetShortcut = 1u << 3;
+// Optional: the Server answers the Backspace that would empty the remaining
+// pinyin of an in-progress word with a CompositionRestored reply instead of
+// discarding the whole composition. A client must opt in only after it can
+// rebuild its keystroke buffer from that payload.
+constexpr std::uint32_t CompositionRestore = 1u << 4;
 constexpr std::uint32_t Capabilities = RequestIds | FocusEpochs | FramedVoice;
 constexpr std::uint32_t RequiredCapabilities = RequestIds | FocusEpochs;
 

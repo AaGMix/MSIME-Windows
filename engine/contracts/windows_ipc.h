@@ -147,9 +147,8 @@ struct alignas(8) FanyImePipeHello
 //
 // Data received from server end
 //
-// msg_type
-//   0: success
-//   1: candidate index out of range error
+// msg_type is a FanyImeReplyType opcode (declared below); candidate_string
+// carries the reply's UTF-16 payload, which is empty for most opcodes.
 //
 struct alignas(8) FanyImeNamedpipeDataToTsf
 {
@@ -222,6 +221,18 @@ constexpr std::uint32_t UiLessComposition = 11;
 // Registration-only replies, consumed before a new client may send keys.
 constexpr std::uint32_t ProtocolReady = 12;
 constexpr std::uint32_t ProtocolMismatch = 13;
+// The Server retracted or repositioned an in-progress word and restored its raw
+// pinyin: this is the authoritative reply for the retraction (Backspace), the
+// unit deletion (Ctrl+Backspace) and the unit caret move (Ctrl+Left /
+// Ctrl+Right). candidate_string =
+//   remaining_raw \t committed_word \t display_preedit [\t caret]
+// caret is an optional decimal offset into remaining_raw; a 3-field payload
+// means "caret at the end". NeedToCreateWord and CompositionRestored share the
+// payload parser on the TSF side.
+constexpr std::uint32_t CompositionRestored = 14;
+// Highest opcode a live Server may send. Local-only sentinels are larger and
+// must never be accepted as a Server frame.
+constexpr std::uint32_t MaxKnown = CompositionRestored;
 // Local-only result. It is never sent over the pipe and must never be
 // interpreted as candidate text to commit.
 constexpr std::uint32_t TransportUnavailable = static_cast<std::uint32_t>(-1);

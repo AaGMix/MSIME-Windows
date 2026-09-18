@@ -114,6 +114,11 @@ std::string EngineInputSession::get_pinyin_segmentation_with_cases() const
     return session_.get_pinyin_segmentation_with_cases();
 }
 
+std::vector<std::size_t> EngineInputSession::segment_raw_boundaries() const
+{
+    return session_.segment_raw_boundaries();
+}
+
 std::string EngineInputSession::get_quanpin() const
 {
     return session_.get_quanpin();

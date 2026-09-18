@@ -244,6 +244,27 @@ void RequestShowCandidateWindow()
     }
 }
 
+// Drop every published candidate page and hide the candidate window without
+// touching the composition session. The creating-word state can survive with no
+// pinyin left after a segment Backspace, and that state must not be reset just
+// because there is nothing left to offer as candidates.
+void HideCandidateWindowAndDropItems()
+{
+    // Drop published candidates before any in-flight FineTuneWindow callback can
+    // re-inflate an empty-preedit + stale-candidate view.
+    Global::CandidateString.clear();
+    Global::ClearCandidatePageSnapshot();
+    Global::candidate_ui.set_items({});
+    // Clear the shown flag first so async callbacks refuse to resurrect the
+    // window, then post the actual hide message.
+    ::is_global_wnd_cand_shown = false;
+    Global::candidate_window_rendered_visible.store(false, std::memory_order_relaxed);
+    if (::global_hwnd && IsWindow(::global_hwnd))
+    {
+        PostMessage(::global_hwnd, WM_HIDE_MAIN_WINDOW, 0, 0);
+    }
+}
+
 bool IsHexChar(unsigned char ch)
 {
     return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
@@ -849,8 +870,29 @@ bool IsCandidateNavigationKey(UINT keycode)
            keycode == VK_NEXT || keycode == VK_UP || keycode == VK_DOWN;
 }
 
-bool ApplyCompositionEditKey(UINT keycode, WCHAR wch)
+// Retract the last selected segment of the word being created. The engine raw
+// returns to the spelling that segment consumed, the accumulated word returns to
+// its pre-selection state, and candidates are rebuilt for the restored raw. The
+// caller must have verified that a snapshot exists.
+bool RetreatCreatingWordSelection()
 {
+    auto &composition = GlobalIme::composition;
+    if (!composition.restore_last_selection())
+    {
+        return false;
+    }
+
+    const std::string &restored_raw = composition.raw_input_with_cases;
+    g_inputSession->set_pinyin_sequence(restored_raw);
+    g_inputSession->set_pinyin_sequence_with_cases(restored_raw);
+    g_inputSession->recompute_candidates();
+    return true;
+}
+
+bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool client_supports_restore,
+                             bool &composition_restored)
+{
+    composition_restored = false;
     std::string raw = g_inputSession->get_pinyin_sequence_with_cases();
     auto &composition = GlobalIme::composition;
     if (composition.raw_input_with_cases != raw && composition.caret_position == 0 && !raw.empty())
@@ -859,26 +901,102 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch)
     }
     composition.caret_position = (std::min)(composition.caret_position, raw.size());
 
-    if (keycode == VK_LEFT)
+    // Ctrl+Left / Ctrl+Right jump the caret by one segmentation unit instead of
+    // one character, consuming the same engine boundaries Ctrl+Backspace
+    // deletes. The Server owns the unit model, so it moves the authoritative
+    // caret and answers with CompositionRestored; TSF only applies that caret.
+    // Everything unnegotiated, UILess or unit-less keeps the single-character
+    // move below, so both sides agree on when the jump happens.
+    const bool segment_caret = FanyImeIpc::IsSegmentCaretKey(keycode, modifiers_down);
+    const bool segment_caret_supported = segment_caret && client_supports_restore && !IsUiLessMode() &&
+                                         !g_english_input_mode && !IsSpecialModeCompositionActive(raw);
+    if (keycode == VK_LEFT || keycode == VK_RIGHT)
     {
-        if (composition.caret_position > 0)
+        if (segment_caret_supported)
         {
-            --composition.caret_position;
+            const std::vector<std::size_t> boundaries = g_inputSession->segment_raw_boundaries();
+            if (!boundaries.empty())
+            {
+                composition.caret_position =
+                    keycode == VK_LEFT ? FanyImeIpc::PreviousSegmentBoundary(boundaries, composition.caret_position)
+                                       : FanyImeIpc::NextSegmentBoundary(boundaries, composition.caret_position);
+                composition_restored = true;
+                return true;
+            }
         }
-        return true;
-    }
-    if (keycode == VK_RIGHT)
-    {
-        if (composition.caret_position < raw.size())
+        if (keycode == VK_LEFT)
+        {
+            if (composition.caret_position > 0)
+            {
+                --composition.caret_position;
+            }
+        }
+        else if (composition.caret_position < raw.size())
         {
             ++composition.caret_position;
         }
         return true;
     }
 
+    // A spelling emptied by a segment Backspace below keeps the creating-word
+    // state alive with the word alone (PRD R3), so the empty-raw cleanup has to
+    // know this key produced that state on purpose.
+    bool keep_creating_word_after_empty_raw = false;
+
     if (keycode == VK_BACK)
     {
-        if (composition.caret_position > 0)
+        // Ctrl+Backspace deletes one segmentation unit (one character's pinyin)
+        // instead of one character. The boundaries are the engine's, so TSF
+        // cannot mirror the deletion: it rebuilds from the CompositionRestored
+        // reply, and everything unnegotiated or unit-less falls back to the
+        // ordinary single-character behavior right below.
+        const bool segment_backspace = FanyImeIpc::IsSegmentBackspaceKey(keycode, modifiers_down);
+        const bool segment_supported = segment_backspace && client_supports_restore && !IsUiLessMode() &&
+                                       !g_english_input_mode && !IsSpecialModeCompositionActive(raw);
+        if (segment_supported && FanyImeIpc::ShouldDropCreatingWordSegment(
+                                     composition.creating_word.active, IsUiLessMode(), client_supports_restore,
+                                     composition.caret_position, composition.selection_history.size()))
+        {
+            // R3: nothing is left before the caret, so the key removes the last
+            // selected segment itself. Its spelling is discarded -- unlike the
+            // retraction below the user asked to delete the segment, not to
+            // edit its pinyin again -- and the raw stays empty.
+            composition_restored = composition.drop_last_selection();
+            keep_creating_word_after_empty_raw = composition_restored && composition.creating_word.active;
+        }
+        else if (segment_supported)
+        {
+            const std::vector<std::size_t> boundaries = g_inputSession->segment_raw_boundaries();
+            const std::size_t start = FanyImeIpc::PreviousSegmentBoundary(boundaries, composition.caret_position);
+            if (start < composition.caret_position)
+            {
+                raw.erase(start, composition.caret_position - start);
+                composition.caret_position = start;
+                FanyImeIpc::DropDanglingSegmentDelimiter(raw, start);
+                composition_restored = true;
+                // Emptying the raw does not end the word: the accumulated
+                // segments stay on screen and the next Ctrl+Backspace drops one
+                // of them (R3).
+                keep_creating_word_after_empty_raw =
+                    raw.empty() && composition.creating_word.active && !composition.selection_history.empty();
+            }
+        }
+
+        if (!composition_restored && FanyImeIpc::ShouldRetreatCreatingWordSelection(
+                                         composition.creating_word.active, IsUiLessMode(), client_supports_restore,
+                                         raw.size(), composition.caret_position, composition.selection_history.size()))
+        {
+            // This Backspace must not also delete the character: the retraction
+            // removes the segment and restores its raw spelling instead.
+            composition_restored = RetreatCreatingWordSelection();
+            if (composition_restored)
+            {
+                // The retraction already replaced the raw, the word and the
+                // caret; re-applying the pre-retraction raw would undo it.
+                return true;
+            }
+        }
+        else if (!composition_restored && composition.caret_position > 0)
         {
             raw.erase(composition.caret_position - 1, 1);
             --composition.caret_position;
@@ -931,6 +1049,17 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch)
         }
         raw.insert(raw.begin() + static_cast<std::ptrdiff_t>(composition.caret_position), input);
         ++composition.caret_position;
+    }
+
+    if (raw.empty() && !keep_creating_word_after_empty_raw)
+    {
+        // TSF cancels the whole composition as soon as the last remaining
+        // character is gone, so the accumulated word and the snapshots a later
+        // Backspace could retract from must not survive here: they would let a
+        // fresh pinyin composition retract a segment of the previous one. A
+        // segment Backspace that emptied the raw keeps them on purpose (R3).
+        composition.clear_creating_word();
+        composition.selection_history.clear();
     }
 
     g_inputSession->set_pinyin_sequence(raw);
@@ -4125,6 +4254,10 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
 
     /* 先处理一下通用的按键，包括所有可能的按键，如普通的拼音字符按键、空格、Tab
      * 等等，然后再在下面处理其中的特殊的按键 */
+    bool composition_restored = false;
+    const bool client_supports_restore =
+        (Global::Keycode == VK_BACK || Global::Keycode == VK_LEFT || Global::Keycode == VK_RIGHT) &&
+        ClientNegotiatedCompositionRestore(client_id);
     const bool r_mode_prefix_backspace = g_r_mode_triggered && Global::Keycode == VK_BACK && input_before_key.empty();
     if (r_mode_prefix_backspace)
     {
@@ -4132,7 +4265,8 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     }
     else if (is_composition_edit_key && !r_mode_trigger_key)
     {
-        ApplyCompositionEditKey(Global::Keycode, Global::Wch);
+        ApplyCompositionEditKey(Global::Keycode, Global::Wch, Global::ModifiersDown, client_supports_restore,
+                                composition_restored);
     }
     else if (should_forward_key_to_session)
     {
@@ -4246,7 +4380,7 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
             }
         }
     }
-    else if (Global::Keycode == VK_BACK || Global::Keycode == VK_DELETE)
+    else if (Global::Keycode == VK_BACK || Global::Keycode == VK_DELETE || composition_restored)
     {
         if (IsUiLessMode())
         {
@@ -4261,6 +4395,28 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
             {
                 PrepareCandidateList(client_id, activation_epoch);
                 SendUiLessCompositionToClient(client_id, activation_epoch, request_id);
+            }
+        }
+        else if (composition_restored)
+        {
+            // Unlike an ordinary deletion, the retraction and the unit caret
+            // jump are not mirrored by TSF on its own: for a deletion TSF
+            // rebuilds its keystroke buffer from this payload, and for a jump
+            // it applies the caret field. It must therefore be sent in both
+            // preedit styles, and the trailing caret field pins the
+            // authoritative caret.
+            Global::MsgTypeToTsf = Global::DataFromServerMsgType::CompositionRestored;
+            Global::candidate_ui.selected_text = BuildCreateWordPipePayload(GlobalIme::composition.raw_input_with_cases,
+                                                                            GlobalIme::composition.creating_word.word) +
+                                                 L'\t' + std::to_wstring(GlobalIme::composition.caret_position);
+            SendCurrentDataToClient(client_id, activation_epoch, request_id);
+            if (GlobalIme::composition.raw_input_with_cases.empty() && GlobalIme::composition.creating_word.active)
+            {
+                // The raw spelling is gone but the selected segments are still
+                // on screen. TSF leaves its candidate presenter alone in this
+                // state (ending it would send HideCandidateWnd, which resets
+                // this very composition), so the window is taken down here.
+                HideCandidateWindowAndDropItems();
             }
         }
         else if (GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
@@ -4445,20 +4601,7 @@ void ClearState()
     }
     /* 造词的状态也要清理 */
     GlobalIme::composition.clear();
-    // Drop published candidates before any in-flight FineTuneWindow callback
-    // can re-inflate an empty-preedit + stale-candidate view.
-    Global::CandidateString.clear();
-    Global::ClearCandidatePageSnapshot();
-    Global::candidate_ui.set_items({});
-    // Hide synchronously from the caller's perspective: clear the shown flag
-    // first so async FineTuneWindow callbacks refuse to resurrect the window,
-    // then post the actual hide message (idempotent with TSF's HideCandidateWnd).
-    ::is_global_wnd_cand_shown = false;
-    Global::candidate_window_rendered_visible.store(false, std::memory_order_relaxed);
-    if (::global_hwnd && IsWindow(::global_hwnd))
-    {
-        PostMessage(::global_hwnd, WM_HIDE_MAIN_WINDOW, 0, 0);
-    }
+    HideCandidateWindowAndDropItems();
 }
 
 bool ResolveCandidateItem(int one_based_index, WordItem &item)
@@ -4671,6 +4814,11 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
             FanyImeIpc::ShouldEnterCreatingWord(curWordItem.source, selection_transition.continues_composition);
         if (isNeedCreateWord)
         { /* 候选只消耗了输入的一部分，继续使用剩余输入造词。完整拼音和简拼均可进入。 */
+            // Snapshot the state the user is leaving before this selection
+            // overwrites it. The engine's current raw cannot serve as the
+            // snapshot: it still contains the remaining suffix, which the user
+            // may delete before asking to retract this segment.
+            GlobalIme::composition.push_selection_snapshot(selection_transition.consumed_raw_input_with_cases);
             /* 打开造词开关 */
             GlobalIme::composition.creating_word.active = true;
             Global::MsgTypeToTsf = Global::DataFromServerMsgType::NeedToCreateWord;
@@ -4744,6 +4892,9 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
             }
             GlobalIme::composition.caret_position = 0;
             GlobalIme::composition.raw_input_with_cases.clear();
+            // The composition is over; stale snapshots must not survive into the
+            // next one where they could restore an unrelated spelling.
+            GlobalIme::composition.selection_history.clear();
             ClearSpecialModeTriggers();
         }
         else
@@ -4773,6 +4924,15 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
     {
         Global::candidate_ui.selected_text = L"OutofRange";
         Global::MsgTypeToTsf = Global::DataFromServerMsgType::OutofRange;
+        // With the raw spelling gone, the only composition text left is the
+        // accumulated word, and TSF's empty-buffer finalize commits exactly that
+        // text. So an out-of-range selection here really ends the composition:
+        // drop the creating-word state instead of leaving one that the next key
+        // would resurrect as a duplicate preedit prefix.
+        if (GlobalIme::composition.creating_word.active && g_inputSession->get_pinyin_sequence_with_cases().empty())
+        {
+            ClearState();
+        }
     }
 }
 

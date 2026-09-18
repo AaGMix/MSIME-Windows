@@ -79,6 +79,152 @@ TEST_CASE(composition_reply_includes_microsoft_shuangpin_ing_key)
     REQUIRE(!FanyImeIpc::ShouldSendCompositionReply(false, false, false, false, false, false));
 }
 
+TEST_CASE(backspace_retracts_only_the_last_selected_segment_boundary)
+{
+    using FanyImeIpc::ShouldRetreatCreatingWordSelection;
+    // The normal case: one character left, caret at the end, snapshot available,
+    // and a client that negotiated the retraction reply.
+    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 1, 1, 1));
+    // A spelling already emptied by a Ctrl+Backspace segment deletion still owns
+    // its snapshots, so the plain Backspace retracts the selected segment.
+    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 0, 0, 1));
+    // No active word, UILess host, old DLL, or no snapshot.
+    REQUIRE(!ShouldRetreatCreatingWordSelection(false, false, true, 1, 1, 1));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, true, true, 1, 1, 1));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, false, 1, 1, 1));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 1, 1, 0));
+    // More than one character left: this Backspace only deletes a character.
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 2, 2, 3));
+    // Caret at the start of the remaining input cannot delete the character.
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 1, 0, 1));
+}
+
+TEST_CASE(segment_backspace_is_ctrl_only)
+{
+    using FanyImeIpc::IsSegmentBackspaceKey;
+    REQUIRE(IsSegmentBackspaceKey(FanyImeIpc::kVirtualKeyBackspace, FanyImeIpc::kModifierControl));
+    // Shift, Alt, the Windows keys and any extra modifier keep the host meaning.
+    REQUIRE(!IsSegmentBackspaceKey(FanyImeIpc::kVirtualKeyBackspace,
+                                   FanyImeIpc::kModifierShift | FanyImeIpc::kModifierControl));
+    REQUIRE(!IsSegmentBackspaceKey(FanyImeIpc::kVirtualKeyBackspace,
+                                   FanyImeIpc::kModifierControl | FanyImeIpc::kModifierAlt));
+    REQUIRE(!IsSegmentBackspaceKey(FanyImeIpc::kVirtualKeyBackspace, 0));
+    REQUIRE(!IsSegmentBackspaceKey(FanyImeIpc::kVirtualKeyBackspace, FanyImeIpc::kModifierShift));
+    REQUIRE(!IsSegmentBackspaceKey(FanyImeIpc::kVirtualKeyBackspace, FanyImeIpc::kModifierAlt));
+    REQUIRE(!IsSegmentBackspaceKey(FanyImeIpc::kVirtualKeyBackspace, FanyImeIpc::kModifierUiLess));
+    REQUIRE(!IsSegmentBackspaceKey('A', FanyImeIpc::kModifierControl));
+}
+
+TEST_CASE(segment_caret_move_is_ctrl_only)
+{
+    using FanyImeIpc::IsSegmentCaretKey;
+    REQUIRE(IsSegmentCaretKey(FanyImeIpc::kVirtualKeyLeft, FanyImeIpc::kModifierControl));
+    REQUIRE(IsSegmentCaretKey(FanyImeIpc::kVirtualKeyRight, FanyImeIpc::kModifierControl));
+    // Shift, Alt, the Windows keys and any extra modifier keep the host meaning.
+    for (const unsigned extra : {FanyImeIpc::kModifierShift, FanyImeIpc::kModifierAlt})
+    {
+        REQUIRE(!IsSegmentCaretKey(FanyImeIpc::kVirtualKeyLeft, FanyImeIpc::kModifierControl | extra));
+        REQUIRE(!IsSegmentCaretKey(FanyImeIpc::kVirtualKeyRight, FanyImeIpc::kModifierControl | extra));
+    }
+    REQUIRE(!IsSegmentCaretKey(FanyImeIpc::kVirtualKeyLeft, 0));
+    REQUIRE(!IsSegmentCaretKey(FanyImeIpc::kVirtualKeyRight, 0));
+    REQUIRE(!IsSegmentCaretKey(FanyImeIpc::kVirtualKeyLeft, FanyImeIpc::kModifierUiLess));
+    REQUIRE(!IsSegmentCaretKey(FanyImeIpc::kVirtualKeyBackspace, FanyImeIpc::kModifierControl));
+    REQUIRE(!IsSegmentCaretKey('A', FanyImeIpc::kModifierControl));
+}
+
+TEST_CASE(segment_caret_boundaries_stop_at_the_unit_next_to_the_caret)
+{
+    using FanyImeIpc::NextSegmentBoundary;
+    using FanyImeIpc::PreviousSegmentBoundary;
+    const std::vector<std::size_t> boundaries = {0, 3, 7, 9};
+    // Inside a unit, on its first offset, on its last offset and past the end:
+    // left lands on the unit start, right on the unit end, and both directions
+    // are idempotent at the raw ends.
+    struct Case
+    {
+        std::size_t caret;
+        std::size_t previous;
+        std::size_t next;
+    };
+    const Case cases[] = {
+        {8, 7, 9}, // inside the last unit
+        {7, 3, 9}, // first offset of the last unit
+        {9, 7, 9}, // raw end: both directions stay put
+        {1, 0, 3}, // inside the first unit
+        {0, 0, 3}, // raw start: left stays put
+        {4, 3, 7}, // inside the middle unit
+    };
+    for (const Case &expected : cases)
+    {
+        REQUIRE_EQ(PreviousSegmentBoundary(boundaries, expected.caret), expected.previous);
+        REQUIRE_EQ(NextSegmentBoundary(boundaries, expected.caret), expected.next);
+    }
+    // No unit model: both directions keep the caret where the caller had it and
+    // the caller falls back to the single-character move.
+    REQUIRE_EQ(PreviousSegmentBoundary({}, 4), std::size_t(4));
+    REQUIRE_EQ(NextSegmentBoundary({}, 4), std::size_t(4));
+    // An incomplete tail is a unit of its own, so the jump stops inside the raw.
+    const std::vector<std::size_t> partial = {0, 2, 3};
+    REQUIRE_EQ(PreviousSegmentBoundary(partial, 3), std::size_t(2));
+    REQUIRE_EQ(NextSegmentBoundary(partial, 2), std::size_t(3));
+}
+
+TEST_CASE(segment_backspace_drops_a_selected_segment_only_at_the_head_of_the_raw)
+{
+    using FanyImeIpc::ShouldDropCreatingWordSegment;
+    REQUIRE(ShouldDropCreatingWordSegment(true, false, true, 0, 1));
+    // Nothing before the caret is not enough: the word must be active, the
+    // client must be able to apply the restore reply, and a snapshot must exist.
+    REQUIRE(!ShouldDropCreatingWordSegment(false, false, true, 0, 1));
+    REQUIRE(!ShouldDropCreatingWordSegment(true, true, true, 0, 1));
+    REQUIRE(!ShouldDropCreatingWordSegment(true, false, false, 0, 1));
+    REQUIRE(!ShouldDropCreatingWordSegment(true, false, true, 0, 0));
+    // Raw still in front of the caret: delete that unit instead of a segment.
+    REQUIRE(!ShouldDropCreatingWordSegment(true, false, true, 1, 1));
+}
+
+TEST_CASE(previous_segment_boundary_stops_at_the_unit_before_the_caret)
+{
+    using FanyImeIpc::PreviousSegmentBoundary;
+    const std::vector<std::size_t> boundaries = {0, 3, 7, 9};
+    // End of the spelling deletes the last unit, a caret inside a unit deletes
+    // only the part in front of it, and a caret on a boundary deletes the unit
+    // before that boundary.
+    REQUIRE_EQ(PreviousSegmentBoundary(boundaries, 9), std::size_t(7));
+    REQUIRE_EQ(PreviousSegmentBoundary(boundaries, 8), std::size_t(7));
+    REQUIRE_EQ(PreviousSegmentBoundary(boundaries, 7), std::size_t(3));
+    REQUIRE_EQ(PreviousSegmentBoundary(boundaries, 4), std::size_t(3));
+    REQUIRE_EQ(PreviousSegmentBoundary(boundaries, 3), std::size_t(0));
+    REQUIRE_EQ(PreviousSegmentBoundary(boundaries, 1), std::size_t(0));
+    // Nothing before the caret: the caller falls back to one character.
+    REQUIRE_EQ(PreviousSegmentBoundary(boundaries, 0), std::size_t(0));
+    REQUIRE_EQ(PreviousSegmentBoundary({}, 4), std::size_t(4));
+}
+
+TEST_CASE(segment_deletion_does_not_leave_a_dangling_delimiter)
+{
+    using FanyImeIpc::DropDanglingSegmentDelimiter;
+    // "ni'hao" - "hao" leaves the delimiter of the deleted unit behind.
+    std::string trailing = "ni'";
+    DropDanglingSegmentDelimiter(trailing, trailing.size());
+    REQUIRE_EQ(trailing, std::string("ni"));
+
+    // "ni'hao'ma" - "hao" would otherwise leave two delimiters in a row.
+    std::string doubled = "ni''ma";
+    DropDanglingSegmentDelimiter(doubled, 3);
+    REQUIRE_EQ(doubled, std::string("ni'ma"));
+
+    // "ni'hao" - "ni'" leaves a leading delimiter, and an ordinary letter
+    // boundary is left untouched.
+    std::string leading = "'hao";
+    DropDanglingSegmentDelimiter(leading, 0);
+    REQUIRE_EQ(leading, std::string("hao"));
+    std::string untouched = "ni'hao";
+    DropDanglingSegmentDelimiter(untouched, 3);
+    REQUIRE_EQ(untouched, std::string("ni'hao"));
+}
+
 TEST_CASE(composition_reply_includes_japanese_long_vowel_key)
 {
     // 日语模式下 '-' 打长音符，必须回包刷新候选框。

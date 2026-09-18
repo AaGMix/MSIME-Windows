@@ -1,11 +1,17 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace FanyImeIpc
 {
 inline constexpr uint32_t kVirtualKeyShift = 0x10;
 inline constexpr uint32_t kVirtualKeyEscape = 0x1B;
+inline constexpr uint32_t kVirtualKeyBackspace = 0x08;
+inline constexpr uint32_t kVirtualKeyLeft = 0x25;
+inline constexpr uint32_t kVirtualKeyRight = 0x27;
 inline constexpr uint32_t kVirtualKeyLeftShift = 0xA0;
 inline constexpr uint32_t kVirtualKeyRightShift = 0xA1;
 inline constexpr uint32_t kVirtualKeyNumpad0 = 0x60;
@@ -78,5 +84,103 @@ constexpr bool ShouldSendCompositionReply(bool is_alpha_key, bool is_manual_piny
 {
     return is_alpha_key || is_manual_pinyin_separator || is_microsoft_shuangpin_ing_key || is_unicode_hex_digit ||
            is_unicode_plus || is_japanese_long_vowel;
+}
+
+// The Backspace that would delete the last remaining pinyin character of an
+// in-progress word retracts the last selected segment instead of deleting the
+// character and dropping the whole composition. Retraction needs a caret that
+// could actually delete the character -- which is the caret sitting at the end
+// of a spelling holding at most one character, including the spelling a
+// segment Backspace already emptied -- a snapshot to restore, and a client that
+// negotiated the CompositionRestore capability: UILess hosts draw their own
+// candidate UI, and a DLL without the capability treats the reply as a
+// transport fault rather than ignoring it.
+constexpr bool ShouldRetreatCreatingWordSelection(bool creating_word_active, bool ui_less, bool client_supports_restore,
+                                                  std::size_t raw_length, std::size_t caret_position,
+                                                  std::size_t selection_history_size)
+{
+    return creating_word_active && !ui_less && client_supports_restore && raw_length <= 1 &&
+           caret_position == raw_length && selection_history_size > 0;
+}
+
+// Ctrl+Backspace inside a composition deletes one segmentation unit instead of
+// one character. Only the bare Ctrl chord is the IME's: Shift, Alt and the
+// Windows keys keep their host meaning (PRD R1).
+constexpr bool IsSegmentBackspaceKey(uint32_t keycode, uint32_t modifiers_down)
+{
+    return keycode == kVirtualKeyBackspace && (modifiers_down & kKeyModifierMask) == kModifierControl;
+}
+
+// Ctrl+Left / Ctrl+Right move the caret by the same segmentation unit that
+// Ctrl+Backspace deletes. They mirror IsSegmentBackspaceKey: only the bare Ctrl
+// chord is the IME's, so Shift, Alt and the Windows keys keep their host
+// meaning (PRD R1). The unit model itself is the engine's and stays Server-side.
+constexpr bool IsSegmentCaretKey(uint32_t keycode, uint32_t modifiers_down)
+{
+    return (keycode == kVirtualKeyLeft || keycode == kVirtualKeyRight) &&
+           (modifiers_down & kKeyModifierMask) == kModifierControl;
+}
+
+// A segment Backspace with nothing left before the caret deletes the last
+// selected segment of the word being created: the accumulated word returns to
+// its pre-selection state and the spelling that segment consumed is discarded
+// rather than restored (PRD R3). Like the retraction above it needs a reply the
+// client can apply, because TSF cannot mirror the deletion locally.
+constexpr bool ShouldDropCreatingWordSegment(bool creating_word_active, bool ui_less, bool client_supports_restore,
+                                             std::size_t caret_position, std::size_t selection_history_size)
+{
+    return creating_word_active && !ui_less && client_supports_restore && caret_position == 0 &&
+           selection_history_size > 0;
+}
+
+// The offset a unit deletion starts from and a unit jump to the left lands on:
+// the greatest boundary strictly before the caret, or `caret` itself when no
+// unit boundary precedes it. Boundaries are raw offsets in ascending order. A
+// result equal to `caret` means "no unit here": the caller then falls back to
+// deleting / moving one character.
+inline std::size_t PreviousSegmentBoundary(const std::vector<std::size_t> &boundaries, std::size_t caret)
+{
+    std::size_t result = caret;
+    for (const std::size_t boundary : boundaries)
+    {
+        if (boundary >= caret)
+        {
+            break;
+        }
+        result = boundary;
+    }
+    return result;
+}
+
+// The offset a unit jump to the right lands on: the smallest boundary strictly
+// after the caret, or `caret` itself when no unit boundary follows it. A result
+// equal to `caret` means the caret already sits at the end of the last unit and
+// the caller must not move it.
+inline std::size_t NextSegmentBoundary(const std::vector<std::size_t> &boundaries, std::size_t caret)
+{
+    for (const std::size_t boundary : boundaries)
+    {
+        if (boundary > caret)
+        {
+            return boundary;
+        }
+    }
+    return caret;
+}
+
+// After erasing [start, caret), the truncation point can sit next to a
+// separator that no longer separates anything: "ni'hao" - "hao" leaves "ni'",
+// "ni'hao'ma" - "hao" leaves "ni''ma". Drop exactly the one dangling
+// separator so no empty segment or doubled delimiter survives the deletion.
+inline void DropDanglingSegmentDelimiter(std::string &raw, std::size_t start)
+{
+    if (start < raw.size() && raw[start] == '\'' && (start == 0 || raw[start - 1] == '\''))
+    {
+        raw.erase(start, 1);
+    }
+    else if (start == raw.size() && start > 0 && raw[start - 1] == '\'')
+    {
+        raw.erase(start - 1, 1);
+    }
 }
 } // namespace FanyImeIpc

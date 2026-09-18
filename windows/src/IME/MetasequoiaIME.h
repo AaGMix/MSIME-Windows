@@ -54,6 +54,67 @@ constexpr bool IsSelfGeneratedSendInputExtraInfo(ULONG_PTR extraInfo)
 {
     return extraInfo == PAIRED_PUNCTUATION_SENDINPUT_EXTRA_INFO;
 }
+// Payload shared by the NeedToCreateWord and CompositionRestored replies:
+//   remaining_raw \t committed_word \t display_preedit [\t caret]
+// The caret is an optional decimal offset into remaining_raw; omitting it means
+// "caret at the end", which is what a legacy three-field payload meant.
+struct CreatingWordPayload
+{
+    std::wstring remaining_raw;
+    std::wstring word;
+    std::wstring display_preedit;
+    bool has_caret = false;
+    size_t caret = 0;
+};
+
+inline bool ParseCreatingWordPayload(const std::wstring &data, CreatingWordPayload &payload)
+{
+    const size_t separator = data.find(L'\t');
+    if (separator == std::wstring::npos)
+    {
+        return false;
+    }
+    payload.remaining_raw = data.substr(0, separator);
+    const std::wstring rest = data.substr(separator + 1);
+    const size_t second_separator = rest.find(L'\t');
+    if (second_separator == std::wstring::npos)
+    {
+        payload.word = rest;
+        return true;
+    }
+    payload.word = rest.substr(0, second_separator);
+    const std::wstring tail = rest.substr(second_separator + 1);
+    const size_t third_separator = tail.find(L'\t');
+    if (third_separator == std::wstring::npos)
+    {
+        payload.display_preedit = tail;
+        return true;
+    }
+    payload.display_preedit = tail.substr(0, third_separator);
+    const std::wstring caret_text = tail.substr(third_separator + 1);
+    if (caret_text.empty())
+    {
+        return true;
+    }
+    // A raw pinyin offset fits easily in nine digits; anything longer is a
+    // malformed frame rather than a caret to obey.
+    if (caret_text.size() > 9)
+    {
+        return false;
+    }
+    size_t caret = 0;
+    for (const wchar_t ch : caret_text)
+    {
+        if (ch < L'0' || ch > L'9')
+        {
+            return false;
+        }
+        caret = caret * 10 + static_cast<size_t>(ch - L'0');
+    }
+    payload.has_caret = true;
+    payload.caret = caret;
+    return true;
+}
 constexpr ULONGLONG SMART_PUNCTUATION_REPEAT_INTERVAL_MS = 2000;
 constexpr UINT_PTR TIMER_CONNECT_ALL_NAMEDPIPE = 1;
 constexpr UINT_PTR TIMER_CONNECT_TO_TSF_NAMEDPIPE = 2;
@@ -192,9 +253,26 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     HRESULT _HandleCompositionFinalize(TfEditCookie ec, _In_ ITfContext *pContext, BOOL fCandidateList);
     HRESULT _HandleCompositionConvert(TfEditCookie ec, _In_ ITfContext *pContext, BOOL isWildcardSearch);
     HRESULT _HandleCompositionBackspace(TfEditCookie ec, _In_ ITfContext *pContext, uint64_t requestId);
+    // Ctrl+Backspace: the Server deletes one input unit and the composition is
+    // rebuilt from its authoritative CompositionRestored payload. Hosts that
+    // cannot apply that payload fall back to the single-character deletion.
+    HRESULT _HandleCompositionBackspaceSegment(TfEditCookie ec, _In_ ITfContext *pContext, uint64_t requestId);
+    // Rebuild the composition from a creating-word payload: keystroke buffer,
+    // accumulated word, preedit and caret. Used both when a selection continues a
+    // word (NeedToCreateWord) and when the Server retracts it
+    // (CompositionRestored).
+    HRESULT _ApplyCreatingWordPayload(TfEditCookie ec, _In_ ITfContext *pContext, const CreatingWordPayload &payload);
     HRESULT _HandleCompositionDelete(TfEditCookie ec, _In_ ITfContext *pContext, uint64_t requestId);
     HRESULT _HandleCompositionArrowKey(TfEditCookie ec, _In_ ITfContext *pContext, KEYSTROKE_FUNCTION keyFunction,
                                        uint64_t requestId = FANY_IME_NO_REQUEST_ID);
+    // Ctrl+Left / Ctrl+Right: the Server moves the caret by one input unit and
+    // answers with the authoritative caret. Hosts that cannot apply that reply
+    // fall back to the single-character move.
+    HRESULT _HandleCompositionArrowKeySegment(TfEditCookie ec, _In_ ITfContext *pContext,
+                                              KEYSTROKE_FUNCTION keyFunction, uint64_t requestId);
+    // Place the TSF selection at the engine's rendered caret. Shared by the
+    // plain arrow move and the Server-driven unit jump.
+    HRESULT _SetCompositionCaretSelection(TfEditCookie ec, _In_ ITfContext *pContext);
     HRESULT _HandleCompositionPunctuation(TfEditCookie ec, _In_ ITfContext *pContext, UINT code, WCHAR wch,
                                           uint64_t requestId, const std::wstring &prefetchedText);
     // Character immediately before the caret / composition start (0 if unavailable).
@@ -407,9 +485,10 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     void _ApplyDeferredPreservedKeyProjection(REFGUID preservedKey);
     bool _RefreshDeferredRecoveryPrefix(_In_ ITfContext *pContext);
     void _ArmDeferredRecoveryForTransport(_In_opt_ ITfContext *pContext);
-    bool _ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM wParam, _In_opt_ const WCHAR *translatedWch,
-                                  _In_opt_ const UINT *modifiersDown, _Out_ WCHAR *classifiedWch,
-                                  _Out_ UINT *classifiedCode, _Out_ _KEYSTROKE_STATE *keyState);
+    bool _ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM wParam, LPARAM lParam,
+                                  _In_opt_ const WCHAR *translatedWch, _In_opt_ const UINT *modifiersDown,
+                                  _Out_ WCHAR *classifiedWch, _Out_ UINT *classifiedCode,
+                                  _Out_ _KEYSTROKE_STATE *keyState);
     bool _QueueDeferredKeyDown(_In_ ITfContext *pContext, WPARAM wParam, LPARAM lParam, WCHAR translatedWch,
                                UINT modifiersDown, const _KEYSTROKE_STATE &keyState);
     bool _QueueDeferredPreservedKey(_In_ ITfContext *pContext, REFGUID preservedKey);
@@ -514,6 +593,9 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     BOOL _IsKeyEaten(_In_ ITfContext *pContext, UINT codeIn, _Out_ UINT *pCodeOut, _Out_writes_(1) WCHAR *pwch,
                      _Out_opt_ _KEYSTROKE_STATE *pKeyState, _In_opt_ const WCHAR *translatedWch = nullptr,
                      bool freshCompositionState = false);
+
+    bool _IsCompositionActiveForKeyGuard();
+    bool _ApplyBackspaceHoldGuard(WPARAM wParam, LPARAM lParam);
 
     BOOL _IsRangeCovered(TfEditCookie ec, _In_ ITfRange *pRangeTest, _In_ ITfRange *pRangeCover);
     VOID _DeleteCandidateList(BOOL fForce, _In_opt_ ITfContext *pContext);
@@ -689,6 +771,16 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     uint64_t _deferredKeyFocusGeneration;
     bool _deferredKeyDrainPosted;
     bool _serverUnavailableFallbackActive;
+
+    // True while the current Backspace hold began inside a composition. The
+    // auto-repeats that arrive after that composition is gone must be swallowed
+    // instead of falling through to the host and deleting document text (#347).
+    // Re-evaluated on every non-repeat Backspace press and cleared on focus
+    // changes, thread-focus loss and top-context changes; see KeyRepeatGuard.h
+    // for the repeat-bit rule. Deliberately not cleared in
+    // ITfThreadMgrEventSink::OnSetFocus: Chromium swaps its document manager on
+    // almost every edit, which would disarm the guard mid-hold.
+    bool _backspaceHoldArmed;
 
     // Bare Shift/Ctrl toggle arming (Weasel-style: release within timeout).
     bool _shiftHotkeyArmed;

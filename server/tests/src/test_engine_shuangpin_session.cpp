@@ -119,7 +119,23 @@ TEST_CASE(EngineShuangpinSessionContinuesCompositionWithoutHelpcode)
 
     const auto transition = session.advance_composition_after_selection("xi", "西", "xi");
     REQUIRE(transition.continues_composition);
+    REQUIRE_EQ(transition.consumed_raw_input_with_cases, std::string("xi"));
     REQUIRE_EQ(session.get_pinyin_sequence(), std::string("tele"));
+}
+
+TEST_CASE(EngineShuangpinMicrosoftSemicolonFinalStaysInConsumedInput)
+{
+    EngineInputSession session(SchemeType::Shuangpin, GetMicrosoftShuangpinProfile());
+    // In the Microsoft profile ';' is the "ing" final: "b;" is bing, "ni" is ni.
+    session.handle_key('B', 0, L'b');
+    session.handle_key(VK_OEM_1, 0, L';');
+    session.handle_key('N', 0, L'n');
+    session.handle_key('I', 0, L'i');
+
+    const auto transition = session.advance_composition_after_selection("b;", "冰", "bing");
+    REQUIRE(transition.continues_composition);
+    REQUIRE_EQ(transition.consumed_raw_input_with_cases, std::string("b;"));
+    REQUIRE_EQ(session.get_pinyin_sequence(), std::string("ni"));
 }
 
 // 模糊音是会话级注入：总开关 + 规则位两层。总开关关 → 聚合 getter 全零，候选不出现；
@@ -373,6 +389,8 @@ TEST_CASE(EngineShuangpinSessionContinuesCompositionWithSingleHelpcode)
 
     const auto transition = session.advance_composition_after_selection("xi", "西", "xi");
     REQUIRE(transition.continues_composition);
+    // The active helpcode is not part of what the selection consumed.
+    REQUIRE_EQ(transition.consumed_raw_input_with_cases, std::string("xi"));
     REQUIRE_EQ(session.get_pinyin_sequence(), std::string("tele"));
 }
 
@@ -512,6 +530,7 @@ TEST_CASE(EngineQuanpinSessionContinuesCompositionForCreatingWord)
 
     const auto transition = session.advance_composition_after_selection("xi", "西", "xi");
     REQUIRE(transition.continues_composition);
+    REQUIRE_EQ(transition.consumed_raw_input_with_cases, std::string("xi"));
     REQUIRE_EQ(session.get_pinyin_sequence(), std::string("tele"));
     REQUIRE_EQ(session.get_pinyin_segmentation_with_cases(), std::string("te'le"));
 }
@@ -1055,4 +1074,107 @@ TEST_CASE(EngineSessionsKeepHelpcodeFilteringAndAnnotationsTogether)
     REQUIRE_EQ(shuangpin.get_helpcode_annotation("你", false), std::string("(rE)"));
     quanpin.switch_scheme(SchemeType::Shuangpin);
     REQUIRE_EQ(quanpin.get_helpcode_annotation("你", false), std::string("(rE)"));
+}
+
+TEST_CASE(SegmentBoundariesFollowTheDisplayedQuanpinSyllables)
+{
+    EngineInputSession session(SchemeType::Quanpin);
+    InputLetters(session, "nihaoma");
+    REQUIRE_EQ(session.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 5, 7}));
+
+    // Manual delimiters are boundaries too, and every offset indexes the raw
+    // spelling (case included) rather than the displayed segmentation.
+    EngineInputSession delimited(SchemeType::Quanpin);
+    InputSequence(delimited, "ni'hao");
+    REQUIRE_EQ(delimited.segment_raw_boundaries(), std::vector<std::size_t>({0, 3, 6}));
+
+    EngineInputSession cased(SchemeType::Quanpin);
+    InputLetters(cased, "NiHaoMa");
+    REQUIRE_EQ(cased.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 5, 7}));
+
+    // A correction display that rewrites letters stays one unit when the cut
+    // reports one syllable, and an incomplete tail is a unit of its own so only
+    // the tail is deleted.
+    EngineInputSession corrected(SchemeType::Quanpin);
+    InputLetters(corrected, "sahng");
+    REQUIRE_EQ(corrected.segment_raw_boundaries(), std::vector<std::size_t>({0, 5}));
+
+    EngineInputSession partial(SchemeType::Quanpin);
+    InputLetters(partial, "nih");
+    REQUIRE_EQ(partial.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 3}));
+
+    EngineInputSession empty(SchemeType::Quanpin);
+    REQUIRE(empty.segment_raw_boundaries().empty());
+}
+
+TEST_CASE(SegmentBoundariesFollowShuangpinSyllableSegmentation)
+{
+    EngineInputSession xiaohe(SchemeType::Shuangpin);
+    InputLetters(xiaohe, "nihaoma");
+    REQUIRE_EQ(xiaohe.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 4, 5, 7}));
+
+    // One complete syllable is one unit.
+    EngineInputSession single(SchemeType::Shuangpin);
+    InputLetters(single, "ni");
+    REQUIRE_EQ(single.segment_raw_boundaries(), std::vector<std::size_t>({0, 2}));
+
+    // The Microsoft ';' final key belongs to the syllable that consumes it.
+    EngineInputSession microsoft(SchemeType::Shuangpin, GetMicrosoftShuangpinProfile());
+    InputLetters(microsoft, "b");
+    microsoft.handle_key(VK_OEM_1, 0, L';');
+    InputLetters(microsoft, "ni");
+    REQUIRE_EQ(microsoft.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 4}));
+
+    // Same ';' final after several syllables: 你好病 = ni | hk | b; in the
+    // Microsoft layout (ao sits on 'k'), so the last unit spans 'b' and ';'.
+    EngineInputSession microsoft_long(SchemeType::Shuangpin, GetMicrosoftShuangpinProfile());
+    InputLetters(microsoft_long, "nihkb");
+    microsoft_long.handle_key(VK_OEM_1, 0, L';');
+    REQUIRE_EQ(microsoft_long.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 4, 6}));
+
+    // Greedy longest-pair parsing is the contract: 'cb' is a valid Microsoft
+    // code (cou), so it wins over pairing 'b' with the trailing ';'. The
+    // preedit shows the same cut, and the deletion follows the preedit.
+    EngineInputSession microsoft_greedy(SchemeType::Shuangpin, GetMicrosoftShuangpinProfile());
+    InputLetters(microsoft_greedy, "nihcb");
+    microsoft_greedy.handle_key(VK_OEM_1, 0, L';');
+    REQUIRE_EQ(microsoft_greedy.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 3, 5, 6}));
+}
+
+TEST_CASE(UnitlessSchemesReportNoSegmentBoundaries)
+{
+    EngineInputSession wubi(SchemeType::Wubi);
+    InputLetters(wubi, "nihao");
+    REQUIRE(wubi.segment_raw_boundaries().empty());
+
+    EngineInputSession japanese(SchemeType::JapaneseRomaji);
+    InputLetters(japanese, "nihao");
+    REQUIRE(japanese.segment_raw_boundaries().empty());
+}
+
+TEST_CASE(SegmentBoundariesKeepHelpcodeAndJianpinTailAsTheirOwnUnits)
+{
+    // The deletion follows the preedit, so the correction switches decide what
+    // the preedit looks like. Keep them off here so the test pins the plain
+    // syllable separators instead of the developer's own configuration.
+    ScopedConfigRoot config_root;
+    InitImeConfig();
+    REQUIRE(SetConfiguredQuanpinAutocorrectTransposition(false));
+    REQUIRE(SetConfiguredQuanpinAutocorrectNeighbor(false));
+    InitImeConfig();
+    REQUIRE(!GetConfiguredQuanpinAutocorrectTransposition());
+    REQUIRE(!GetConfiguredQuanpinAutocorrectNeighbor());
+
+    // A single trailing helpcode is one editable unit of its own, exactly as the
+    // preedit draws the separator before it.
+    EngineInputSession helpcode(SchemeType::Quanpin);
+    InputLetters(helpcode, "nihao");
+    InputLetters(helpcode, "V");
+    REQUIRE_EQ(helpcode.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 5, 6}));
+
+    // A jianpin tail after a complete syllable stays a unit of its own so only
+    // the tail is deleted.
+    EngineInputSession jianpin(SchemeType::Quanpin);
+    InputLetters(jianpin, "zheg");
+    REQUIRE_EQ(jianpin.segment_raw_boundaries(), std::vector<std::size_t>({0, 3, 4}));
 }

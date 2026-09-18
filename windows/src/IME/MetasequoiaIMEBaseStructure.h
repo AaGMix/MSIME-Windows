@@ -75,7 +75,18 @@ enum KEYSTROKE_FUNCTION
     // the just-committed Chinese punctuation into ASCII; REVERT is the same
     // punctuation key pressed right after that conversion.
     FUNCTION_SMART_PUNCTUATION_CONVERT,
-    FUNCTION_SMART_PUNCTUATION_REVERT
+    FUNCTION_SMART_PUNCTUATION_REVERT,
+
+    // Ctrl+Backspace inside a composition: the Server deletes one input unit
+    // (one character's pinyin, or a whole selected segment) and answers with the
+    // authoritative spelling. Append-only, like every function above.
+    FUNCTION_BACKSPACE_SEGMENT,
+
+    // Ctrl+Left / Ctrl+Right inside a composition: the Server moves the caret by
+    // one input unit and answers with the authoritative caret. Append-only, like
+    // every function above.
+    FUNCTION_MOVE_LEFT_SEGMENT,
+    FUNCTION_MOVE_RIGHT_SEGMENT
 };
 
 //---------------------------------------------------------------------

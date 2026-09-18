@@ -169,6 +169,10 @@ VOID CMetasequoiaIME::_DeleteCandidateList(BOOL isForce, _In_opt_ ITfContext *pC
 HRESULT CMetasequoiaIME::_HandleComplete(TfEditCookie ec, _In_ ITfContext *pContext)
 {
     g_toggleImeFallbackBuffer.clear();
+    // The composition ends here, so the creating-word prefix must not survive
+    // into the next one: a leftover word would be prepended to its preedit.
+    GlobalIme::word_for_creating_word.clear();
+    GlobalIme::pending_create_word_preedit.clear();
     _DeleteCandidateList(FALSE, pContext);
 
     // just terminate the composition
@@ -180,6 +184,10 @@ HRESULT CMetasequoiaIME::_HandleComplete(TfEditCookie ec, _In_ ITfContext *pCont
 HRESULT CMetasequoiaIME::_HandleCompleteCommitFirst(TfEditCookie ec, _In_ ITfContext *pContext)
 {
     g_toggleImeFallbackBuffer.clear();
+    // Same terminal cleanup as _HandleComplete: the accumulated word belongs to
+    // the composition being finished, never to the next one.
+    GlobalIme::word_for_creating_word.clear();
+    GlobalIme::pending_create_word_preedit.clear();
 
     _DeleteCandidateList(FALSE, pContext);
 
@@ -809,6 +817,86 @@ HRESULT CMetasequoiaIME::_HandleCompositionConvert(TfEditCookie ec, _In_ ITfCont
 
 //+---------------------------------------------------------------------------
 //
+// _ApplyCreatingWordPayload
+//
+// TSF keeps its own copy of an in-progress word (keystroke buffer + committed
+// word), so any Server-side change to that word must be applied here from the
+// authoritative payload instead of being reproduced by deleting virtual keys.
+//
+//----------------------------------------------------------------------------
+
+HRESULT CMetasequoiaIME::_ApplyCreatingWordPayload(TfEditCookie ec, _In_ ITfContext *pContext,
+                                                   const CreatingWordPayload &payload)
+{
+    GlobalIme::word_for_creating_word = payload.word;
+    GlobalIme::pending_create_word_preedit.clear();
+    if (GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
+    {
+        // The payload preedit is authoritative (汉字 + remaining raw). Handing it
+        // to the worker also keeps it from reading the pipe again for a reply
+        // this caller already consumed.
+        GlobalIme::pending_create_word_preedit = payload.display_preedit;
+    }
+
+    CCompositionProcessorEngine *pCompositionProcessorEngine = _pCompositionProcessorEngine;
+    pCompositionProcessorEngine->PurgeVirtualKey();
+    for (const wchar_t ch : payload.remaining_raw)
+    {
+        pCompositionProcessorEngine->AddVirtualKey(ch);
+    }
+
+    if (payload.has_caret)
+    {
+        const LONGLONG target = static_cast<LONGLONG>(payload.caret);
+        const LONGLONG caret = static_cast<LONGLONG>(pCompositionProcessorEngine->GetCaretPosition());
+        const LONGLONG length = static_cast<LONGLONG>(pCompositionProcessorEngine->GetVirtualKeyLength());
+        if (target >= 0 && target <= length && target != caret)
+        {
+            pCompositionProcessorEngine->MoveCaret(static_cast<int>(target - caret));
+        }
+    }
+
+    if (pCompositionProcessorEngine->GetVirtualKeyLength() == 0)
+    {
+        GlobalIme::pending_create_word_preedit.clear();
+        if (payload.word.empty())
+        {
+            // Nothing left to compose: the payload retracted the last state
+            // there was. Same terminal behavior as the NeedToCreateWord
+            // empty-input path.
+            _HandleCancel(ec, pContext);
+            return S_OK;
+        }
+        // The raw spelling is gone but the accumulated word is still part of the
+        // composition (Ctrl+Backspace deleted the last unit): show the word
+        // alone. Only the stale local candidate list is dropped -- ending the
+        // presenter here would send HideCandidateWnd, which resets the very
+        // Server composition this payload preserves; the Server has already
+        // taken its window down.
+        if (_pCandidateListUIPresenter)
+        {
+            _pCandidateListUIPresenter->_ClearList();
+        }
+        if (GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Empty)
+        {
+            // This style renders no inline preedit, so the word stays hidden
+            // exactly as it does while raw spelling remains.
+            pCompositionProcessorEngine->SetRenderedPreedit(std::wstring{}, 0);
+            return S_OK;
+        }
+        // Keep the rendered preedit in step with the composition text: the arrow
+        // keys map the raw caret through it, and the value from before the
+        // deletion would point past the shorter word.
+        pCompositionProcessorEngine->SetRenderedPreedit(payload.word, payload.word.size());
+        CStringRange wordString;
+        wordString.Set(payload.word.c_str(), payload.word.length());
+        return _AddComposingAndChar(ec, pContext, &wordString);
+    }
+    return _HandleCompositionInputWorker(pCompositionProcessorEngine, ec, pContext, FANY_IME_NO_REQUEST_ID);
+}
+
+//+---------------------------------------------------------------------------
+//
 // _HandleCompositionBackspace
 //
 //----------------------------------------------------------------------------
@@ -859,6 +947,35 @@ HRESULT CMetasequoiaIME::_HandleCompositionBackspace(TfEditCookie ec, _In_ ITfCo
         g_toggleImeFallbackBuffer.pop_back();
     }
 
+    // The Backspace that would delete the last remaining character of an
+    // in-progress word retracts the last selected segment instead. The Server
+    // performs the retraction and answers with the authoritative raw spelling;
+    // TSF must rebuild from that reply rather than delete a virtual key locally.
+    if (vKeyLen <= 1 && vKeyLen == pCompositionProcessorEngine->GetCaretPosition() &&
+        !GlobalIme::word_for_creating_word.empty() && SupportsCompositionRestore() && !Global::IsUiLessMode() &&
+        requestId != FANY_IME_NO_REQUEST_ID)
+    {
+        struct FanyImeNamedpipeDataToTsf *receivedData =
+            TryReadDataFromServerPipeWithTimeout(requestId, /*abortTransportOnTimeout=*/false);
+        if (receivedData->msg_type == Global::DataFromServerMsgType::CompositionRestored)
+        {
+            CreatingWordPayload payload;
+            if (ParseCreatingWordPayload(receivedData->candidate_string, payload))
+            {
+                workerResult = _ApplyCreatingWordPayload(ec, pContext, payload);
+                if (!_IsComposing())
+                {
+                    // The retraction consumed the last state: the composition
+                    // ends inside this hold, so its auto-repeats must stay with
+                    // the guard instead of deleting document text (#347).
+                    _backspaceHoldArmed = true;
+                }
+                tfSelection.range->Release();
+                return workerResult;
+            }
+        }
+    }
+
     if (vKeyLen)
     {
         pCompositionProcessorEngine->RemoveVirtualKeyBeforeCaret();
@@ -869,6 +986,9 @@ HRESULT CMetasequoiaIME::_HandleCompositionBackspace(TfEditCookie ec, _In_ ITfCo
         }
         else
         {
+            // The composition ends inside this hold: arm the repeat guard so
+            // its auto-repeats cannot fall through to the host (#347).
+            _backspaceHoldArmed = true;
             _HandleCancel(ec, pContext);
         }
     }
@@ -876,6 +996,60 @@ HRESULT CMetasequoiaIME::_HandleCompositionBackspace(TfEditCookie ec, _In_ ITfCo
 Exit:
     tfSelection.range->Release();
     return workerResult;
+}
+
+//+---------------------------------------------------------------------------
+//
+// _HandleCompositionBackspaceSegment
+//
+// Ctrl+Backspace deletes one input unit. The Server owns the unit boundaries and
+// answers with the authoritative remaining spelling, so TSF rebuilds from that
+// payload instead of deleting a locally guessed amount. Hosts that cannot apply
+// the payload (UILess, an older Server without the negotiated capability, or a
+// missing reply) fall back to the plain single-character Backspace.
+//
+//----------------------------------------------------------------------------
+
+HRESULT CMetasequoiaIME::_HandleCompositionBackspaceSegment(TfEditCookie ec, _In_ ITfContext *pContext,
+                                                            uint64_t requestId)
+{
+    if (!_IsComposing())
+    {
+        // The composition disappeared between classifying the key and running
+        // this session; there is nothing to rebuild from the payload.
+        return S_OK;
+    }
+
+    if (!Global::IsUiLessMode() && SupportsCompositionRestore() && requestId != FANY_IME_NO_REQUEST_ID)
+    {
+        struct FanyImeNamedpipeDataToTsf *receivedData =
+            TryReadDataFromServerPipeWithTimeout(requestId, /*abortTransportOnTimeout=*/false);
+        if (receivedData->msg_type == Global::DataFromServerMsgType::CompositionRestored)
+        {
+            CreatingWordPayload payload;
+            if (ParseCreatingWordPayload(receivedData->candidate_string, payload))
+            {
+                const HRESULT workerResult = _ApplyCreatingWordPayload(ec, pContext, payload);
+                if (!_IsComposing())
+                {
+                    // The deletion consumed the last remaining state: the
+                    // composition ends inside this hold, so its auto-repeats
+                    // must stay with the guard instead of deleting document
+                    // text (#347).
+                    _backspaceHoldArmed = true;
+                }
+                return workerResult;
+            }
+        }
+        // The Server answered with something other than the restored spelling,
+        // or with nothing at all. This request's reply slot is already consumed
+        // (or was empty), so the fallback must not wait for it again.
+        return _HandleCompositionBackspace(ec, pContext, FANY_IME_NO_REQUEST_ID);
+    }
+
+    // UILess hosts and unnegotiated clients keep the ordinary reply pipe: the
+    // single-character fallback consumes the UiLess composition frame.
+    return _HandleCompositionBackspace(ec, pContext, requestId);
 }
 
 //+---------------------------------------------------------------------------
@@ -950,27 +1124,7 @@ HRESULT CMetasequoiaIME::_HandleCompositionArrowKey(TfEditCookie ec, _In_ ITfCon
     if (keyFunction == FUNCTION_MOVE_LEFT || keyFunction == FUNCTION_MOVE_RIGHT)
     {
         _pCompositionProcessorEngine->MoveCaret(keyFunction == FUNCTION_MOVE_LEFT ? -1 : 1);
-        if (_pComposition == nullptr)
-        {
-            return S_OK;
-        }
-
-        ITfRange *caretRange = nullptr;
-        if (FAILED(_pComposition->GetRange(&caretRange)) || caretRange == nullptr)
-        {
-            return S_OK;
-        }
-        caretRange->Collapse(ec, TF_ANCHOR_START);
-        LONG shifted = 0;
-        caretRange->ShiftEnd(ec, static_cast<LONG>(_pCompositionProcessorEngine->GetRenderedCaretPosition()), &shifted,
-                             nullptr);
-        caretRange->Collapse(ec, TF_ANCHOR_END);
-        TF_SELECTION caretSelection = {};
-        caretSelection.range = caretRange;
-        caretSelection.style.ase = TF_AE_NONE;
-        caretSelection.style.fInterimChar = FALSE;
-        pContext->SetSelection(ec, 1, &caretSelection);
-        caretRange->Release();
+        (void)_SetCompositionCaretSelection(ec, pContext);
         if (Global::IsUiLessMode() && _pCandidateListUIPresenter)
         {
             _pCandidateListUIPresenter->_ConsumeUiLessCompositionReply(requestId);
@@ -1028,6 +1182,101 @@ HRESULT CMetasequoiaIME::_HandleCompositionArrowKey(TfEditCookie ec, _In_ ITfCon
 Exit:
     tfSelection.range->Release();
     return S_OK;
+}
+
+//+---------------------------------------------------------------------------
+//
+// _SetCompositionCaretSelection
+//
+// Place the TSF selection at the engine's rendered caret without changing the
+// composition text.
+//
+//----------------------------------------------------------------------------
+
+HRESULT CMetasequoiaIME::_SetCompositionCaretSelection(TfEditCookie ec, _In_ ITfContext *pContext)
+{
+    if (_pComposition == nullptr)
+    {
+        return S_OK;
+    }
+
+    ITfRange *caretRange = nullptr;
+    if (FAILED(_pComposition->GetRange(&caretRange)) || caretRange == nullptr)
+    {
+        return S_OK;
+    }
+    caretRange->Collapse(ec, TF_ANCHOR_START);
+    LONG shifted = 0;
+    caretRange->ShiftEnd(ec, static_cast<LONG>(_pCompositionProcessorEngine->GetRenderedCaretPosition()), &shifted,
+                         nullptr);
+    caretRange->Collapse(ec, TF_ANCHOR_END);
+    TF_SELECTION caretSelection = {};
+    caretSelection.range = caretRange;
+    caretSelection.style.ase = TF_AE_NONE;
+    caretSelection.style.fInterimChar = FALSE;
+    pContext->SetSelection(ec, 1, &caretSelection);
+    caretRange->Release();
+    return S_OK;
+}
+
+//+---------------------------------------------------------------------------
+//
+// _HandleCompositionArrowKeySegment
+//
+// Ctrl+Left / Ctrl+Right move the caret by one input unit. The Server owns the
+// unit boundaries and answers with the authoritative caret, so TSF applies only
+// the offset it reports and then redraws the composition selection. Hosts that
+// cannot apply that reply (UILess, an older Server without the negotiated
+// capability, or a missing reply) fall back to the plain single-character move.
+//
+//----------------------------------------------------------------------------
+
+HRESULT CMetasequoiaIME::_HandleCompositionArrowKeySegment(TfEditCookie ec, _In_ ITfContext *pContext,
+                                                           KEYSTROKE_FUNCTION keyFunction, uint64_t requestId)
+{
+    if (!_IsComposing())
+    {
+        // The composition disappeared between classifying the key and running
+        // this session; there is neither a caret to move nor a reply to apply.
+        return S_OK;
+    }
+
+    const KEYSTROKE_FUNCTION singleStepFunction =
+        keyFunction == FUNCTION_MOVE_LEFT_SEGMENT ? FUNCTION_MOVE_LEFT : FUNCTION_MOVE_RIGHT;
+
+    if (!Global::IsUiLessMode() && SupportsCompositionRestore() && requestId != FANY_IME_NO_REQUEST_ID)
+    {
+        struct FanyImeNamedpipeDataToTsf *receivedData =
+            TryReadDataFromServerPipeWithTimeout(requestId, /*abortTransportOnTimeout=*/false);
+        if (receivedData->msg_type == Global::DataFromServerMsgType::CompositionRestored)
+        {
+            CreatingWordPayload payload;
+            if (ParseCreatingWordPayload(receivedData->candidate_string, payload))
+            {
+                CCompositionProcessorEngine *pCompositionProcessorEngine = _pCompositionProcessorEngine;
+                const LONGLONG length = static_cast<LONGLONG>(pCompositionProcessorEngine->GetVirtualKeyLength());
+                // The raw spelling is unchanged, so only the caret part of the
+                // payload is applied: rebuilding the keystroke buffer from the
+                // same text would flash the preedit. A payload without a caret
+                // means "at the end", the default an omitted field carries.
+                const LONGLONG target = payload.has_caret ? static_cast<LONGLONG>(payload.caret) : length;
+                const LONGLONG caret = static_cast<LONGLONG>(pCompositionProcessorEngine->GetCaretPosition());
+                if (target >= 0 && target <= length && target != caret)
+                {
+                    pCompositionProcessorEngine->MoveCaret(static_cast<int>(target - caret));
+                }
+                return _SetCompositionCaretSelection(ec, pContext);
+            }
+        }
+        // The Server answered with something other than the restored composition,
+        // or with nothing at all. This request's reply slot is already consumed
+        // (or was empty), so the fallback must not wait for it again.
+        return _HandleCompositionArrowKey(ec, pContext, singleStepFunction, FANY_IME_NO_REQUEST_ID);
+    }
+
+    // UILess hosts and unnegotiated clients keep the ordinary reply pipe: the
+    // single-character fallback consumes the UiLess composition frame.
+    return _HandleCompositionArrowKey(ec, pContext, singleStepFunction, requestId);
 }
 
 //+---------------------------------------------------------------------------

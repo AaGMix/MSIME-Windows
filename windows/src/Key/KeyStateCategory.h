@@ -92,11 +92,17 @@ class CKeyStateCategory
     // HandleKeyBackspace
     virtual HRESULT HandleKeyBackspace(KeyHandlerEditSessionDTO dto);
 
+    // HandleKeySegmentBackspace (Ctrl+Backspace: one input unit)
+    virtual HRESULT HandleKeySegmentBackspace(KeyHandlerEditSessionDTO dto);
+
     // HandleKeyDelete
     virtual HRESULT HandleKeyDelete(KeyHandlerEditSessionDTO dto);
 
     // HandleKeyArrow
     virtual HRESULT HandleKeyArrow(KeyHandlerEditSessionDTO dto);
+
+    // HandleKeyArrowSegment (Ctrl+Left / Ctrl+Right: one input unit)
+    virtual HRESULT HandleKeyArrowSegment(KeyHandlerEditSessionDTO dto);
 
     // HandleKeyDoubleSingleByte
     virtual HRESULT HandleKeyDoubleSingleByte(KeyHandlerEditSessionDTO dto);
@@ -147,11 +153,17 @@ class CKeyStateComposing : public CKeyStateCategory
     // HandleCompositionBackspace
     HRESULT HandleKeyBackspace(KeyHandlerEditSessionDTO dto);
 
+    // HandleCompositionBackspaceSegment
+    HRESULT HandleKeySegmentBackspace(KeyHandlerEditSessionDTO dto);
+
     // HandleCompositionDelete
     HRESULT HandleKeyDelete(KeyHandlerEditSessionDTO dto);
 
     // HandleArrowKey
     HRESULT HandleKeyArrow(KeyHandlerEditSessionDTO dto);
+
+    // HandleKeyArrowSegment (Ctrl+Left / Ctrl+Right: one input unit)
+    HRESULT HandleKeyArrowSegment(KeyHandlerEditSessionDTO dto);
 
     // HandleKeyDoubleSingleByte
     HRESULT HandleKeyDoubleSingleByte(KeyHandlerEditSessionDTO dto);

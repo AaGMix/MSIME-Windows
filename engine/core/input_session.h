@@ -105,6 +105,13 @@ class InputSession
         std::string current_segmentation;
         std::string current_segmentation_with_cases;
         std::string selected_canonical_pinyin;
+        // Raw spelling the selection consumed from the active scheme's input,
+        // in the exact form the user typed it. A host that lets the user retract
+        // a selected segment must replay this spelling, not the pre-selection
+        // raw: the pre-selection raw also contains suffix characters the user
+        // may have deleted since the selection. Sources that consume no input
+        // (cloud, associative, whole-word commits) leave it empty.
+        std::string consumed_raw_input_with_cases;
     };
 
     struct CloudQueryState
@@ -140,6 +147,17 @@ class InputSession
     const std::string &get_pure_pinyin_sequence() const;
     const std::string &get_pinyin_segmentation() const;
     std::string get_pinyin_segmentation_with_cases() const;
+    // Offsets in get_pinyin_sequence_with_cases() where one input unit starts,
+    // always including 0 (when non-empty) and raw.size(). A unit is one syllable:
+    // the `ma` of ni'hao'ma, one 1-2 key syllable in shuangpin. Schemes and
+    // local modes without the unit model (wubi, japanese, U/K/E/M/J/Y/R and the
+    // dedicated English scheme) return an empty vector, and hosts then fall back
+    // to single-character editing. An active autocorrect/helpcode display is
+    // mapped back to the raw spans the engine actually cut, so a deleted unit
+    // can never leave half a segment or a stray separator behind. Consumed by
+    // segment deletion (Ctrl+Backspace), so any later caret-movement feature
+    // must use this same boundary set instead of re-deriving one.
+    std::vector<std::size_t> segment_raw_boundaries() const;
     std::string get_quanpin() const;
     bool is_all_complete_pure_pinyin() const;
     bool has_active_helpcode() const;

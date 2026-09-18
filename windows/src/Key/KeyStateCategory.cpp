@@ -117,12 +117,19 @@ HRESULT CKeyStateCategory::KeyStateHandler(KEYSTROKE_FUNCTION function, KeyHandl
     case FUNCTION_BACKSPACE:
         return HandleKeyBackspace(dto);
 
+    case FUNCTION_BACKSPACE_SEGMENT:
+        return HandleKeySegmentBackspace(dto);
+
     case FUNCTION_DELETE:
         return HandleKeyDelete(dto);
 
     case FUNCTION_MOVE_LEFT:
     case FUNCTION_MOVE_RIGHT:
         return HandleKeyArrow(dto);
+
+    case FUNCTION_MOVE_LEFT_SEGMENT:
+    case FUNCTION_MOVE_RIGHT_SEGMENT:
+        return HandleKeyArrowSegment(dto);
 
     case FUNCTION_MOVE_UP:
     case FUNCTION_MOVE_DOWN:
@@ -227,6 +234,13 @@ HRESULT CKeyStateCategory::HandleKeyBackspace(KeyHandlerEditSessionDTO dto)
     return E_NOTIMPL;
 }
 
+//_HandleCompositionBackspaceSegment
+HRESULT CKeyStateCategory::HandleKeySegmentBackspace(KeyHandlerEditSessionDTO dto)
+{
+    dto;
+    return E_NOTIMPL;
+}
+
 //_HandleCompositionDelete
 HRESULT CKeyStateCategory::HandleKeyDelete(KeyHandlerEditSessionDTO dto)
 {
@@ -236,6 +250,13 @@ HRESULT CKeyStateCategory::HandleKeyDelete(KeyHandlerEditSessionDTO dto)
 
 //_HandleCompositionArrowKey
 HRESULT CKeyStateCategory::HandleKeyArrow(KeyHandlerEditSessionDTO dto)
+{
+    dto;
+    return E_NOTIMPL;
+}
+
+//_HandleCompositionArrowKeySegment (Ctrl+Left / Ctrl+Right)
+HRESULT CKeyStateCategory::HandleKeyArrowSegment(KeyHandlerEditSessionDTO dto)
 {
     dto;
     return E_NOTIMPL;
@@ -325,6 +346,11 @@ HRESULT CKeyStateComposing::HandleKeyBackspace(KeyHandlerEditSessionDTO dto)
     return _pTextService->_HandleCompositionBackspace(dto.ec, dto.pContext, dto.requestId);
 }
 
+HRESULT CKeyStateComposing::HandleKeySegmentBackspace(KeyHandlerEditSessionDTO dto)
+{
+    return _pTextService->_HandleCompositionBackspaceSegment(dto.ec, dto.pContext, dto.requestId);
+}
+
 HRESULT CKeyStateComposing::HandleKeyDelete(KeyHandlerEditSessionDTO dto)
 {
     return _pTextService->_HandleCompositionDelete(dto.ec, dto.pContext, dto.requestId);
@@ -333,6 +359,11 @@ HRESULT CKeyStateComposing::HandleKeyDelete(KeyHandlerEditSessionDTO dto)
 HRESULT CKeyStateComposing::HandleKeyArrow(KeyHandlerEditSessionDTO dto)
 {
     return _pTextService->_HandleCompositionArrowKey(dto.ec, dto.pContext, dto.arrowKey, dto.requestId);
+}
+
+HRESULT CKeyStateComposing::HandleKeyArrowSegment(KeyHandlerEditSessionDTO dto)
+{
+    return _pTextService->_HandleCompositionArrowKeySegment(dto.ec, dto.pContext, dto.arrowKey, dto.requestId);
 }
 
 HRESULT CKeyStateComposing::HandleKeyDoubleSingleByte(KeyHandlerEditSessionDTO dto)

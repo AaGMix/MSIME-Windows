@@ -105,60 +105,10 @@ HRESULT CMetasequoiaIME::_HandleCandidateFinalize(TfEditCookie ec, _In_ ITfConte
         /* 处理造词的逻辑 */
         else if (serverMsgType == Global::DataFromServerMsgType::NeedToCreateWord)
         {
-            std::wstring data = serverCandidateString;
-            const size_t separator = data.find(L'\t');
-            if (separator != std::wstring::npos)
+            CreatingWordPayload payload;
+            if (ParseCreatingWordPayload(serverCandidateString, payload))
             {
-                std::wstring remainingRawInput = data.substr(0, separator);
-                std::wstring rest = data.substr(separator + 1);
-                const size_t secondSeparator = rest.find(L'\t');
-                std::wstring curWord;
-                std::wstring displayPreedit;
-                if (secondSeparator == std::wstring::npos)
-                {
-                    curWord = rest;
-                }
-                else
-                {
-                    curWord = rest.substr(0, secondSeparator);
-                    displayPreedit = rest.substr(secondSeparator + 1);
-                }
-                GlobalIme::word_for_creating_word = curWord;
-                if (GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
-                {
-                    GlobalIme::pending_create_word_preedit = displayPreedit;
-                }
-                else
-                {
-                    GlobalIme::pending_create_word_preedit.clear();
-                }
-                CCompositionProcessorEngine *pCompositionProcessorEngine = nullptr;
-                pCompositionProcessorEngine = _pCompositionProcessorEngine;
-
-                DWORD_PTR vKeyLen = pCompositionProcessorEngine->GetVirtualKeyLength();
-
-                for (DWORD_PTR i = 0; i < vKeyLen; i++)
-                {
-                    DWORD_PTR curVkeyLen = pCompositionProcessorEngine->GetVirtualKeyLength();
-                    if (curVkeyLen)
-                    {
-                        pCompositionProcessorEngine->RemoveVirtualKey(curVkeyLen - 1);
-                    }
-                }
-                for (DWORD_PTR i = 0; i < remainingRawInput.length(); i++)
-                {
-                    pCompositionProcessorEngine->AddVirtualKey(remainingRawInput[i]);
-                }
-
-                if (pCompositionProcessorEngine->GetVirtualKeyLength())
-                {
-                    _HandleCompositionInputWorker(pCompositionProcessorEngine, ec, pContext, FANY_IME_NO_REQUEST_ID);
-                }
-                else
-                {
-                    GlobalIme::pending_create_word_preedit.clear();
-                    _HandleCancel(ec, pContext);
-                }
+                (void)_ApplyCreatingWordPayload(ec, pContext, payload);
             }
             return hr;
         }
