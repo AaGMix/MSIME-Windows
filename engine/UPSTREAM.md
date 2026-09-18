@@ -19,7 +19,16 @@ The engine's own nested submodules were expanded in place at the commits it pinn
 | --- | --- | --- |
 | `googlepinyinime-rev/` | `metasequoiaime/Google-PinyinIME-Rev` | `12db5237adfcecb79b8ac602d80f3576639ea219` |
 | `utfcpp/` | `nemtrif/utfcpp` | `2d8e20b22dcb3e9b3c4f52103182ebda949c6089` |
+| `ngram/kenlm/` | `kpu/kenlm` | `4cb443e60b7bf2c0ddf3c745378f76cb59e254e5` |
 | `voice/third_party/miniaudio/` | `mackron/miniaudio` | `9634bedb5b5a2ca38c1ee7108a9358a4e233f14d` |
+
+`ngram/kenlm/` did not arrive with the engine import; it was added later, at the commit libime pins
+for its own `src/libime/core/kenlm` submodule, so the query code and the shipped `sc.lm` come from
+the same generation of kenlm. Only the query subset was copied: `lm/*.{hh,cc}`, `util/` and
+`util/double-conversion/`. `lm/builder`, `lm/filter`, `lm/interpolate` and `lm/wrappers` are not
+here, and no file that is here includes them. The sources are unmodified; the two Windows
+adaptations it needs — a wide-character `util::_open` and the `_HAS_AUTO_PTR_ETC` definition — live
+outside the subtree, in `ngram/kenlm_file_io.h` and `ngram/CMakeLists.txt`.
 
 Two of those files, `googlepinyinime-rev/src/{include/userdict.h,share/userdict.cpp}`, are committed
 upstream with CRLF and arrive here with LF. That is this repository's `.gitattributes` (`* text=auto

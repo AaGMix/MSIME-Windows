@@ -13,7 +13,7 @@ This directory used to be a submodule of `metasequoiaime/MSIME-Engine`. It is no
 | `helpcode/` | Helpcode (形码) tables and generators |
 | `local_modes/`, `providers/`, `user_dictionary/` | Local modes, online candidate sources, the user dictionary |
 | `voice/` | Recording, WAV encoding, recognition and text cleanup; builds independently |
-| `googlepinyinime-rev/`, `utfcpp/`, `voice/third_party/` | Vendored third-party code, kept in its upstream formatting and licence |
+| `googlepinyinime-rev/`, `ngram/kenlm/`, `utfcpp/`, `voice/third_party/` | Vendored third-party code, kept in its upstream formatting and licence |
 
 Integration is through `<metasequoia/session.h>`. See [runtime architecture](docs/runtime-architecture.md).
 
@@ -46,4 +46,4 @@ Recognition goes through a cloud provider; local Whisper inference was removed. 
 
 ## Licence
 
-GPL-3.0. Vendored `googlepinyinime-rev`, `utfcpp` and `voice/third_party/miniaudio` keep their upstream licences.
+GPL-3.0. Vendored `googlepinyinime-rev`, `ngram/kenlm` (LGPL-2.1-or-later), `utfcpp` and `voice/third_party/miniaudio` keep their upstream licences.

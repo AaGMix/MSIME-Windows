@@ -46,8 +46,9 @@ cd "$project_root"
 # as the code that calls it, and one entry point is what makes that automatic.
 # The exclusions below are the ones that gate carried:
 #
-#   - googlepinyinime-rev keeps its AOSP formatting and utfcpp is an upstream
-#     copy, so neither is ours to reformat; same for */third_party/ (miniaudio).
+#   - googlepinyinime-rev keeps its AOSP formatting, and ngram/kenlm and utfcpp
+#     are upstream copies, so none of them is ours to reformat; same for
+#     */third_party/ (miniaudio).
 #   - The four generated headers are emitted from JSON by
 #     contracts/{assets,dictionary,punctuation,webview}/generate.py, and CI
 #     re-runs each generator with --check. Reformatting the checked-in copy
@@ -59,7 +60,7 @@ git ls-files --cached --others --exclude-standard \
         'log/*.cpp' 'log/*.h' \
         'engine/*.cpp' 'engine/*.h' 'engine/*.hpp' \
     | grep -v '/vendor/' \
-    | grep -vE '^engine/(googlepinyinime-rev|utfcpp)/' \
+    | grep -vE '^engine/(googlepinyinime-rev|ngram/kenlm|utfcpp)/' \
     | grep -v '/third_party/' \
     | grep -vxF \
         -e engine/contracts/assets/assets.h \

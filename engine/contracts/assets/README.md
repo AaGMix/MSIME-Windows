@@ -32,6 +32,15 @@ Verification is read-only and does not extract into application directories. The
 manifest records the producer commit and Google Pinyin source commit. The bundle carries
 source/permission notices without changing the underlying data permissions.
 
+Contract version 2 adds `sc.lm`, the kenlm trigram that scores word-lattice sentences, and its
+notice. Because `verify()` compares the manifest's `assets_contract_version` against this
+inventory, a bundle built against version 1 no longer verifies: the release side has to produce
+one that carries `sc.lm` before a host can accept it. The model itself is not committed — the
+`language-model/` source path names the directory where `scripts/build-language-model.ps1`
+converts it from the ARPA corpus pinned in `language-model/lock.json`, which is how the Windows
+installer obtains it. A bundle producer can use the same script, or its own equivalent, as long
+as the bytes match that lock.
+
 `mutable-copy` files are immutable release inputs but writable runtime dictionaries after
 installation. `resource` files remain in the resource directory; `user` files remain under
 the user's durable data directory. `engine-assets-manifest.json` is versioned separately

@@ -9,6 +9,7 @@
 #include "../core/key_event.h"
 #include "../core/word_item.h"
 #include "../quanpin/quanpin_query.h"
+#include "engine/ngram/language_model.h"
 #include "shuangpin_profile.h"
 #include <shared_mutex>
 #include <array>
@@ -81,6 +82,8 @@ class ShuangpinDictionary
     sqlite3_int64 data_version_ = -1;
     metasequoia::RuntimePaths paths_;
     metasequoia::PinyinDecoder decoder_;
+    // 与全拼共用的词格打分模型，见 QuanpinDictionary::language_model_。
+    const ngram::LanguageModel *language_model_ = nullptr;
     HelpcodeUtils::SharedKeymap helpcodes_;
     std::unordered_map<std::string, sqlite3_stmt *> quanpin_statement_cache_;
     void reset_cache_if_database_changed();

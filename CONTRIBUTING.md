@@ -80,7 +80,7 @@ Set-Location ..\installer
 ## 改动前要知道的几条边界
 
 - **协议的唯一来源是 `engine/contracts/`。** IPC 线格式、opcode、语音分帧和 WebView 消息定义都在那里，两侧引用同一份头文件，不要在任何一侧另写一份。
-- **`engine/` 是本仓的一等代码。** 要为 Windows 改引擎就直接改，和改 `server/` 一样评审和测试；引擎和调用它的代码可以、也应该在同一个 PR 里。例外是 `engine/` 下的 `googlepinyinime-rev/`、`utfcpp/`、`voice/third_party/`，那是上游副本。见 [engine/UPSTREAM.md](engine/UPSTREAM.md)。
+- **`engine/` 是本仓的一等代码。** 要为 Windows 改引擎就直接改，和改 `server/` 一样评审和测试；引擎和调用它的代码可以、也应该在同一个 PR 里。例外是 `engine/` 下的 `googlepinyinime-rev/`、`ngram/kenlm/`、`utfcpp/`、`voice/third_party/`，那是上游副本。见 [engine/UPSTREAM.md](engine/UPSTREAM.md)。
 - **`ui/` 不许反向依赖产品。** 它不读 Server 配置、IPC、引擎、词库或全局输入状态。`ui/scripts/check-boundary.py` 在 CI 里检查。
 - **窗口归 `server/`，页面归 `ui-html/`。** 改消息 `type`、JSON 字段或页面导出的 JS 函数时两侧一起改。
 - **`ui-html/webview2/shared/` 是生成物**，由 `ui-html/scripts/sync-contracts.py` 从 `engine/contracts/webview/` 同步，CI 用 `--check` 校验。要改契约就去改 `engine/contracts/`，然后在同一个提交里重新生成。

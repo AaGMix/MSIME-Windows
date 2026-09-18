@@ -13,7 +13,7 @@
 | `helpcode/` | 辅助码数据和生成脚本 |
 | `local_modes/`、`providers/`、`user_dictionary/` | 本地模式、在线候选来源、用户词库 |
 | `voice/` | 录音、识别、文本处理；可选构建 |
-| `googlepinyinime-rev/`、`utfcpp/`、`voice/third_party/` | 第三方内嵌代码，保留上游格式与许可 |
+| `googlepinyinime-rev/`、`ngram/kenlm/`、`utfcpp/`、`voice/third_party/` | 第三方内嵌代码，保留上游格式与许可 |
 
 接入方式是 `<metasequoia/session.h>`；会话隔离、资源目录和兼容接口见 [运行时架构](docs/runtime-architecture.md)。资源清单与校验的权威是 [assets 契约](contracts/assets/README.md)。
 

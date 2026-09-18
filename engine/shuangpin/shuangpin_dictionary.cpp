@@ -52,6 +52,7 @@ std::string escape_sql_text(std::string text)
 ShuangpinDictionary::ShuangpinDictionary(const ShuangpinProfile &profile, metasequoia::RuntimePaths paths)
     : profile_(profile), paths_(std::move(paths)), decoder_(paths_.resource(metasequoia::assets::pinyin_model),
                                                             paths_.user(metasequoia::assets::pinyin_user_dictionary)),
+      language_model_(&ngram::shared_language_model(paths_.resource(metasequoia::assets::language_model))),
       helpcodes_(HelpcodeUtils::load_helpcode_keymap(paths_.resources, HelpcodeUtils::selected_helpcode_schema())),
       _kb_input_sequence(100), _cached_buffer(128), _cached_buffer_sgl(128), _cached_buffer_sgl_reversed(128),
       _cached_buffer_dbl(128), _cached_buffer_series(128)
@@ -212,6 +213,7 @@ vector<ShuangpinDictionary::WordItem> ShuangpinDictionary::generateSeries( //
         }
         quanpin::WordLatticeOptions lattice_options;
         lattice_options.nbest = 1;
+        lattice_options.language_model = language_model_;
         quanpin::merge_lattice_candidates(candidate_list, quanpin::split_segments(quanpin_segmentation),
                                           quanpin::make_lattice_db_lookup(quanpin_db_, quanpin_statement_cache_,
                                                                           quanpin::QuerySource::Shuangpin,

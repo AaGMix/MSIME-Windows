@@ -8,6 +8,7 @@
 #include "../core/key_event.h"
 #include "../core/word_item.h"
 #include "quanpin_query.h"
+#include "engine/ngram/language_model.h"
 #include "../core/fuzzy_pinyin_options.h"
 #include <sqlite3.h>
 #include <string>
@@ -140,6 +141,9 @@ class QuanpinDictionary
     sqlite3_int64 data_version_ = -1;
     metasequoia::RuntimePaths paths_;
     metasequoia::PinyinDecoder decoder_;
+    // 词格整句的打分模型（kenlm 三元），按资源路径进程内共享、只读。缺模型时
+    // valid() 为假，word_lattice 退回旧的启发式打分：整句候选只是变差，不会消失。
+    const ngram::LanguageModel *language_model_ = nullptr;
     std::unordered_map<std::string, sqlite3_stmt *> statement_cache_;
     std::string db_path_;
 

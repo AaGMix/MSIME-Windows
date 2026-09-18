@@ -233,6 +233,7 @@ QuanpinDictionary::QuanpinDictionary(std::string db_path, metasequoia::RuntimePa
     : cache_(128), series_cache_(128), segmentation_cache_(128), resolution_cache_(128), paths_(std::move(paths)),
       decoder_(paths_.resource(metasequoia::assets::pinyin_model),
                paths_.user(metasequoia::assets::pinyin_user_dictionary)),
+      language_model_(&ngram::shared_language_model(paths_.resource(metasequoia::assets::language_model))),
       db_path_(db_path.empty() ? metasequoia::path_to_utf8(paths_.dictionary(metasequoia::assets::main_dictionary))
                                : std::move(db_path))
 {
@@ -519,6 +520,7 @@ std::vector<WordItem> QuanpinDictionary::query_series(const std::string &raw_inp
 
         quanpin::WordLatticeOptions lattice_options;
         lattice_options.nbest = 1;
+        lattice_options.language_model = language_model_;
         quanpin::merge_lattice_candidates(result, segments,
                                           quanpin::make_lattice_db_lookup(db_, statement_cache_,
                                                                           quanpin::QuerySource::Quanpin,

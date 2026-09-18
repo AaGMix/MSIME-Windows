@@ -56,8 +56,9 @@ class ScopedLocalAppDataOverride
         // msime.db 是回归断言的主体，缺失即环境不完整；而当前产品布局已不再发布
         // 整句解码器的两个数据文件（dict_pinyin.dat/user_dict.dat），引擎对它们
         // 的缺失也是优雅降级（PinyinDecoder::sentence 直接返回空串），所以这里
-        // 仅在源目录存在时才拷贝，不把它们当硬依赖。
-        for (const auto &file_name : {"msime.db", "dict_pinyin.dat", "user_dict.dat"})
+        // 仅在源目录存在时才拷贝，不把它们当硬依赖。词格打分用的 sc.lm 同理：
+        // 缺了就退回启发式打分，整句候选只是变差、不会消失。
+        for (const auto &file_name : {"msime.db", "dict_pinyin.dat", "user_dict.dat", "sc.lm"})
         {
             const fs::path source = source_dir / file_name;
             const fs::path target = app_dir_ / file_name;

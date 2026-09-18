@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../core/word_item.h"
+#include "engine/ngram/language_model.h"
 #include "quanpin_utils.h"
 
 #include <cstdint>
@@ -12,10 +13,16 @@ namespace quanpin
 {
 
 // Phrase-graph + Viterbi beam search over dictionary spans.
-// Algorithm follows libpinyin PinyinLookup2 (unigram path score as a product of
-// P(word), beam per syllable step) and sunpinyin's lattice columns.
-// Bigram interpolation is omitted until a bigram table exists; the unigram
-// normalizer supplies the usual "fewer tokens win" bias.
+// The graph (which words can cover which syllable spans) comes from the
+// dictionary; the path score comes from the kenlm trigram in
+// engine/ngram. Each hypothesis carries the language model state, so an edge is
+// scored as log10 P(word | previous two words) exactly like libime's decoder.
+// Dictionary weight only survives as a bounded tiebreak: it decides the order of
+// words the language model cannot distinguish (both unseen), and cannot
+// outweigh a real n-gram difference.
+//
+// Without a model (sc.lm missing or unreadable) the decoder falls back to the
+// previous uncalibrated unigram heuristic so the IME still produces sentences.
 //
 // Ranking when merging into an existing candidate list:
 //   1. Exact SQLite full-key hits (CandidateSource::Database / UserDatabase)
@@ -56,9 +63,18 @@ struct WordLatticeOptions
     // the same cap in query_segments_keyed_flat.
     int span_limit = 32;
     int max_phrase_syllables = 7;
-    // Heuristic unigram normalizer vs phrase-length bonus. Single-char
-    // msime.db weights are corpus counts; phrase weights are a smaller scale.
-    // Not calibrated on the full dictionary.
+    // The trigram that scores paths. Null (or an unloadable model) selects the
+    // heuristic below. Borrowed, not owned; must outlive the call.
+    const ngram::LanguageModel *language_model = nullptr;
+    // Weight of the dictionary tiebreak, in log10 units per decade of
+    // msime.db weight. Deliberately small: the largest plausible weight spread
+    // is ~7 decades, so the tiebreak tops out around 0.07 and can only reorder
+    // words the model scores identically (in practice, two unknown words that
+    // both took the -7.78 penalty).
+    double dictionary_tiebreak = 0.01;
+    // Only used when language_model is unusable. Heuristic unigram normalizer
+    // vs phrase-length bonus; single-char msime.db weights are corpus counts
+    // while phrase weights are a smaller scale. Never calibrated.
     double unigram_z = 1e6;
     double phrase_length_bonus = 3.0;
 };

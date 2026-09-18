@@ -46,10 +46,17 @@ struct LatticeEdge
     std::string word;
     std::string key;
     std::int64_t weight = 0;
-    double log_prob = 0;
+    // Context-free part of the edge score: the heuristic when there is no
+    // model, the dictionary tiebreak when there is one.
+    double base_score = 0;
+    // Vocabulary index of `word`, resolved once instead of per hypothesis.
+    ngram::WordIndex index = 0;
 };
 
-double edge_log_prob(std::int64_t weight, size_t syllables, const WordLatticeOptions &options)
+// Fallback scorer, used only when no language model is available. Kept on the
+// natural-log scale it was written on: nothing mixes it with model scores,
+// because the choice is made once per decode, not per edge.
+double heuristic_log_prob(std::int64_t weight, size_t syllables, const WordLatticeOptions &options)
 {
     const double w = weight > 0 ? static_cast<double>(weight) : 1.0;
     const double z = options.unigram_z > 1.0 ? options.unigram_z : 1e6;
@@ -63,6 +70,14 @@ double edge_log_prob(std::int64_t weight, size_t syllables, const WordLatticeOpt
     return lp + options.phrase_length_bonus * static_cast<double>(syllables);
 }
 
+// log10 of the dictionary weight, scaled down to a tiebreak. See
+// WordLatticeOptions::dictionary_tiebreak for why it has to stay this small.
+double dictionary_tiebreak(std::int64_t weight, const WordLatticeOptions &options)
+{
+    const double w = weight > 0 ? static_cast<double>(weight) : 1.0;
+    return options.dictionary_tiebreak * std::log10(w);
+}
+
 struct Hyp
 {
     double score = kNegInf;
@@ -70,6 +85,9 @@ struct Hyp
     int prev_idx = -1;
     std::string word;
     std::string key;
+    // Trailing n-gram context of this path. Unused (and left zeroed) when
+    // decoding with the heuristic.
+    ngram::State state;
 };
 
 void keep_beam(std::vector<Hyp> &column, int beam)
@@ -81,9 +99,18 @@ void keep_beam(std::vector<Hyp> &column, int beam)
     column.resize(static_cast<size_t>(beam));
 }
 
+// The model actually usable for this decode, or null to run the heuristic.
+const ngram::LanguageModel *active_model(const WordLatticeOptions &options)
+{
+    if (options.language_model && options.language_model->valid())
+        return options.language_model;
+    return nullptr;
+}
+
 std::vector<std::vector<LatticeEdge>> build_graph(const Segments &syllables, const WordLatticeLookup &lookup,
                                                   const WordLatticeOptions &options)
 {
+    const ngram::LanguageModel *model = active_model(options);
     const size_t n = syllables.size();
     std::vector<std::vector<LatticeEdge>> graph(n);
     const size_t max_len = static_cast<size_t>(std::max(1, options.max_phrase_syllables));
@@ -113,7 +140,15 @@ std::vector<std::vector<LatticeEdge>> build_graph(const Segments &syllables, con
                 edge.word = row.value;
                 edge.key = row.key.empty() ? span_key : row.key;
                 edge.weight = row.weight;
-                edge.log_prob = edge_log_prob(edge.weight, end - start, options);
+                if (model)
+                {
+                    edge.index = model->index(edge.word);
+                    edge.base_score = dictionary_tiebreak(edge.weight, options);
+                }
+                else
+                {
+                    edge.base_score = heuristic_log_prob(edge.weight, end - start, options);
+                }
                 graph[start].push_back(std::move(edge));
             }
         }
@@ -152,9 +187,18 @@ std::vector<LatticePath> decode_word_lattice(const Segments &syllables, const Wo
         return {};
 
     const size_t n = syllables.size();
+    const ngram::LanguageModel *model = active_model(options);
     const auto graph = build_graph(syllables, lookup, options);
     std::vector<std::vector<Hyp>> columns(n + 1);
-    columns[0].push_back(Hyp{0.0, -1, -1, {}, {}});
+    Hyp start;
+    start.score = 0.0;
+    // Not begin_state(): the shipped sc.lm is built from an ARPA without
+    // <s>/</s>, so a sentence-start context would only carry a word the model
+    // has no n-grams for. Starting from the empty context makes the first word
+    // score as a plain unigram, which is what that model can actually express.
+    if (model)
+        start.state = model->null_state();
+    columns[0].push_back(std::move(start));
 
     for (size_t pos = 0; pos < n; ++pos)
     {
@@ -167,7 +211,9 @@ std::vector<LatticePath> decode_word_lattice(const Segments &syllables, const Wo
             for (const auto &edge : graph[pos])
             {
                 Hyp next;
-                next.score = hyp.score + edge.log_prob;
+                next.score = hyp.score + edge.base_score;
+                if (model)
+                    next.score += model->score(hyp.state, edge.index, next.state);
                 next.prev_pos = static_cast<int>(pos);
                 next.prev_idx = hi;
                 next.word = edge.word;

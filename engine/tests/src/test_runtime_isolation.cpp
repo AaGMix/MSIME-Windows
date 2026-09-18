@@ -3,6 +3,7 @@
 #include "../../core/input_session.h"
 #include "../../core/pinyin_decoder.h"
 #include "../../japanese/japanese_sentence_decoder.h"
+#include "engine/ngram/language_model.h"
 #include "../../contracts/assets/assets.h"
 #include "../../user_dictionary/user_dictionary_journal.h"
 #include "test_directory_cleanup.h"
@@ -704,6 +705,30 @@ void test_runtime_isolation()
         };
         auto first = std::async(std::launch::async, run, std::cref(decoder_a), "nihao", expected_a);
         auto second = std::async(std::launch::async, run, std::cref(decoder_b), "zhongguo", expected_b);
+        first.get();
+        second.get();
+    }
+
+    // 词格打分用的三元模型：按路径共享一份实例，缺模型时退化成可用的空模型。
+    // 出货的 sc.lm 不在仓库里，这里只覆盖共享语义和缺模型时的降级路径——后者
+    // 正是用户第一次装完还没下词库那一段时间的真实状态。
+    {
+        const auto &missing = ngram::shared_language_model(root / "missing.lm");
+        require(&missing == &ngram::shared_language_model(root / "missing.lm"), "Shared model was loaded twice");
+        require(&missing != &ngram::shared_language_model(root / "other-missing.lm"),
+                "Two model paths shared one instance");
+        require(!missing.valid() && !missing.error().empty(), "Missing model reported success");
+        // 空模型对任何词都给未登录词的罚分，score 本身仍然是可并发调用的 const。
+        const auto probe = [&missing] {
+            for (int i = 0; i < 12; ++i)
+            {
+                ngram::State out;
+                require(missing.score(missing.null_state(), "中国", out) == missing.unknown_penalty(),
+                        "Missing model scored a word");
+            }
+        };
+        auto first = std::async(std::launch::async, probe);
+        auto second = std::async(std::launch::async, probe);
         first.get();
         second.get();
     }

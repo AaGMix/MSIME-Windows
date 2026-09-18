@@ -47,6 +47,10 @@ include_directories("../")
 include_directories("../include")
 include_directories("../utfcpp/source/")
 
+# 词格打分用的 kenlm 三元模型。这里按源码目录挂进来，与 engine/CMakeLists.txt
+# 共用同一份 ngram/CMakeLists.txt。
+add_subdirectory("../ngram" "ngram")
+
 set(MY_EXECUTABLE_NAME "imetest")
 set(
     ENGINE_SOURCE_FILES
@@ -122,11 +126,11 @@ set(
 
 add_executable(${MY_EXECUTABLE_NAME} ${SOURCE_FILES} )
 
-target_link_libraries(${MY_EXECUTABLE_NAME} fmt::fmt spdlog::spdlog unofficial::sqlite3::sqlite3 Boost::locale)
+target_link_libraries(${MY_EXECUTABLE_NAME} fmt::fmt spdlog::spdlog unofficial::sqlite3::sqlite3 Boost::locale metasequoia_ime_ngram)
 
 # 全拼纠错评测独立二进制（任务 .trellis/tasks/09-12-quanpin-autocorrect-patent
 # 阶段 0 的基线采集载体）：采样真实 msime.db 注错测召回，只挂自己的 main，
 # 与 imetest 的测试装置互不依赖。
 add_executable(eval_quanpin_autocorrect "./src/eval_quanpin_autocorrect.cpp" ${ENGINE_SOURCE_FILES})
 
-target_link_libraries(eval_quanpin_autocorrect fmt::fmt spdlog::spdlog unofficial::sqlite3::sqlite3 Boost::locale)
+target_link_libraries(eval_quanpin_autocorrect fmt::fmt spdlog::spdlog unofficial::sqlite3::sqlite3 Boost::locale metasequoia_ime_ngram)
