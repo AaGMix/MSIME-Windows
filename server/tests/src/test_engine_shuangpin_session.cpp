@@ -1122,6 +1122,21 @@ TEST_CASE(SegmentBoundariesFollowShuangpinSyllableSegmentation)
     microsoft.handle_key(VK_OEM_1, 0, L';');
     InputLetters(microsoft, "ni");
     REQUIRE_EQ(microsoft.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 4}));
+
+    // Same ';' final after several syllables: 你好病 = ni | hk | b; in the
+    // Microsoft layout (ao sits on 'k'), so the last unit spans 'b' and ';'.
+    EngineInputSession microsoft_long(SchemeType::Shuangpin, GetMicrosoftShuangpinProfile());
+    InputLetters(microsoft_long, "nihkb");
+    microsoft_long.handle_key(VK_OEM_1, 0, L';');
+    REQUIRE_EQ(microsoft_long.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 4, 6}));
+
+    // Greedy longest-pair parsing is the contract: 'cb' is a valid Microsoft
+    // code (cou), so it wins over pairing 'b' with the trailing ';'. The
+    // preedit shows the same cut, and the deletion follows the preedit.
+    EngineInputSession microsoft_greedy(SchemeType::Shuangpin, GetMicrosoftShuangpinProfile());
+    InputLetters(microsoft_greedy, "nihcb");
+    microsoft_greedy.handle_key(VK_OEM_1, 0, L';');
+    REQUIRE_EQ(microsoft_greedy.segment_raw_boundaries(), std::vector<std::size_t>({0, 2, 3, 5, 6}));
 }
 
 TEST_CASE(UnitlessSchemesReportNoSegmentBoundaries)
