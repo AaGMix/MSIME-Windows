@@ -53,11 +53,10 @@ class ScopedLocalAppDataOverride
         fs::remove_all(root_);
         fs::create_directories(app_dir_);
 
-        // msime.db 是回归断言的主体，缺失即环境不完整；而当前产品布局已不再发布
-        // 整句解码器的两个数据文件（dict_pinyin.dat/user_dict.dat），引擎对它们
-        // 的缺失也是优雅降级（PinyinDecoder::sentence 直接返回空串），所以这里
-        // 仅在源目录存在时才拷贝，不把它们当硬依赖。词格打分用的 sc.lm 同理：
-        // 缺了就退回启发式打分，整句候选只是变差、不会消失。
+        // msime.db 是回归断言的主体，缺失即环境不完整。其余几个都不是硬依赖：
+        // dict_pinyin.dat 随安装包发布，user_dict.dat 是可写用户文件、由引擎自建，
+        // 两者缺失时 PinyinDecoder::sentence 直接返回空串；sc.lm 缺失则退回启发式
+        // 打分，整句候选只是变差、不会消失。所以这里仅在源目录存在时才拷贝。
         for (const auto &file_name : {"msime.db", "dict_pinyin.dat", "user_dict.dat", "sc.lm"})
         {
             const fs::path source = source_dir / file_name;
@@ -465,6 +464,42 @@ void test_quanpin_four_syllable_alternative_segmentation()
     const auto result = dictionary.query("jianmingeyao");
     const auto *found = find_candidate(result, "简明扼要");
     expect(found != nullptr, "Expected '简明扼要' among the candidates for 'jianmingeyao'.");
+}
+
+// 两条整句来源的相对次序：词格（Generated，kenlm 打分）必须排在 Google 解码器
+// （Fallback）之前。merge_lattice_candidates 自己的插入点已经由上面的表驱动用例
+// 覆盖，但词典层曾经在合并之后又把 Fallback 提回首位，那一步没有任何测试盯着，
+// 换掉打分模型之后才发现次序是反的。这里断的是词典层的最终结果。
+//
+// 不写死具体句子：词格出什么取决于 msime.db 和 sc.lm，钉死了会随词库更新而碎。
+// 断的是相对位置，且只在两条来源都真的出现时才断。
+void test_quanpin_lattice_precedes_google_fallback()
+{
+    QuanpinDictionary dictionary;
+
+    fmt::println("==== Quanpin Lattice Precedes Google Fallback ====");
+    bool observed = false;
+    for (const auto *query : {"nihaoshijie", "jintiantianqizhenhao", "womenyiqiquchifan"})
+    {
+        const auto result = dictionary.query(query);
+        const auto generated = std::find_if(result.begin(), result.end(), [](const WordItem &item) {
+            return item.source == CandidateSource::Generated;
+        });
+        const auto fallback = std::find_if(result.begin(), result.end(), [](const WordItem &item) {
+            return item.source == CandidateSource::Fallback;
+        });
+        if (generated == result.end() || fallback == result.end())
+            continue;
+        observed = true;
+        expect(generated < fallback,
+               fmt::format("Expected the lattice sentence ahead of the Google fallback for '{}', got '{}' before '{}'",
+                           query, fallback->word, generated->word));
+    }
+    if (!observed)
+    {
+        // sc.lm 或 dict_pinyin.dat 不在数据目录里时两条来源凑不齐，与其他用例一样优雅跳过。
+        fmt::println("Skipped: no query produced both a lattice and a Google fallback sentence.");
+    }
 }
 
 void test_quanpin_single_letter_jianpin_ranking()
@@ -1446,6 +1481,7 @@ int main(int argc, char *argv[])
         test_shuangpin_query_manual_apostrophe();
         test_quanpin_order_corrections();
         test_quanpin_four_syllable_alternative_segmentation();
+        test_quanpin_lattice_precedes_google_fallback();
         test_quanpin_single_letter_jianpin_ranking();
         test_quanpin_query_timings();
         test_quanpin_autocorrect_switches_and_guard();

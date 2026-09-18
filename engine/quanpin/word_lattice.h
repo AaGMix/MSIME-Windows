@@ -30,7 +30,10 @@ namespace quanpin
 //   3. Google-pinyin Fallback, prefixes, and other remaining items
 // Lattice never displaces a leading exact Database/UserDatabase full-cover
 // (e.g. 高碳钢 for gktjgh). Fallback must not block lattice (e.g. 高碳钢镊子
-// ahead of 高谈刚捏子).
+// ahead of 高谈刚捏子). Callers must not reorder these two afterwards: the
+// dictionary layer used to hoist Fallback back to the front, which silently
+// inverted the ranking. test_quanpin_lattice_precedes_google_fallback guards
+// the end result.
 //
 // merge_lattice_candidates only runs at 3+ complete syllables. One- and
 // two-syllable keys are already covered by exact SQLite lookup. Abbreviated

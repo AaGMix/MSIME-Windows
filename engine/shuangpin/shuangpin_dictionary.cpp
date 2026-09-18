@@ -195,18 +195,17 @@ vector<ShuangpinDictionary::WordItem> ShuangpinDictionary::generateSeries( //
 
         const std::string quanpin_segmentation =
             ShuangpinUtil::convert_seg_shuangpin_to_seg_complete_pinyin(pinyin_segmentation, profile_);
-        // Prefer one local Google-Pinyin whole-sentence result, followed by
-        // only the best dictionary-lattice path.  Multiple lattice paths tend
-        // to crowd out useful candidates with near-duplicate sentences.
-        std::string google_sentence;
+        // 次序与全拼一致：词格（kenlm 三元模型打分）在前，Google 解码器在后。两边都
+        // 只出一句，免得近似重复的整句把候选页挤满。merge_lattice_candidates 的插入点
+        // 在这条 Fallback 之前，所以这里照旧插到表头，词格随后会落在它上面。
         if (quanpin::split_segments(quanpin_segmentation).size() >= 3 &&
             quanpin_segmentation.find('\'') != std::string::npos)
         {
-            google_sentence = search_sentence_from_ime_engine(quanpin_segmentation);
+            const std::string google_sentence = search_sentence_from_ime_engine(quanpin_segmentation);
             const bool duplicate = std::any_of(candidate_list.begin(), candidate_list.end(),
                                                [&](const WordItem &item) { return item.word == google_sentence; });
             if (!google_sentence.empty() && !duplicate)
-                // 同上：这条候选会被提到首位、成为空格默认提交的那个，必须可落库。
+                // 整句 fallback 必须带上 canonical quanpin，否则以它结尾的造词无法落库。
                 candidate_list.insert(
                     candidate_list.begin(),
                     WordItem(_pinyin_sequence, google_sentence, 1, CandidateSource::Fallback, quanpin_segmentation));
@@ -219,18 +218,6 @@ vector<ShuangpinDictionary::WordItem> ShuangpinDictionary::generateSeries( //
                                                                           quanpin::QuerySource::Shuangpin,
                                                                           lattice_options.span_limit),
                                           pinyin_sequence, lattice_options);
-        if (!google_sentence.empty())
-        {
-            const auto google = std::find_if(candidate_list.begin(), candidate_list.end(), [&](const WordItem &item) {
-                return item.word == google_sentence && item.source == CandidateSource::Fallback;
-            });
-            if (google != candidate_list.end() && google != candidate_list.begin())
-            {
-                WordItem preferred = std::move(*google);
-                candidate_list.erase(google);
-                candidate_list.insert(candidate_list.begin(), std::move(preferred));
-            }
-        }
 
         /* 缓存起来 */
         _cached_buffer_series.insert(effective_cache_key, candidate_list);

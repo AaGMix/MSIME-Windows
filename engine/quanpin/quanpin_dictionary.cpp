@@ -500,10 +500,11 @@ std::vector<WordItem> QuanpinDictionary::query_series(const std::string &raw_inp
 
     if (segments.size() >= 3 && quanpin::has_only_complete_pinyin_segments(segments))
     {
-        // Keep one local Google-Pinyin sentence as the primary whole-sentence
-        // suggestion.  The lattice is a secondary source; it should add only
-        // its best path rather than filling the candidate page with near-
-        // duplicate low-quality sentences.
+        // 两条整句来源各出一句：词格（kenlm 三元模型打分）在前，Google 解码器在后。
+        // 词格换成 sc.lm 之后整体比 Google 那条准，所以由它占首位；Google 那条保留，
+        // 它在词格覆盖不到的输入上仍然有用。两边都只出一句，免得近似重复的整句把
+        // 候选页挤满。次序由插入位置决定：merge_lattice_candidates 的插入点在这条
+        // Fallback 之前，因此这里照旧插到表头即可。
         const std::string normalized = remove_delimiters(segmentation.empty() ? raw_input : segmentation);
         const std::string google_sentence = search_sentence_from_ime_engine(normalized);
         if (!google_sentence.empty())
@@ -526,18 +527,6 @@ std::vector<WordItem> QuanpinDictionary::query_series(const std::string &raw_inp
                                                                           quanpin::QuerySource::Quanpin,
                                                                           lattice_options.span_limit),
                                           segmentation.empty() ? raw_input : segmentation, lattice_options);
-        if (!google_sentence.empty())
-        {
-            const auto google = std::find_if(result.begin(), result.end(), [&](const WordItem &item) {
-                return item.word == google_sentence && item.source == CandidateSource::Fallback;
-            });
-            if (google != result.end() && google != result.begin())
-            {
-                WordItem preferred = std::move(*google);
-                result.erase(google);
-                result.insert(result.begin(), std::move(preferred));
-            }
-        }
     }
 
     if (result.size() < kSparsePinyinFallbackThreshold)
