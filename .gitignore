@@ -16,4 +16,10 @@ log.txt
 # this repository, and both the release workflow and a local release rehearsal drop it beside the
 # components under this name.
 /MetasequoiaImeDict/
+
+# 语言模型：来源锁和授权声明进仓库，下载的语料、转换工具的构建目录和编出来的 sc.lm
+# 不进 —— 它们都能由 scripts/build-language-model.ps1 从 lock.json 重新得到。
+/language-model/cache/
+/language-model/sc.lm
+/language-model/sc.lm.incoming
 __pycache__/

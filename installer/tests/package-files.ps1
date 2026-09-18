@@ -34,6 +34,8 @@ try {
         'MetasequoiaImeDict/out/others.db',
         'MetasequoiaImeDict/out/dict_japanese.dat',
         'MetasequoiaImeDict/source/mozc_dictionary_oss/README.txt',
+        'language-model/sc.lm',
+        'language-model/NOTICE.md',
         'ui-html/webview2/shared/runtime.js',
         'ui-html/webview2/candwnd/index.html',
         'ui-html/webview2/menu/index.html',
@@ -47,6 +49,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Failed to create packaging fixture' }
     & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -TargetVersion '2026.9.1' -IncludeSymbols
     foreach ($file in @('app_data/html/webview2/shared/runtime.js', 'app_data/dictionary-manifest.json',
+                         'app_data/sc.lm', 'app_data/libime-lm-NOTICE.md',
                          'tsf_dll/32/MetasequoiaImeTsf.dll', 'tsf_dll/32/MetasequoiaImeTsf.pdb',
                          'tsf_dll/64/MetasequoiaImeTsf.dll', 'tsf_dll/64/MetasequoiaImeTsf.pdb',
                          'server_exe/MetasequoiaImeServer.pdb',
@@ -87,6 +90,15 @@ try {
     & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -TsfDirectory windows -ServerDirectory server -UiHtmlDirectory ui-html -NoticesDirectory . -Light
     if ([IO.File]::ReadAllText($database) -ne 'preserved user data') { throw 'Light package replaced dictionary data' }
     if (-not (Test-Path (Join-Path $installer 'app_data/html/webview2/shared/runtime.js'))) { throw 'Light package lost shared contracts' }
+    # 完整包必须带 sc.lm。缺了它引擎是静默降级的：整句候选只是变差，不会报错，所以打包
+    # 这一步是唯一能挡住它的地方。轻量包本来就不带数据文件，不受影响。
+    $languageModelFixture = Join-Path $fixture 'language-model/sc.lm'
+    Remove-Item $languageModelFixture -Force
+    & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -TsfDirectory windows -ServerDirectory server -UiHtmlDirectory ui-html -NoticesDirectory . -Light
+    $rejected = $false
+    try { & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture } catch { $rejected = $_.Exception.Message -match 'sc\.lm' }
+    if (-not $rejected) { throw 'Missing language model was accepted' }
+    [IO.File]::WriteAllText($languageModelFixture, 'fixture')
     Remove-Item (Join-Path $fixture 'ui-html/webview2/shared') -Recurse -Force
     $rejected = $false
     try { & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -TsfDirectory windows -ServerDirectory server -UiHtmlDirectory ui-html -NoticesDirectory . } catch { $rejected = $true }
