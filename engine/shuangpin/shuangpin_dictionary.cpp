@@ -23,6 +23,12 @@ using namespace std;
 
 namespace
 {
+std::string double_helpcode_cache_key(const std::string &pinyin, const std::string &help_codes)
+{
+    // The same lowercase input can carry normal or reversed auxiliary codes.
+    return pinyin + ":" + help_codes;
+}
+
 std::string remove_delimiters(const std::string &segmented)
 {
     std::string normalized = segmented;
@@ -368,10 +374,11 @@ vector<ShuangpinDictionary::WordItem> ShuangpinDictionary::generate_with_helpcod
     }
     else if (help_codes.size() == 2)
     {
-        if (_cached_buffer_dbl.get(pinyin_sequence))
+        const auto cache_key = double_helpcode_cache_key(pinyin_sequence, help_codes);
+        if (_cached_buffer_dbl.get(cache_key))
         {
             reset_cache_if_database_changed();
-            if (const auto cached = _cached_buffer_dbl.get(pinyin_sequence))
+            if (const auto cached = _cached_buffer_dbl.get(cache_key))
             {
                 return cached.value();
             }
@@ -399,7 +406,7 @@ vector<ShuangpinDictionary::WordItem> ShuangpinDictionary::generate_with_helpcod
             result_list,              //
             help_codes                //
         );
-        _cached_buffer_dbl.insert(pinyin_sequence, result_list);
+        _cached_buffer_dbl.insert(double_helpcode_cache_key(pinyin_sequence, help_codes), result_list);
     }
     return result_list;
 }
@@ -1186,10 +1193,11 @@ int ShuangpinDictionary::insert_word_to_cached_buffer_series(const std::string &
 }
 
 int ShuangpinDictionary::insert_word_to_active_helpcode_cache(const std::string &pinyin, const std::string &word,
-                                                              CandidateSource source)
+                                                              CandidateSource source,
+                                                              const std::string &double_helpcodes)
 {
-    auto insert_into_cache = [&](auto &cache) {
-        if (auto opt = cache.get(pinyin))
+    auto insert_into_cache = [&](auto &cache, const std::string &cache_key) {
+        if (auto opt = cache.get(cache_key))
         {
             auto list = opt.value();
             if (source == CandidateSource::AiSuggestion || source == CandidateSource::CloudSuggestion)
@@ -1212,16 +1220,19 @@ int ShuangpinDictionary::insert_word_to_active_helpcode_cache(const std::string 
                     list.emplace_back(pinyin, word, 1, source);
                 }
             }
-            cache.insert(pinyin, list);
+            cache.insert(cache_key, list);
             return true;
         }
         return false;
     };
 
-    const bool updated_single = insert_into_cache(_cached_buffer_sgl);
-    const bool updated_reversed_single = insert_into_cache(_cached_buffer_sgl_reversed);
-    const bool updated_double = insert_into_cache(_cached_buffer_dbl);
-    return updated_single || updated_reversed_single || updated_double ? 0 : -1;
+    if (!double_helpcodes.empty())
+    {
+        return insert_into_cache(_cached_buffer_dbl, double_helpcode_cache_key(pinyin, double_helpcodes)) ? 0 : -1;
+    }
+    const bool updated_single = insert_into_cache(_cached_buffer_sgl, pinyin);
+    const bool updated_reversed_single = insert_into_cache(_cached_buffer_sgl_reversed, pinyin);
+    return updated_single || updated_reversed_single ? 0 : -1;
 }
 
 bool ShuangpinDictionary::is_all_complete_pinyin()
