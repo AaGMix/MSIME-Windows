@@ -8,6 +8,10 @@ param(
     [string]$ServerDirectory = 'server',
     [string]$UiHtmlDirectory = 'ui-html',
     [string]$HelpCodeDirectory = 'engine/helpcode',
+    # Google 解码器的系统词典。仓库里有两份完全相同的副本：这一份是 engine/contracts/assets
+    # 的清单声明的来源，server/assets/tables 下那份是跑测试时拷进数据目录的开发副本。打包
+    # 取清单声明的那份，免得哪天两份不同步了装出来的和测出来的不是一个东西。
+    [string]$PinyinModelDirectory = 'engine/googlepinyinime-rev/data',
     [string]$DictionaryDirectory = 'MetasequoiaImeDict',
     # 词格打分用的语言模型不随词库发布下发，而是由 scripts/build-language-model.ps1
     # 从钉住的上游语料现场转换到这个目录。
@@ -59,6 +63,7 @@ $webviewRoot = Join-Path $RepoRoot (Join-Path $UiHtmlDirectory 'webview2')
 $serverConfig = Join-Path $RepoRoot (Join-Path $ServerDirectory 'assets\config\config.toml')
 $factoryConfig = Join-Path $PSScriptRoot 'default_config\config.default.toml'
 $pinyinTable = Join-Path $RepoRoot (Join-Path $ServerDirectory 'assets\tables\pinyin.txt')
+$pinyinModel = Join-Path $RepoRoot (Join-Path $PinyinModelDirectory 'dict_pinyin.dat')
 $helpcodeSource = Join-Path $RepoRoot (Join-Path $HelpCodeDirectory 'helpcodes')
 $appIcon = Join-Path $RepoRoot (Join-Path $ServerDirectory 'src\resource\MetasequoiaIME.ico')
 $thirdPartyNotices = Join-Path $RepoRoot (Join-Path $NoticesDirectory 'THIRD_PARTY_NOTICES.txt')
@@ -106,6 +111,7 @@ Assert-PathExists -LiteralPath (Join-Path $webviewRoot 'settings\ime-settings\di
 if (-not $Light) {
     Assert-PathExists -LiteralPath $factoryConfig -Description '出厂配置 default_config\config.default.toml'
     Assert-PathExists -LiteralPath $pinyinTable -Description '完整拼音音节表 pinyin.txt'
+    Assert-PathExists -LiteralPath $pinyinModel -Description 'Google 解码器系统词典 dict_pinyin.dat'
     Assert-PathExists -LiteralPath $helpcodeSource -Description '辅助码目录'
     Assert-PathExists -LiteralPath $dictionaryDb -Description '词库数据库 msime.db'
     Assert-PathExists -LiteralPath $japaneseModel -Description '日语整句模型 dict_japanese.dat'
@@ -144,6 +150,11 @@ else {
         throw "完整拼音音节表缺少 xing：$pinyinTable"
     }
     Copy-Item -LiteralPath $pinyinTable -Destination (Join-Path $targetAppData 'pinyin.txt') -Force
+    # Google 解码器的整句候选（CandidateSource::Fallback）没有这份词典就完全出不来，而且和
+    # sc.lm 一样是静默失败：im_open_decoder 返回 false，解码器直接不出候选，不报任何错。
+    # 与它配对的 user_dict.dat 是 role=user 的可写文件，profiles 为空，故意不进包 ——
+    # 引擎首次使用时由 UserDict::reset 在用户数据目录下自行建出来。
+    Copy-Item -LiteralPath $pinyinModel -Destination (Join-Path $targetAppData 'dict_pinyin.dat') -Force
     Copy-Item -LiteralPath $dictionaryDb -Destination (Join-Path $targetAppData 'msime.db') -Force
     if (Test-Path -LiteralPath $dictionaryManifest) {
         Copy-Item -LiteralPath $dictionaryManifest -Destination (Join-Path $targetAppData 'dictionary-manifest.json') -Force
