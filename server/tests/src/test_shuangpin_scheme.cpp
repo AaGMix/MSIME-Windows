@@ -34,6 +34,21 @@ const ShuangpinProfile &GetTestShuangpinProfile()
 }
 } // namespace
 
+TEST_CASE(ShuangpinProfilesDecodeYoAsOneSyllable)
+{
+    for (const auto *profile : {&GetXiaoheShuangpinProfile(), &GetZiranmaShuangpinProfile(),
+                                &GetShoudaoShuangpinProfile(), &GetMicrosoftShuangpinProfile()})
+    {
+        ShuangpinScheme scheme(*profile);
+        InputKey(scheme, 'Y', L'y');
+        InputKey(scheme, 'O', L'o');
+        const auto request = scheme.build_request();
+        REQUIRE_EQ(request.raw_segmentation, std::string("yo"));
+        REQUIRE_EQ(request.normalized_segmentation, std::string("yo"));
+        REQUIRE(shuangpin::is_complete_input("yo", *profile));
+    }
+}
+
 TEST_CASE(ShuangpinSchemeBuildRequestPreservesCaseAndNormalizesQuery)
 {
     ShuangpinScheme scheme;
