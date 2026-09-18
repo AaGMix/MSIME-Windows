@@ -112,6 +112,17 @@ TEST_CASE(EngineSessionRejectsOnlineResponsesFromOtherSessionsAndPriorCompositio
     REQUIRE(!first.apply_online_candidate(*current, "本次测试候选", CandidateSource::CloudSuggestion));
 }
 
+TEST_CASE(EngineShuangpinSessionYoFindsDictionaryCandidate)
+{
+    EngineInputSession session(SchemeType::Shuangpin, GetXiaoheShuangpinProfile());
+    InputLetters(session, "yo");
+
+    const auto &candidates = session.get_candidates();
+    REQUIRE(std::any_of(candidates.begin(), candidates.end(),
+                        [](const auto &item) { return item.word == "哟" && item.canonical_pinyin == "yo"; }));
+    REQUIRE_EQ(session.get_quanpin(), std::string("yo"));
+}
+
 TEST_CASE(EngineShuangpinSessionContinuesCompositionWithoutHelpcode)
 {
     EngineInputSession session(SchemeType::Shuangpin);
