@@ -196,28 +196,32 @@ vector<ShuangpinDictionary::WordItem> ShuangpinDictionary::generateSeries( //
         const std::string quanpin_segmentation =
             ShuangpinUtil::convert_seg_shuangpin_to_seg_complete_pinyin(pinyin_segmentation, profile_);
         // 次序与全拼一致：词格（kenlm 三元模型打分）在前，Google 解码器在后。两边都
-        // 只出一句，免得近似重复的整句把候选页挤满。merge_lattice_candidates 的插入点
-        // 在这条 Fallback 之前，所以这里照旧插到表头，词格随后会落在它上面。
-        if (quanpin::split_segments(quanpin_segmentation).size() >= 3 &&
-            quanpin_segmentation.find('\'') != std::string::npos)
+        // 只出一句，免得近似重复的整句把候选页挤满。两条都插在
+        // generated_sentence_insert_position 给的位置上，也就是开头那串整串拼音精确
+        // 命中词库的候选之后；merge_lattice_candidates 算出的位置就是这条 Fallback
+        // 所在的下标，词格随后会落在它上面。
+        const auto quanpin_syllables = quanpin::split_segments(quanpin_segmentation);
+        if (quanpin_syllables.size() >= 2 && quanpin_segmentation.find('\'') != std::string::npos)
         {
             const std::string google_sentence = search_sentence_from_ime_engine(quanpin_segmentation);
             const bool duplicate = std::any_of(candidate_list.begin(), candidate_list.end(),
                                                [&](const WordItem &item) { return item.word == google_sentence; });
             if (!google_sentence.empty() && !duplicate)
+            {
                 // 整句 fallback 必须带上 canonical quanpin，否则以它结尾的造词无法落库。
+                const size_t insert_at = quanpin::generated_sentence_insert_position(candidate_list, quanpin_syllables);
                 candidate_list.insert(
-                    candidate_list.begin(),
+                    candidate_list.begin() + static_cast<std::ptrdiff_t>(insert_at),
                     WordItem(_pinyin_sequence, google_sentence, 1, CandidateSource::Fallback, quanpin_segmentation));
+            }
         }
         quanpin::WordLatticeOptions lattice_options;
         lattice_options.nbest = 1;
         lattice_options.language_model = language_model_;
-        quanpin::merge_lattice_candidates(candidate_list, quanpin::split_segments(quanpin_segmentation),
-                                          quanpin::make_lattice_db_lookup(quanpin_db_, quanpin_statement_cache_,
-                                                                          quanpin::QuerySource::Shuangpin,
-                                                                          lattice_options.span_limit),
-                                          pinyin_sequence, lattice_options);
+        quanpin::merge_lattice_candidates(
+            candidate_list, quanpin_syllables,
+            quanpin::make_lattice_db_lookup(quanpin_db_, quanpin_statement_cache_, lattice_options.span_limit),
+            pinyin_sequence, lattice_options);
 
         /* 缓存起来 */
         _cached_buffer_series.insert(effective_cache_key, candidate_list);

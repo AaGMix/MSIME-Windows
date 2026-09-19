@@ -73,7 +73,10 @@ std::vector<KeyedQueryItem> query_exact_segmentations_keyed_flat(
     const std::vector<Segments> &segmentations, sqlite3 *db,
     std::unordered_map<std::string, sqlite3_stmt *> &statement_cache, int limit = 128);
 
+// 词格的跨度查询：只返回键与跨度完全相等的行，没有前缀区间与简拼降级——整句
+// 联想出来的每个词，读音都必须精确对上用户敲的那段拼音。因此也不需要 QuerySource：
+// 区分全拼/双拼的只有简拼那几级。
 WordLatticeLookup make_lattice_db_lookup(sqlite3 *db, std::unordered_map<std::string, sqlite3_stmt *> &statement_cache,
-                                         QuerySource source, int span_limit);
+                                         int span_limit);
 
 } // namespace quanpin

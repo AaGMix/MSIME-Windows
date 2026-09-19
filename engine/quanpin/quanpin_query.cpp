@@ -1262,11 +1262,36 @@ std::vector<KeyedQueryItem> query_exact_segmentations_keyed_flat(
     return result;
 }
 
-WordLatticeLookup make_lattice_db_lookup(sqlite3 *db, std::unordered_map<std::string, sqlite3_stmt *> &statement_cache,
-                                         QuerySource source, int span_limit)
+// ü 的两种写法归一到词库存的那一种。intact_pinyin_list() 两种都认，可词库只存
+// 一种：j/q/x/y 后面写 u（ju、jue），l/n 后面写 v（lv、lve）。切出来的 jv、lue
+// 这类音节因此一行都查不到，精确键查询查空，整个词格就断在这里——wo'men'lue'de
+// 解不出任何路径，长句联想直接消失。这不是模糊音降级，lue 和 lve 本来就是同一个
+// 读音的两种拼写，归一化之后仍然是精确匹配。
+const std::string &canonical_syllable(const std::string &syllable)
 {
-    return [db, &statement_cache, source, span_limit](const Segments &span) {
-        const auto rows = query_segments_keyed_flat(span, db, statement_cache, span_limit, source);
+    static const std::unordered_map<std::string, std::string> kSpellings = {
+        {"jv", "ju"},   {"qv", "qu"},   {"xv", "xu"},   {"yv", "yu"},   {"jve", "jue"},
+        {"qve", "que"}, {"xve", "xue"}, {"yve", "yue"}, {"lue", "lve"}, {"nue", "nve"},
+    };
+    const auto found = kSpellings.find(syllable);
+    return found == kSpellings.end() ? syllable : found->second;
+}
+
+WordLatticeLookup make_lattice_db_lookup(sqlite3 *db, std::unordered_map<std::string, sqlite3_stmt *> &statement_cache,
+                                         int span_limit)
+{
+    return [db, &statement_cache, span_limit](const Segments &span) {
+        Segments normalized;
+        normalized.reserve(span.size());
+        for (const auto &syllable : span)
+            normalized.push_back(canonical_syllable(syllable));
+
+        // 词格只收「键与跨度完全相等」的行。query_segments_keyed_flat 是带降级的
+        // 查询：精确键查不到就退到前缀区间扫描（key >= "gun'qi" AND key < …），
+        // gun'qi 于是捞出 gun'qiu 的「滚球」——拿这种行去造句，联想出来的短语读音
+        // 根本对不上用户敲的拼音。简拼那两级同理。走批量精确键查询既堵住这个口子，
+        // 也省掉了白扫的前缀区间。
+        const auto rows = query_exact_segmentations_keyed_flat({normalized}, db, statement_cache, span_limit);
         std::vector<LatticeLexeme> lexemes;
         lexemes.reserve(rows.size());
         for (const auto &row : rows)
