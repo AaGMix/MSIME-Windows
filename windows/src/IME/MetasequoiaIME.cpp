@@ -2859,6 +2859,19 @@ LRESULT CALLBACK CMetasequoiaIME_WindowProc(HWND hWnd, UINT message, WPARAM wPar
         pIME->_RunPairedPunctuationCaretMove();
         break;
     }
+    case WM_RewriteSmartPunctuationViaSendInput: {
+        const uint64_t focusToken = static_cast<uint64_t>(static_cast<uint32_t>(wParam)) |
+                                    (static_cast<uint64_t>(static_cast<uint32_t>(lParam)) << 32);
+        if (focusToken == 0 || focusToken != pIME->_pendingSmartPunctuationRewriteFocusToken)
+        {
+            // A newer request already superseded this one, or the rewrite was
+            // cancelled between the post and the dispatch.
+            break;
+        }
+
+        pIME->_RunSmartPunctuationSendInputRewrite();
+        break;
+    }
     case WM_SETTINGCHANGE: {
         // Registry may not be flushed yet when the broadcast arrives.
         if (lParam && _wcsicmp(reinterpret_cast<LPCWSTR>(lParam), L"ImmersiveColorSet") == 0)

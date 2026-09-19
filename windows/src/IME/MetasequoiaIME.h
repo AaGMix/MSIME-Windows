@@ -39,20 +39,23 @@ const DWORD WM_DrainDeferredKeyDown = WM_USER + 18;
 const DWORD WM_InsertText = WM_USER + 19;
 const DWORD WM_RefreshLanguageBarTheme = WM_USER + 20;
 const DWORD WM_PairedPunctuationCaretMove = WM_USER + 21;
+const DWORD WM_RewriteSmartPunctuationViaSendInput = WM_USER + 22;
 const DWORD WM_BareShiftRelease = WM_USER + 23;
 const DWORD WM_UpdateVoiceComposition = WM_USER + 24;
 const DWORD WM_CommitVoiceComposition = WM_USER + 25;
 const DWORD WM_CancelVoiceComposition = WM_USER + 26;
 const DWORD WM_ApplyPunctuationLock = WM_USER + 27;
+constexpr ULONG_PTR SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO = 0x4D535050u;
 constexpr ULONG_PTR PAIRED_PUNCTUATION_SENDINPUT_EXTRA_INFO = 0x4D535051u;
 // Synthetic input that this tip generates carries a marker meaning "this tip
 // generated the event": the key sinks and the bare-Shift hook must pass it
 // straight through, or the synthetic arrow re-enters our own direction-key
-// handling instead of reaching the application. Only the paired-punctuation
-// caret move is synthesized today.
+// handling instead of reaching the application. Two things are synthesized:
+// the paired-punctuation caret move, and the smart-punctuation rewrite in
+// hosts whose text store cannot be edited in place.
 constexpr bool IsSelfGeneratedSendInputExtraInfo(ULONG_PTR extraInfo)
 {
-    return extraInfo == PAIRED_PUNCTUATION_SENDINPUT_EXTRA_INFO;
+    return extraInfo == SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO || extraInfo == PAIRED_PUNCTUATION_SENDINPUT_EXTRA_INFO;
 }
 // Payload shared by the NeedToCreateWord and CompositionRestored replies:
 //   remaining_raw \t committed_word \t display_preedit [\t caret]
@@ -116,6 +119,11 @@ inline bool ParseCreatingWordPayload(const std::wstring &data, CreatingWordPaylo
     return true;
 }
 constexpr ULONGLONG SMART_PUNCTUATION_REPEAT_INTERVAL_MS = 2000;
+// The SendInput rewrite is posted from inside the edit session and normally
+// runs on the very next pass through the message loop. Anything slower than
+// this means other input has had time to move the caret, and the synthetic
+// Backspace would land on text the user typed since.
+constexpr ULONGLONG SMART_PUNCTUATION_SENDINPUT_TIMEOUT_MS = 500;
 constexpr UINT_PTR TIMER_CONNECT_ALL_NAMEDPIPE = 1;
 constexpr UINT_PTR TIMER_CONNECT_TO_TSF_NAMEDPIPE = 2;
 constexpr UINT_PTR TIMER_REFRESH_LANG_BAR_THEME = 3;
@@ -320,6 +328,19 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
                                                 uint64_t expectedFocusGeneration);
     HRESULT _ExecuteSmartPunctuationAction(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR wch,
                                            KEYSTROKE_FUNCTION function);
+    // Replaces the character immediately left of the caret inside the document.
+    // The range must read back as `expected` first: a host whose text store
+    // holds no committed text (terminals, proxy stores) accepts the shift but
+    // exposes nothing, and there SetText would report success while the screen
+    // keeps the old character. Returns false in that case, document untouched.
+    bool _RewritePrecedingCharInPlace(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR expected, WCHAR replacement);
+    // Host-agnostic fallback for those stores: one synthetic Backspace plus the
+    // replacement character, posted so it runs after the current key finishes.
+    // This is how the feature worked before the edit session existed; it is the
+    // only thing that reaches what a terminal has already written to its pty.
+    bool _QueueSmartPunctuationSendInputRewrite(WCHAR replacement);
+    void _RunSmartPunctuationSendInputRewrite();
+    void _CancelSmartPunctuationSendInputRewrite();
     // Terminal fallback when the smart-punctuation edit session could not be
     // requested at all: write the key's own character back so it is not lost.
     HRESULT _ExecuteSmartPunctuationFallback(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR wch,
@@ -683,6 +704,15 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
         HWND foregroundWindow = nullptr;
     };
     SmartPunctuationAction _smartPunctuationAction;
+
+    // Rewrite owed to the SendInput fallback, with the focus session and
+    // foreground window it was computed against. Cleared together with the
+    // action itself: once the action is gone the rewrite describes a spot that
+    // is no longer provably under the caret.
+    WCHAR _pendingSmartPunctuationRewrite = 0;
+    uint64_t _pendingSmartPunctuationRewriteFocusToken = 0;
+    HWND _pendingSmartPunctuationRewriteForegroundWindow = nullptr;
+    ULONGLONG _pendingSmartPunctuationRewriteDeadline = 0;
 
     // Last character known to have reached the application. Hosts such as the
     // VS Code terminal back the context with a proxy text store that only ever
