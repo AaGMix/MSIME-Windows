@@ -228,6 +228,8 @@ class InputSession
     void reset_composition();
     void discard_abandoned_phrase_progress();
     std::optional<std::string> learn_candidate(std::size_t index);
+    // 词格 / Google 解码器猜出来的整句在词库里没有对应行，选中后落成一条用户词组。
+    std::optional<std::string> learn_sentence_candidate(const WordItem &selected);
     std::optional<std::string> adjust_candidate_frequency(std::size_t index, FrequencyAdjustmentOptions options,
                                                           bool force_top);
 

@@ -17,17 +17,55 @@ constexpr bool ShouldEnterCreatingWord(CandidateSource source, bool continues_co
     return continues_composition && source != CandidateSource::CloudSuggestion;
 }
 
+// 整句落库的长度上限，对标词库里短语自身的上限
+// （quanpin::WordLatticeOptions::max_phrase_syllables）。再长的整句只是这一次输入
+// 的产物，落库除了撑大用户词库没有别的作用。
+constexpr size_t kMaxLearnedSentenceSyllables = 7;
+
+inline size_t CountCanonicalSyllables(const std::string &canonical_pinyin) noexcept
+{
+    if (canonical_pinyin.empty())
+    {
+        return 0;
+    }
+    return 1 + static_cast<size_t>(std::count(canonical_pinyin.begin(), canonical_pinyin.end(), '\''));
+}
+
+// 整句候选（词格 Generated / Google 解码器 Fallback）独立上屏——不接在造词前缀
+// 后面、自己就是整条输入——时是否该落库。该落：整句是猜出来的，词库里没有它那一行，
+// 调频改的是已有的行，改不到它。不落库的话用户选多少次，下次它仍然要靠猜，也仍然
+// 排在词库里那条同音短语后面。
+inline bool ShouldStoreStandaloneSentence(CandidateSource source,
+                                          const std::string &candidate_canonical_pinyin) noexcept
+{
+    if (source != CandidateSource::Generated && source != CandidateSource::Fallback)
+    {
+        return false;
+    }
+    const size_t syllables = CountCanonicalSyllables(candidate_canonical_pinyin);
+    return syllables > 0 && syllables <= kMaxLearnedSentenceSyllables;
+}
+
 // Special candidates commit through an early return in ProcessSelectionKey,
 // before the creating-word completion block that normally persists a composed
-// phrase.  A lattice whole-sentence candidate that finishes a creating-word
-// session must therefore be stored at that early return instead, and only when
-// both halves carry a canonical quanpin reading to join.
+// phrase.  A lattice whole-sentence candidate therefore has to be stored at
+// that early return instead, in both shapes it can take:
+//   - 它接在造词前缀后面、结束一段造词时，前后两段都要有 canonical quanpin，否则
+//     拼不出完整读音。这一支的长度由用户一段段选出来，维持原样不设上限；
+//   - 它自己就是整条输入时，按 ShouldStoreStandaloneSentence 判定。
 inline bool ShouldStoreEarlyReturnPhrase(CandidateSource source, bool creating_word_active,
                                          const std::string &prefix_canonical_pinyin,
                                          const std::string &candidate_canonical_pinyin) noexcept
 {
-    return source == CandidateSource::Generated && creating_word_active && !prefix_canonical_pinyin.empty() &&
-           !candidate_canonical_pinyin.empty();
+    if (source != CandidateSource::Generated || candidate_canonical_pinyin.empty())
+    {
+        return false;
+    }
+    if (!creating_word_active)
+    {
+        return ShouldStoreStandaloneSentence(source, candidate_canonical_pinyin);
+    }
+    return !prefix_canonical_pinyin.empty();
 }
 
 // Keep asynchronous mixed-input candidates in stable priority slots regardless

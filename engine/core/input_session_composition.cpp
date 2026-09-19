@@ -42,6 +42,11 @@ void remove_consumed_leading_separators(std::string &raw_input, std::string &raw
     raw_input_with_cases.erase(0, count);
 }
 
+// 整句落库的长度上限。词库里的短语本身就不超过这个音节数（对标
+// quanpin::WordLatticeOptions::max_phrase_syllables），再长的整句只是这一次输入
+// 的产物，落库除了撑大用户词库没有别的作用。
+constexpr size_t kMaxLearnedSentenceSyllables = 7;
+
 std::string normalize_canonical_pinyin_for_word(const std::string &pinyin, const std::string &word)
 {
     if (pinyin.empty())
@@ -482,6 +487,37 @@ int InputSession::store_user_phrase_from_canonical_pinyin(std::string pinyin, st
     if (!canonical_phrase_engine_)
         canonical_phrase_engine_ = std::make_unique<QuanpinEngine>(paths_);
     return canonical_phrase_engine_->create_word_from_canonical_pinyin(std::move(pinyin), std::move(word));
+}
+
+// 整句候选（词格 CandidateSource::Generated、Google 解码器 CandidateSource::Fallback）
+// 是猜出来的，词库里没有它那一行，所以调频对它无效：update_weight_by_pinyin_and_word
+// 改的是 SQLite 里已存在的行，找不到行就什么也不做，用户于是发现自己选多少次都提不上来。
+// 选中即落库才是对的处理：存成用户词组之后，下次同样的输入它以 UserDatabase 候选出现，
+// 按 quanpin::generated_sentence_insert_position 的约定排在两条整句之前，之后再选还能
+// 走正常调频。
+std::optional<std::string> InputSession::learn_sentence_candidate(const WordItem &selected)
+{
+    // 本地模式（U/K/E/M/J/Y/R、日期时间）和英文模式也用 Generated 装自己的候选，
+    // 那些不是拼音整句，不能往拼音用户词库里塞。
+    if (local_input_mode_ != LocalInputMode::None || dedicated_english_mode_ || is_japanese() ||
+        !candidates_follow_pinyin())
+    {
+        return std::nullopt;
+    }
+
+    // 读音必须完整且音节数与字数对得上，否则落库的是个读音残缺的词条。双拼的整句
+    // 候选同样带 canonical quanpin，这里统一按全拼键处理。
+    const std::string canonical = normalize_canonical_pinyin_for_word(selected.canonical_pinyin, selected.word);
+    if (canonical.empty() || quanpin::split_segments(canonical).size() > kMaxLearnedSentenceSyllables)
+    {
+        return std::nullopt;
+    }
+
+    if (store_user_phrase_from_canonical_pinyin(canonical, selected.word) != 0)
+    {
+        return "Unable to persist the selected sentence.";
+    }
+    return std::nullopt;
 }
 
 int InputSession::pin_candidate(std::string pinyin, std::string word)

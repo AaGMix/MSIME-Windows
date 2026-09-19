@@ -4744,7 +4744,8 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
             Global::candidate_ui.selected_text =
                 string_to_wstring(CandidateTextForOutput(GlobalIme::composition.creating_word.word + curWord));
             // 整句候选走的是这条提前返回的捷径，到不了下面 creating_word 的收尾逻辑，
-            // 因此造好的词必须在这里落库，否则前缀 + 整句只上屏、学不到。
+            // 因此造好的词必须在这里落库，否则前缀 + 整句只上屏、学不到。没有前缀时
+            // 整句自己就是要落库的那条词：它在词库里没有行，下面的调频改不到它。
             // 拼音两段都是 canonical quanpin（creating_word.pinyin 由
             // append_canonical_pinyin 累积，lattice 候选的 canonical_pinyin 是整句 key），
             // 直接按 '\'' 拼接即可；音节数与汉字数是否匹配由
@@ -4753,10 +4754,13 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
                     curWordItem.source, GlobalIme::composition.creating_word.active,
                     GlobalIme::composition.creating_word.pinyin, curWordItem.canonical_pinyin))
             {
+                const std::string &prefix_pinyin = GlobalIme::composition.creating_word.pinyin;
+                // 前缀为空时不能带上那个分隔符，'na'yi'tiao 这种前导撇号会让整条读音作废。
+                const std::string stored_pinyin = prefix_pinyin.empty()
+                                                      ? curWordItem.canonical_pinyin
+                                                      : prefix_pinyin + "'" + curWordItem.canonical_pinyin;
                 // 这里异步处理，不然有可能会阻塞住 TSF 端读取 pipe 导致超时
-                EnqueueStoreUserPhraseTask(GlobalIme::composition.creating_word.pinyin + "'" +
-                                               curWordItem.canonical_pinyin,
-                                           GlobalIme::composition.creating_word.word + curWord,
+                EnqueueStoreUserPhraseTask(stored_pinyin, GlobalIme::composition.creating_word.word + curWord,
                                            /*pinyin_is_canonical=*/true);
             }
             // 同理，这条捷径也到不了下面的 AI 上下文累积。造词前缀在它自己被选中的那次
@@ -4802,6 +4806,8 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
             }
             isNeedUpdateWeight = false;
         }
+        // 这次选择之前是否已经在造词。下面的造词收尾会清掉这个标志，之后就问不出来了。
+        const bool was_creating_word = GlobalIme::composition.creating_word.active;
         auto selection_transition =
             g_inputSession->advance_composition_after_selection(curWordPinyin, curWord, curWordItem.canonical_pinyin);
         // A cloud suggestion is an already-composed result returned for the
@@ -4863,6 +4869,16 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
                 /* 清理 */
                 GlobalIme::composition.clear_creating_word();
             }
+        }
+
+        // Google 解码器那条整句（Fallback）不在上面提前返回的名单里，走的是这条普通路径，
+        // 但它和词格整句一样是猜出来的：词库里没有它那一行，下面 isNeedUpdateWeight 要改的
+        // 行根本不存在。所以它独立上屏时也要落库。接在造词前缀后面的那种由上面的造词收尾
+        // 负责（creating_word_progress.can_store），这里不重复存。
+        if (!isNeedCreateWord && !was_creating_word &&
+            FanyImeIpc::ShouldStoreStandaloneSentence(curWordItem.source, curWordItem.canonical_pinyin))
+        {
+            EnqueueStoreUserPhraseTask(curWordItem.canonical_pinyin, curWord, /*pinyin_is_canonical=*/true);
         }
 
         // 看看云联想出来的词是否需要被插入到数据库

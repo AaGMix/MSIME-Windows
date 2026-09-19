@@ -237,10 +237,32 @@ TEST_CASE(OnlyGeneratedSentencesWithBothCanonicalHalvesStoreAtTheEarlyReturn)
     // Fallback whole-sentence candidates take the normal path, where the
     // creating-word completion block persists them.
     REQUIRE(!FanyImeIpc::ShouldStoreEarlyReturnPhrase(CandidateSource::Fallback, true, "xi", "ni'hao'zhong'guo"));
-    // No creating-word session, or a half without a canonical reading, must not store.
-    REQUIRE(!FanyImeIpc::ShouldStoreEarlyReturnPhrase(CandidateSource::Generated, false, "xi", "ni'hao'zhong'guo"));
+    // 没有造词前缀的整句也要落库：它自己就是完整的一条，而词库里没有它那一行，
+    // 调频改不到它。前缀为空时不看前缀读音。
+    REQUIRE(FanyImeIpc::ShouldStoreEarlyReturnPhrase(CandidateSource::Generated, false, "", "ni'hao'zhong'guo"));
+    REQUIRE(FanyImeIpc::ShouldStoreEarlyReturnPhrase(CandidateSource::Generated, false, "xi", "ni'hao'zhong'guo"));
+    // 造词中而前缀没有读音，或整句自己没有读音，都拼不出完整读音，不能落库。
     REQUIRE(!FanyImeIpc::ShouldStoreEarlyReturnPhrase(CandidateSource::Generated, true, "", "ni'hao'zhong'guo"));
     REQUIRE(!FanyImeIpc::ShouldStoreEarlyReturnPhrase(CandidateSource::Generated, true, "xi", ""));
+    REQUIRE(!FanyImeIpc::ShouldStoreEarlyReturnPhrase(CandidateSource::Generated, false, "", ""));
+}
+
+TEST_CASE(StandaloneWholeSentenceCandidatesAreLearnedWithinThePhraseLengthCap)
+{
+    // 两条整句来源都要落库：词格走提前返回，Google 解码器走普通路径，同一条规则。
+    REQUIRE(FanyImeIpc::ShouldStoreStandaloneSentence(CandidateSource::Generated, "na'yi'tiao"));
+    REQUIRE(FanyImeIpc::ShouldStoreStandaloneSentence(CandidateSource::Fallback, "na'yi'tiao"));
+    REQUIRE(FanyImeIpc::ShouldStoreStandaloneSentence(CandidateSource::Generated, "na"));
+    // 词库里本来就有的候选不用落库，调频改得到它自己那一行。
+    REQUIRE(!FanyImeIpc::ShouldStoreStandaloneSentence(CandidateSource::Database, "na'yi'tiao"));
+    REQUIRE(!FanyImeIpc::ShouldStoreStandaloneSentence(CandidateSource::UserDatabase, "na'yi'tiao"));
+    REQUIRE(!FanyImeIpc::ShouldStoreStandaloneSentence(CandidateSource::CloudSuggestion, "na'yi'tiao"));
+    // 没有读音就拼不出词条。
+    REQUIRE(!FanyImeIpc::ShouldStoreStandaloneSentence(CandidateSource::Generated, ""));
+    // 长度上限：7 音节落库，8 音节不落。
+    REQUIRE(FanyImeIpc::CountCanonicalSyllables("a'a'a'a'a'a'a") == 7);
+    REQUIRE(FanyImeIpc::ShouldStoreStandaloneSentence(CandidateSource::Generated, "a'a'a'a'a'a'a"));
+    REQUIRE(!FanyImeIpc::ShouldStoreStandaloneSentence(CandidateSource::Generated, "a'a'a'a'a'a'a'a"));
 }
 
 TEST_CASE(MixedAsyncCandidatesKeepReservedSlotsForEveryArrivalOrder)

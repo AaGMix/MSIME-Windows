@@ -418,6 +418,46 @@ int run_test()
                     "Punctuation failed to finish the remaining portable composition atomically.");
         }
 
+        // 整句候选（词格 / Google 解码器）在词库里没有对应的行，调频无处落笔：用户
+        // 选中一条整句多少次，它下次仍然要靠猜，排序也跟着重算。选中即落成用户词组，
+        // 之后同样的输入就由词库那一行来回答。
+        database.execute("CREATE TABLE tbl_1_n(key TEXT,jp TEXT,value TEXT,weight INTEGER)");
+        database.execute("INSERT INTO tbl_1_n VALUES('na','n','那',100)");
+        database.execute("INSERT INTO tbl_1_y VALUES('yi','y','一',100)");
+        database.execute("CREATE TABLE tbl_1_t(key TEXT,jp TEXT,value TEXT,weight INTEGER)");
+        database.execute("INSERT INTO tbl_1_t VALUES('tiao','t','条',100)");
+        database.execute("CREATE TABLE tbl_3_n(key TEXT,jp TEXT,value TEXT,weight INTEGER)");
+        {
+            metasequoia::InputSession sentence(SchemeType::Quanpin);
+            type(sentence, "na'yi'tiao");
+            const auto guessed = candidate_index(sentence, "那一条");
+            const auto guessed_source = sentence.candidates()[guessed].source;
+            require(guessed_source == CandidateSource::Generated || guessed_source == CandidateSource::Fallback,
+                    "The sentence under test must be a guess, not a dictionary row.");
+            require(sentence.select_candidate(guessed).commit == "那一条" && !sentence.has_composition(),
+                    "Selecting a whole-sentence candidate did not commit it.");
+            require(
+                database.query_integer("SELECT COUNT(*) FROM tbl_3_n WHERE key='na''yi''tiao' AND value='那一条'") == 1,
+                "A selected whole-sentence candidate was not learned as a user phrase.");
+
+            type(sentence, "na'yi'tiao");
+            const auto learned = candidate_index(sentence, "那一条");
+            require(sentence.candidates()[learned].source != CandidateSource::Generated &&
+                        sentence.candidates()[learned].source != CandidateSource::Fallback,
+                    "The learned sentence did not come back as a dictionary row.");
+            require(learned == 0, "The learned sentence did not outrank the guessed ones.");
+            (void)sentence.select_candidate(learned);
+        }
+        {
+            // 学习整句是造词，不是调频：关掉候选学习的会话一条也不该落库。
+            metasequoia::InputSession unlearned(SchemeType::Quanpin, 0, true, true, false);
+            type(unlearned, "na'yi'na");
+            const auto guessed = candidate_index(unlearned, "那一那");
+            (void)unlearned.select_candidate(guessed);
+            require(database.query_integer("SELECT COUNT(*) FROM tbl_3_n WHERE value='那一那'") == 0,
+                    "A session with candidate learning disabled still stored a whole-sentence candidate.");
+        }
+
         // A seven-syllable key and eight/nine-syllable keys cross the shipping
         // table boundary. Creation, normal query and upgrade replay must agree.
         database.execute("CREATE TABLE tbl_7_n(key TEXT,jp TEXT,value TEXT,weight INTEGER)");
