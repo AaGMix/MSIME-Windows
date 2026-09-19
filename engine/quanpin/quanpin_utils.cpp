@@ -410,6 +410,42 @@ bool is_complete_pinyin_input(const std::string &pinyin)
     return true;
 }
 
+std::string to_google_spelling(const std::string &segmentation)
+{
+    // quanpin_query.cpp 的 canonical_syllable 把 ü 的两种写法归到词库存的那一种
+    // （l/n 后面写 v：lve、nve）。Google 的两个解码器要的正好是另一种：本地
+    // googlepinyinime-rev 的音节表来自 rawdict_utf16_65105_freq.txt，里面只有
+    // nue/lue 和 nv/lv，没有 nve/lve，splparser 也不做 v→ü 转写；inputtools 云输入
+    // 表现一致。把 nve'dai'dong'wu 原样送过去，nve 会被拆成 nv + e，「虐待动物」
+    // 于是变成「女蛾黛动物」。j/q/x/y 后面它们同样只认 u 写法（ju、jue）。
+    //
+    // 按音节整体替换，认不出的原样透传：手打分隔符切出来的块可能不止一个音节，
+    // 那种块交给解码器自己再切。
+    static const std::unordered_map<std::string, std::string> kSpellings = {
+        {"jv", "ju"},   {"qv", "qu"},   {"xv", "xu"},   {"yv", "yu"},   {"jve", "jue"},
+        {"qve", "que"}, {"xve", "xue"}, {"yve", "yue"}, {"lve", "lue"}, {"nve", "nue"},
+    };
+
+    std::string result;
+    result.reserve(segmentation.size());
+    size_t chunk_start = 0;
+    while (true)
+    {
+        const size_t separator = segmentation.find('\'', chunk_start);
+        const size_t chunk_end = separator == std::string::npos ? segmentation.size() : separator;
+        const std::string chunk = segmentation.substr(chunk_start, chunk_end - chunk_start);
+        const auto found = kSpellings.find(chunk);
+        result += found == kSpellings.end() ? chunk : found->second;
+        if (separator == std::string::npos)
+        {
+            break;
+        }
+        result += '\'';
+        chunk_start = separator + 1;
+    }
+    return result;
+}
+
 size_t detect_active_helpcode_length(const std::string &raw_input, const std::string &raw_input_with_cases)
 {
     const auto &input_with_cases = raw_input_with_cases.empty() ? raw_input : raw_input_with_cases;

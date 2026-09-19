@@ -164,7 +164,9 @@ vector<ShuangpinDictionary::WordItem> ShuangpinDictionary::generateSeries( //
             {
                 string quanpin_str =
                     ShuangpinUtil::convert_seg_shuangpin_to_seg_complete_pinyin(pinyin_segmentation, profile_);
-                string res = search_sentence_from_ime_engine(quanpin_str);
+                // 只有送进解码器的那一份换 ü 写法，quanpin_str 仍是词库那侧的
+                // canonical 拼写，候选要靠它落库。
+                string res = search_sentence_from_ime_engine(quanpin::to_google_spelling(quanpin_str));
                 if (res.size() > 0)
                 {
                     // 整句 fallback 必须带上 canonical quanpin，否则以它结尾的造词无法落库：
@@ -203,7 +205,9 @@ vector<ShuangpinDictionary::WordItem> ShuangpinDictionary::generateSeries( //
         const auto quanpin_syllables = quanpin::split_segments(quanpin_segmentation);
         if (quanpin_syllables.size() >= 2 && quanpin_segmentation.find('\'') != std::string::npos)
         {
-            const std::string google_sentence = search_sentence_from_ime_engine(quanpin_segmentation);
+            // 同上：解码器认 nue/lue，词库与下面的 canonical 读音认 nve/lve。
+            const std::string google_sentence =
+                search_sentence_from_ime_engine(quanpin::to_google_spelling(quanpin_segmentation));
             const bool duplicate = std::any_of(candidate_list.begin(), candidate_list.end(),
                                                [&](const WordItem &item) { return item.word == google_sentence; });
             if (!google_sentence.empty() && !duplicate)

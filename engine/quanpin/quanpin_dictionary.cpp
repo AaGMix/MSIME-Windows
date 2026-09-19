@@ -514,9 +514,13 @@ std::vector<WordItem> QuanpinDictionary::query_series(const std::string &raw_inp
         // 所以默认喂裸串。但手动分隔符是用户明确表达的切分意图，去掉之后 nu'e 会被
         // 它读成 nüe 而出「虐」。撇号本来就是它认的音节分隔符（双拼那条一直是连着
         // 撇号传的），手打分隔符时原样传下去即可。
-        const std::string google_input = raw_input.find('\'') != std::string::npos
-                                             ? raw_input
-                                             : remove_delimiters(segmentation.empty() ? raw_input : segmentation);
+        //
+        // 不管走哪条，送进去之前都要把 ü 换成它认的写法：它的音节表里只有 nue/lue，
+        // nve 会被拆成 nv + e。见 quanpin::to_google_spelling。
+        const std::string google_input =
+            raw_input.find('\'') != std::string::npos
+                ? quanpin::to_google_spelling(raw_input)
+                : remove_delimiters(quanpin::to_google_spelling(segmentation.empty() ? raw_input : segmentation));
         const std::string google_sentence = search_sentence_from_ime_engine(google_input);
         if (!google_sentence.empty())
         {

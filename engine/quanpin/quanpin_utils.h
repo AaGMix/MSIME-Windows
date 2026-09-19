@@ -30,6 +30,10 @@ std::vector<Segments> enumerate_complete_segmentations(const SyllableGraph &grap
 std::vector<std::string> cut_one_piece_greedy(const std::string &pinyin, bool intact_only);
 std::vector<std::string> cut_one_piece_min_segments(const std::string &pinyin, bool intact_only);
 bool is_complete_pinyin_input(const std::string &pinyin);
+// 把切好的全拼串换成 Google 两个解码器（本地 googlepinyinime-rev 与 inputtools
+// 云输入）认的 ü 写法：nve→nue、lve→lue、jv→ju……只在送进这两个解码器前用，
+// 词库与词格查询要的是 canonical_syllable 那一侧的写法。
+std::string to_google_spelling(const std::string &segmentation);
 size_t detect_active_helpcode_length(const std::string &raw_input, const std::string &raw_input_with_cases);
 std::string strip_active_helpcodes(const std::string &raw_input, const std::string &raw_input_with_cases);
 std::string strip_active_helpcodes_with_cases(const std::string &raw_input, const std::string &raw_input_with_cases);

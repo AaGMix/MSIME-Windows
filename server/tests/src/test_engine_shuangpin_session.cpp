@@ -502,6 +502,21 @@ TEST_CASE(EngineShuangpinSessionCloudCommitUsesRawShuangpinSequence)
     REQUIRE_EQ(state.committed_pinyin, std::string("vh"));
 }
 
+TEST_CASE(EngineShuangpinSessionCloudQueryUsesGoogleSpellingForU)
+{
+    EngineInputSession session(SchemeType::Shuangpin);
+
+    // 小鹤的 nt 转成词库那侧的 canonical 写法是 nve，但云输入和本地 Google 解码器
+    // 的音节表里只有 nue：nve'dai'dong'wu 会被它们拆成 nv + e，「虐待动物」变成
+    // 「女蛾黛动物」。送出去的那一份必须是 nue'dai'dong'wu，撇号照旧带上。
+    InputLetters(session, "ntdddswu");
+    const auto state = session.get_cloud_query_state();
+
+    REQUIRE(state.should_query);
+    REQUIRE_EQ(state.query_text, std::string("nue'dai'dong'wu"));
+    REQUIRE_EQ(state.cache_key, std::string("ntdddswu"));
+}
+
 TEST_CASE(EngineShuangpinSessionStoresMultiSyllableDynamicPhrase)
 {
     EngineInputSession session(SchemeType::Shuangpin);
