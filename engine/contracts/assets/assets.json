@@ -1,5 +1,5 @@
 {
-  "contract_version": 1,
+  "contract_version": 2,
   "archive": "engine-assets-desktop.zip",
   "manifest": "engine-assets-manifest.json",
   "assets": [
@@ -53,6 +53,15 @@
       "path": "dictionary-manifest.json",
       "role": "metadata",
       "source": "dictionary",
+      "profiles": [
+        "desktop"
+      ]
+    },
+    {
+      "id": "language_model",
+      "path": "sc.lm",
+      "role": "resource",
+      "source": "language-model/sc.lm",
       "profiles": [
         "desktop"
       ]
@@ -166,6 +175,15 @@
       "path": "licenses/Engine-LICENSE",
       "role": "notice",
       "source": "LICENSE",
+      "profiles": [
+        "desktop"
+      ]
+    },
+    {
+      "id": "notice_18",
+      "path": "licenses/libime-lm-NOTICE.md",
+      "role": "notice",
+      "source": "language-model/NOTICE.md",
       "profiles": [
         "desktop"
       ]

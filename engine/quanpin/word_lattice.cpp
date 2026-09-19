@@ -46,10 +46,17 @@ struct LatticeEdge
     std::string word;
     std::string key;
     std::int64_t weight = 0;
-    double log_prob = 0;
+    // Context-free part of the edge score: the heuristic when there is no
+    // model, the dictionary tiebreak when there is one.
+    double base_score = 0;
+    // Vocabulary index of `word`, resolved once instead of per hypothesis.
+    ngram::WordIndex index = 0;
 };
 
-double edge_log_prob(std::int64_t weight, size_t syllables, const WordLatticeOptions &options)
+// Fallback scorer, used only when no language model is available. Kept on the
+// natural-log scale it was written on: nothing mixes it with model scores,
+// because the choice is made once per decode, not per edge.
+double heuristic_log_prob(std::int64_t weight, size_t syllables, const WordLatticeOptions &options)
 {
     const double w = weight > 0 ? static_cast<double>(weight) : 1.0;
     const double z = options.unigram_z > 1.0 ? options.unigram_z : 1e6;
@@ -63,6 +70,30 @@ double edge_log_prob(std::int64_t weight, size_t syllables, const WordLatticeOpt
     return lp + options.phrase_length_bonus * static_cast<double>(syllables);
 }
 
+// log10 of the dictionary weight, scaled down to a tiebreak. See
+// WordLatticeOptions::dictionary_tiebreak for why it has to stay this small.
+double dictionary_tiebreak(std::int64_t weight, const WordLatticeOptions &options)
+{
+    const double w = weight > 0 ? static_cast<double>(weight) : 1.0;
+    return options.dictionary_tiebreak * std::log10(w);
+}
+
+// log10 P(词|拼音)，用跨度内的权重占比近似。语言模型只认汉字，「卷」「而」这种
+// 字它见得多，可它根本不该被 gun / neng 召回——词库里这些多音行权重是 0，占比
+// 一算就掉到底，先验替模型补上「这个读音对不对」这一维。
+double reading_prior(std::int64_t weight, std::int64_t span_total, const WordLatticeOptions &options)
+{
+    if (options.reading_prior <= 0 || span_total <= 0)
+        return 0;
+    const double w = weight > 0 ? static_cast<double>(weight) : 0.0;
+    const double share = (w + 1.0) / (static_cast<double>(span_total) + 1.0);
+    const double threshold = options.reading_prior_share > 0 ? options.reading_prior_share : 1.0;
+    if (share >= threshold)
+        return 0;
+    const double floor = options.reading_prior_floor > 0 ? -options.reading_prior_floor : kNegInf;
+    return options.reading_prior * (std::max)(std::log10(share / threshold), floor);
+}
+
 struct Hyp
 {
     double score = kNegInf;
@@ -70,6 +101,9 @@ struct Hyp
     int prev_idx = -1;
     std::string word;
     std::string key;
+    // Trailing n-gram context of this path. Unused (and left zeroed) when
+    // decoding with the heuristic.
+    ngram::State state;
 };
 
 void keep_beam(std::vector<Hyp> &column, int beam)
@@ -81,9 +115,18 @@ void keep_beam(std::vector<Hyp> &column, int beam)
     column.resize(static_cast<size_t>(beam));
 }
 
+// The model actually usable for this decode, or null to run the heuristic.
+const ngram::LanguageModel *active_model(const WordLatticeOptions &options)
+{
+    if (options.language_model && options.language_model->valid())
+        return options.language_model;
+    return nullptr;
+}
+
 std::vector<std::vector<LatticeEdge>> build_graph(const Segments &syllables, const WordLatticeLookup &lookup,
                                                   const WordLatticeOptions &options)
 {
+    const ngram::LanguageModel *model = active_model(options);
     const size_t n = syllables.size();
     std::vector<std::vector<LatticeEdge>> graph(n);
     const size_t max_len = static_cast<size_t>(std::max(1, options.max_phrase_syllables));
@@ -103,6 +146,11 @@ std::vector<std::vector<LatticeEdge>> build_graph(const Segments &syllables, con
             }
             const auto &rows = cached->second;
             const size_t take = (std::min)(rows.size(), static_cast<size_t>(std::max(0, options.span_limit)));
+            // 先验的分母：跨度内实际参与解码的那些行。行数被 span_limit 截断，
+            // 截掉的都是权重最低的尾巴，对和的影响可以忽略。
+            std::int64_t span_total = 0;
+            for (size_t i = 0; i < take; ++i)
+                span_total += rows[i].weight > 0 ? rows[i].weight : 0;
             for (size_t i = 0; i < take; ++i)
             {
                 const auto &row = rows[i];
@@ -113,7 +161,16 @@ std::vector<std::vector<LatticeEdge>> build_graph(const Segments &syllables, con
                 edge.word = row.value;
                 edge.key = row.key.empty() ? span_key : row.key;
                 edge.weight = row.weight;
-                edge.log_prob = edge_log_prob(edge.weight, end - start, options);
+                if (model)
+                {
+                    edge.index = model->index(edge.word);
+                    edge.base_score =
+                        dictionary_tiebreak(edge.weight, options) + reading_prior(edge.weight, span_total, options);
+                }
+                else
+                {
+                    edge.base_score = heuristic_log_prob(edge.weight, end - start, options);
+                }
                 graph[start].push_back(std::move(edge));
             }
         }
@@ -145,6 +202,32 @@ bool covers_all_syllables(const WordItem &item, size_t n_syllables)
 
 } // namespace
 
+size_t generated_sentence_insert_position(const std::vector<WordItem> &candidates, const Segments &syllables)
+{
+    if (syllables.empty())
+        return 0;
+
+    // 只有「键与输入完全相等」才算精确命中。音节数相等是不够的：词库查不到精确键时
+    // 会退到前缀区间扫描（key >= "gun'qi" AND key < …），gun'qi 因此会捞出 gun'qiu
+    // 的「滚球」——同样 2 个音节 2 个字，按音节数判会被误认成精确命中，把整句压到
+    // 它们后面。模糊音展开出来的行同理，键与输入不同，也不该挡住整句。
+    const std::string typed_key = join_span(syllables);
+    const auto is_exact_full_key_hit = [&](const WordItem &item) {
+        if (item.source != CandidateSource::Database && item.source != CandidateSource::UserDatabase)
+            return false;
+        if (!item.canonical_pinyin.empty())
+            return item.canonical_pinyin == typed_key;
+        // 没带 canonical key 的行无从比对，退回旧的字数判断。词典层现在每一行都带
+        // key，这条只为不给历史路径制造回归。
+        return covers_all_syllables(item, syllables.size());
+    };
+
+    size_t insert_at = 0;
+    while (insert_at < candidates.size() && is_exact_full_key_hit(candidates[insert_at]))
+        ++insert_at;
+    return insert_at;
+}
+
 std::vector<LatticePath> decode_word_lattice(const Segments &syllables, const WordLatticeLookup &lookup,
                                              const WordLatticeOptions &options)
 {
@@ -152,9 +235,18 @@ std::vector<LatticePath> decode_word_lattice(const Segments &syllables, const Wo
         return {};
 
     const size_t n = syllables.size();
+    const ngram::LanguageModel *model = active_model(options);
     const auto graph = build_graph(syllables, lookup, options);
     std::vector<std::vector<Hyp>> columns(n + 1);
-    columns[0].push_back(Hyp{0.0, -1, -1, {}, {}});
+    Hyp start;
+    start.score = 0.0;
+    // Not begin_state(): the shipped sc.lm is built from an ARPA without
+    // <s>/</s>, so a sentence-start context would only carry a word the model
+    // has no n-grams for. Starting from the empty context makes the first word
+    // score as a plain unigram, which is what that model can actually express.
+    if (model)
+        start.state = model->null_state();
+    columns[0].push_back(std::move(start));
 
     for (size_t pos = 0; pos < n; ++pos)
     {
@@ -167,7 +259,9 @@ std::vector<LatticePath> decode_word_lattice(const Segments &syllables, const Wo
             for (const auto &edge : graph[pos])
             {
                 Hyp next;
-                next.score = hyp.score + edge.log_prob;
+                next.score = hyp.score + edge.base_score;
+                if (model)
+                    next.score += model->score(hyp.state, edge.index, next.state);
                 next.prev_pos = static_cast<int>(pos);
                 next.prev_idx = hi;
                 next.word = edge.word;
@@ -222,7 +316,7 @@ void merge_lattice_candidates(std::vector<WordItem> &candidates, const Segments 
                               const WordLatticeLookup &lookup, const std::string &typed_pinyin,
                               const WordLatticeOptions &options)
 {
-    if (!lookup || syllables.size() < 3)
+    if (!lookup || syllables.size() < 2)
         return;
     if (!has_only_complete_pinyin_segments(syllables))
         return;
@@ -247,11 +341,7 @@ void merge_lattice_candidates(std::vector<WordItem> &candidates, const Segments 
     if (extra.empty())
         return;
 
-    size_t insert_at = 0;
-    while (insert_at < candidates.size() && covers_all_syllables(candidates[insert_at], syllables.size()) &&
-           (candidates[insert_at].source == CandidateSource::Database ||
-            candidates[insert_at].source == CandidateSource::UserDatabase))
-        ++insert_at;
+    const size_t insert_at = generated_sentence_insert_position(candidates, syllables);
     candidates.insert(candidates.begin() + static_cast<std::ptrdiff_t>(insert_at), extra.begin(), extra.end());
 }
 

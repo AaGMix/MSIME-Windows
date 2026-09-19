@@ -8,7 +8,14 @@ param(
     [string]$ServerDirectory = 'server',
     [string]$UiHtmlDirectory = 'ui-html',
     [string]$HelpCodeDirectory = 'engine/helpcode',
+    # Google 解码器的系统词典。仓库里有两份完全相同的副本：这一份是 engine/contracts/assets
+    # 的清单声明的来源，server/assets/tables 下那份是跑测试时拷进数据目录的开发副本。打包
+    # 取清单声明的那份，免得哪天两份不同步了装出来的和测出来的不是一个东西。
+    [string]$PinyinModelDirectory = 'engine/googlepinyinime-rev/data',
     [string]$DictionaryDirectory = 'MetasequoiaImeDict',
+    # 词格打分用的语言模型不随词库发布下发，而是由 scripts/build-language-model.ps1
+    # 从钉住的上游语料现场转换到这个目录。
+    [string]$LanguageModelDirectory = 'language-model',
     # THIRD_PARTY_NOTICES.txt used to sit next to the tip's sources. In the consolidated repository
     # the notice covers the whole product and lives at the root, one level above windows/, so where
     # to read it is no longer answered by where the tip is.
@@ -56,6 +63,7 @@ $webviewRoot = Join-Path $RepoRoot (Join-Path $UiHtmlDirectory 'webview2')
 $serverConfig = Join-Path $RepoRoot (Join-Path $ServerDirectory 'assets\config\config.toml')
 $factoryConfig = Join-Path $PSScriptRoot 'default_config\config.default.toml'
 $pinyinTable = Join-Path $RepoRoot (Join-Path $ServerDirectory 'assets\tables\pinyin.txt')
+$pinyinModel = Join-Path $RepoRoot (Join-Path $PinyinModelDirectory 'dict_pinyin.dat')
 $helpcodeSource = Join-Path $RepoRoot (Join-Path $HelpCodeDirectory 'helpcodes')
 $appIcon = Join-Path $RepoRoot (Join-Path $ServerDirectory 'src\resource\MetasequoiaIME.ico')
 $thirdPartyNotices = Join-Path $RepoRoot (Join-Path $NoticesDirectory 'THIRD_PARTY_NOTICES.txt')
@@ -66,6 +74,8 @@ $japaneseModel = Join-Path $RepoRoot (Join-Path $DictionaryDirectory 'out\dict_j
 $japaneseModelLicense = Join-Path $RepoRoot (Join-Path $DictionaryDirectory 'source\mozc_dictionary_oss\README.txt')
 $englishDb = Join-Path $RepoRoot (Join-Path $DictionaryDirectory 'out\english.db')
 $othersDb = Join-Path $RepoRoot (Join-Path $DictionaryDirectory 'out\others.db')
+$languageModel = Join-Path $RepoRoot (Join-Path $LanguageModelDirectory 'sc.lm')
+$languageModelNotice = Join-Path $RepoRoot (Join-Path $LanguageModelDirectory 'NOTICE.md')
 
 Assert-PathExists -LiteralPath $RepoRoot -Description '源码仓库根目录'
 Assert-PathExists -LiteralPath $serverRelease -Description 'Server Release 输出目录'
@@ -101,6 +111,7 @@ Assert-PathExists -LiteralPath (Join-Path $webviewRoot 'settings\ime-settings\di
 if (-not $Light) {
     Assert-PathExists -LiteralPath $factoryConfig -Description '出厂配置 default_config\config.default.toml'
     Assert-PathExists -LiteralPath $pinyinTable -Description '完整拼音音节表 pinyin.txt'
+    Assert-PathExists -LiteralPath $pinyinModel -Description 'Google 解码器系统词典 dict_pinyin.dat'
     Assert-PathExists -LiteralPath $helpcodeSource -Description '辅助码目录'
     Assert-PathExists -LiteralPath $dictionaryDb -Description '词库数据库 msime.db'
     Assert-PathExists -LiteralPath $japaneseModel -Description '日语整句模型 dict_japanese.dat'
@@ -118,6 +129,11 @@ if 'weight' not in names or pk != ['word', 'display']:
         throw "英文词库数据库 schema 检查失败：$englishDb"
     }
     Assert-PathExists -LiteralPath $othersDb -Description '杂项数据库 others.db'
+    # 摘要校验留在 build-language-model.ps1 里：它既有 lock.json 又刚生成完文件。
+    # 这里只确认文件在，与 msime.db 一样 —— 词库的摘要也是由 product_lock.py 校验的。
+    Assert-PathExists -LiteralPath $languageModel `
+        -Description '词格整句语言模型 sc.lm（用 scripts\build-language-model.ps1 生成）'
+    Assert-PathExists -LiteralPath $languageModelNotice -Description 'libime 语言模型授权声明 NOTICE.md'
 }
 
 $targetAppData = Join-Path $PSScriptRoot 'app_data'
@@ -134,6 +150,11 @@ else {
         throw "完整拼音音节表缺少 xing：$pinyinTable"
     }
     Copy-Item -LiteralPath $pinyinTable -Destination (Join-Path $targetAppData 'pinyin.txt') -Force
+    # Google 解码器的整句候选（CandidateSource::Fallback）没有这份词典就完全出不来，而且和
+    # sc.lm 一样是静默失败：im_open_decoder 返回 false，解码器直接不出候选，不报任何错。
+    # 与它配对的 user_dict.dat 是 role=user 的可写文件，profiles 为空，故意不进包 ——
+    # 引擎首次使用时由 UserDict::reset 在用户数据目录下自行建出来。
+    Copy-Item -LiteralPath $pinyinModel -Destination (Join-Path $targetAppData 'dict_pinyin.dat') -Force
     Copy-Item -LiteralPath $dictionaryDb -Destination (Join-Path $targetAppData 'msime.db') -Force
     if (Test-Path -LiteralPath $dictionaryManifest) {
         Copy-Item -LiteralPath $dictionaryManifest -Destination (Join-Path $targetAppData 'dictionary-manifest.json') -Force
@@ -142,6 +163,12 @@ else {
     Copy-Item -LiteralPath $japaneseModelLicense -Destination (Join-Path $targetAppData 'MOZC_DICTIONARY_LICENSE.txt') -Force
     Copy-Item -LiteralPath $englishDb -Destination (Join-Path $targetAppData 'english.db') -Force
     Copy-Item -LiteralPath $othersDb -Destination (Join-Path $targetAppData 'others.db') -Force
+    # sc.lm 落在资源目录根下，与 msime.db 同级：engine/contracts/assets 的清单就是这么
+    # 声明这个资源的路径的，引擎按该清单里的文件名去找。
+    Copy-Item -LiteralPath $languageModel -Destination (Join-Path $targetAppData 'sc.lm') -Force
+    # 模型数据是 LGPL-2.1-or-later 的第三方作品，声明必须跟着二进制到用户磁盘上，
+    # 理由同下面 rime-ice 那段。
+    Copy-Item -LiteralPath $languageModelNotice -Destination (Join-Path $targetAppData 'libime-lm-NOTICE.md') -Force
 
     $defaultConfigPath = Join-Path $targetAppData 'config.default.toml'
     # 出厂配置来自本仓库的 default_config，不依赖本机是否已安装输入法。

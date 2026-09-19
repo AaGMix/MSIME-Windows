@@ -147,6 +147,16 @@ upstream candidate pointers or incremental search state. This makes independent 
 safe while serializing their fallback decode work. Windows decoder file IO uses namespace
 adapters for UTF-8 paths without modifying the vendored decoder or the process locale.
 
+The dictionary word lattice is the other whole-sentence source, and it is scored by a kenlm
+trigram rather than by Google Pinyin. `ngram::LanguageModel` (engine/ngram) wraps the vendored
+kenlm query subset; `ngram::shared_language_model` hands out one mmapped instance per resource
+path, so the quanpin and shuangpin dictionaries in every session share a single 34 MB mapping.
+kenlm queries are const and carry their context in the caller's `ngram::State`, so concurrent
+sessions need no lock around it. A missing or unreadable `sc.lm` yields a `valid() == false`
+model and the lattice falls back to its previous uncalibrated unigram heuristic: sentences get
+worse, nothing stops working. The shipped ARPA has no `<s>`/`</s>`, so decoding starts from
+`null_state()`, not `begin_state()`.
+
 User journal operations own their SQLite connections, so separate calls cannot accidentally
 join another session's transaction through a process-wide connection. SQLite locking still
 coordinates writes to the same user's databases. Resource upgrades must quiesce writers.
@@ -159,7 +169,8 @@ session is rejected even if the two sessions contain identical input.
 
 The root CTest targets include public-header compilation, two independent resource/user
 layouts, per-session helpcodes and punctuation, local query paths, concurrent sessions,
-Japanese model path isolation, real Google Pinyin model interleaving/concurrency, Unicode
+Japanese model path isolation, real Google Pinyin model interleaving/concurrency,
+per-path sharing and missing-model degradation of the kenlm trigram, Unicode
 resource paths, user phrase replay, return to a previous generation and failed replay
 preserving old working data. Existing candidate, learning, temporary-mode and online tests
 continue to exercise the compatibility layer and extracted components.

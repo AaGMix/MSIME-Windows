@@ -57,6 +57,13 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Settings page build failed ($LASTEXITCODE)" }
     } finally { Pop-Location }
 
+    # 轻量包不带任何数据文件，所以只有完整包需要语言模型。脚本是幂等的：摘要对得上时
+    # 直接返回，不重下也不重转，因此这里无条件调用不会让日常 test.ps1 变慢。首次运行
+    # 要下 ~75 MB 并转换一次，之后都是秒回。
+    if (-not $Light) {
+        & (Join-Path $repoRoot 'scripts\build-language-model.ps1')
+    }
+
     & (Join-Path $PSScriptRoot 'Prepare-PackageFiles.ps1') -Light:$Light -IncludeSymbols:$IncludeSymbols `
         -RepoRoot $repoRoot -TsfDirectory windows -ServerDirectory server -UiHtmlDirectory ui-html -NoticesDirectory .
     & (Join-Path $PSScriptRoot 'Sign-PackageBinaries-Local.ps1')

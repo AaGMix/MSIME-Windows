@@ -29,6 +29,7 @@ pwsh -File ./Prepare-PackageFiles.ps1 -TargetVersion 1.2.3 -RepoRoot .. `
 - **`THIRD_PARTY_NOTICES.txt` 从 `-NoticesDirectory` 指向的目录取，随安装包装到程序目录。** 合仓后这份声明覆盖整个产品、放在仓根，所以它和 `-TsfDirectory` 分成了两个参数。词库主体含 rime-ice（GPL-3.0）内容，其许可要求保留署名，所以这份文件缺失会让打包直接失败，而不是静默跳过
 - **`Sign-PackageBinaries-Local.ps1` 和 `Sign-Installer-Local.ps1` 只用于本地验证，CI 不会调用它们。** 它们创建本机自签名证书并尝试写入受信任存储，正式发布走 workflow 里用仓库 secret 中真实证书的签名步骤
 - 词库不再从相邻的 `MetasequoiaImeDict` 工作目录取，CI 从产品锁指定的 `dict-*` release 下载并校验 SHA256，再放到脚本期望的位置
+- 语言模型 `sc.lm` 不在那个 release 里。它由 `scripts/build-language-model.ps1` 在打包前从 `language-model/lock.json` 钉住的 libime 语料转换出来，下载摘要和产物摘要都要对上。release workflow 里对应的是「Build the word-lattice language model」这一步，缺了它 `Prepare-PackageFiles.ps1` 会直接失败
 - `windows-2025` runner 自带 Inno Setup 6.7.1，`Compile-Installer.ps1` 能自己找到 `ISCC.exe`。但它不带 `ChineseSimplified.isl`，`msime_setup.iss` 的 `[Languages]` 段依赖那个文件，所以 workflow 会在编译前按固定 revision 和校验和把它装进去
 
 ## 数据目录
@@ -48,6 +49,7 @@ pwsh -File ./Prepare-PackageFiles.ps1 -TargetVersion 1.2.3 -RepoRoot .. `
 - Windows SDK（提供 `signtool.exe`）
 - 先初始化本仓 submodule，并完成 `windows/`、`server/` 的 Release 编译以及 `ui-html/` 设置页构建。Release 构建必须生成同目录 PDB；打包脚本会拒绝缺少匹配符号的产物（符号是否随包安装是另一回事，由 `-IncludeSymbols` 决定）。
 - 在仓库根目录运行 `python scripts/product_lock.py fetch-dictionaries --staging-root .`，下载并验证产品锁中的词库。
+- 词格整句打分用的 `sc.lm` 由 `scripts\build-language-model.ps1` 从 `language-model\lock.json` 钉住的上游语料转换而来。`Invoke-LocalTest.ps1` 打完整包前会自动调它，一般不用手工执行；首次运行要下 ~75 MB 并转换一次，之后摘要对得上就直接跳过。
 - `engine/helpcode/helpcodes/` 是本仓的目录，普通检出即有，无需旧 HelpCode 仓库，也无需初始化 submodule。
 
 ## 本地打包路径

@@ -3,13 +3,14 @@
 #include <array>
 #include <string_view>
 namespace metasequoia::assets {
-inline constexpr int contract_version = 1;
+inline constexpr int contract_version = 2;
 inline constexpr char main_dictionary[] = "msime.db";
 inline constexpr char english_dictionary[] = "english.db";
 inline constexpr char other_dictionary[] = "others.db";
 inline constexpr char japanese_model[] = "dict_japanese.dat";
 inline constexpr char japanese_notice[] = "mozc_dictionary_oss_README.txt";
 inline constexpr char dictionary_manifest[] = "dictionary-manifest.json";
+inline constexpr char language_model[] = "sc.lm";
 inline constexpr char pinyin_model[] = "dict_pinyin.dat";
 inline constexpr char translations[] = "custom_translations.txt";
 inline constexpr char helpcode_lantian[] = "helpcodes/helpcode.txt";
@@ -22,6 +23,7 @@ inline constexpr char notice_14[] = "licenses/helpcode-NOTICE.md";
 inline constexpr char notice_15[] = "licenses/dictionary-NOTICE.md";
 inline constexpr char notice_16[] = "licenses/Engine-NOTICE.md";
 inline constexpr char notice_17[] = "licenses/Engine-LICENSE";
+inline constexpr char notice_18[] = "licenses/libime-lm-NOTICE.md";
 inline constexpr char user_journal[] = "msime_user.db";
 inline constexpr char pinyin_user_dictionary[] = "user_dict.dat";
 struct Helpcode { std::string_view schema; const char *path; };

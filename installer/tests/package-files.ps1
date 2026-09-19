@@ -30,10 +30,13 @@ try {
         'server/assets/config/config.toml',
         'server/src/resource/MetasequoiaIME.ico',
         'engine/helpcode/helpcodes/helpcode.txt',
+        'engine/googlepinyinime-rev/data/dict_pinyin.dat',
         'MetasequoiaImeDict/out/msime.db',
         'MetasequoiaImeDict/out/others.db',
         'MetasequoiaImeDict/out/dict_japanese.dat',
         'MetasequoiaImeDict/source/mozc_dictionary_oss/README.txt',
+        'language-model/sc.lm',
+        'language-model/NOTICE.md',
         'ui-html/webview2/shared/runtime.js',
         'ui-html/webview2/candwnd/index.html',
         'ui-html/webview2/menu/index.html',
@@ -47,6 +50,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Failed to create packaging fixture' }
     & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -TargetVersion '2026.9.1' -IncludeSymbols
     foreach ($file in @('app_data/html/webview2/shared/runtime.js', 'app_data/dictionary-manifest.json',
+                         'app_data/sc.lm', 'app_data/libime-lm-NOTICE.md', 'app_data/dict_pinyin.dat',
                          'tsf_dll/32/MetasequoiaImeTsf.dll', 'tsf_dll/32/MetasequoiaImeTsf.pdb',
                          'tsf_dll/64/MetasequoiaImeTsf.dll', 'tsf_dll/64/MetasequoiaImeTsf.pdb',
                          'server_exe/MetasequoiaImeServer.pdb',
@@ -54,6 +58,9 @@ try {
                          'app_data/helpcodes/helpcode.txt', 'THIRD_PARTY_NOTICES.txt', 'LICENSE.txt')) {
         if (-not (Test-Path (Join-Path $installer $file))) { throw "Missing packaged file: $file" }
     }
+    # user_dict.dat 是 role=user 的可写文件，清单里 profiles 为空。装进资源目录会把用户
+    # 自造词顶掉，而且每次升级顶一次，所以它必须由引擎在用户数据目录下自建。
+    if (Test-Path (Join-Path $installer 'app_data/user_dict.dat')) { throw 'Packaged the writable user dictionary' }
     foreach ($testFile in @(
         'server_exe/MetasequoiaImeServerTests.exe',
         'server_exe/MetasequoiaImeServerTests.pdb',
@@ -87,6 +94,24 @@ try {
     & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -TsfDirectory windows -ServerDirectory server -UiHtmlDirectory ui-html -NoticesDirectory . -Light
     if ([IO.File]::ReadAllText($database) -ne 'preserved user data') { throw 'Light package replaced dictionary data' }
     if (-not (Test-Path (Join-Path $installer 'app_data/html/webview2/shared/runtime.js'))) { throw 'Light package lost shared contracts' }
+    # 完整包必须带 sc.lm。缺了它引擎是静默降级的：整句候选只是变差，不会报错，所以打包
+    # 这一步是唯一能挡住它的地方。轻量包本来就不带数据文件，不受影响。
+    $languageModelFixture = Join-Path $fixture 'language-model/sc.lm'
+    Remove-Item $languageModelFixture -Force
+    & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -TsfDirectory windows -ServerDirectory server -UiHtmlDirectory ui-html -NoticesDirectory . -Light
+    $rejected = $false
+    try { & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture } catch { $rejected = $_.Exception.Message -match 'sc\.lm' }
+    if (-not $rejected) { throw 'Missing language model was accepted' }
+    [IO.File]::WriteAllText($languageModelFixture, 'fixture')
+    # dict_pinyin.dat 同理：缺了它 im_open_decoder 返回 false，Google 那条 Fallback 整句
+    # 候选悄无声息地消失。它长期没被打包进去，测试却是绿的，因为测试用的是
+    # server/assets/tables 那份开发副本 —— 所以这条断言要盯的是安装包，不是数据目录。
+    $pinyinModelFixture = Join-Path $fixture 'engine/googlepinyinime-rev/data/dict_pinyin.dat'
+    Remove-Item $pinyinModelFixture -Force
+    $rejected = $false
+    try { & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture } catch { $rejected = $_.Exception.Message -match 'dict_pinyin\.dat' }
+    if (-not $rejected) { throw 'Missing pinyin decoder model was accepted' }
+    [IO.File]::WriteAllText($pinyinModelFixture, 'fixture')
     Remove-Item (Join-Path $fixture 'ui-html/webview2/shared') -Recurse -Force
     $rejected = $false
     try { & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -TsfDirectory windows -ServerDirectory server -UiHtmlDirectory ui-html -NoticesDirectory . } catch { $rejected = $true }

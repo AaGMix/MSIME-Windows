@@ -2,7 +2,7 @@
 
 本目录是本仓库的输入引擎组件，不再是子模块。来源提交和专门化时裁掉的内容见 [UPSTREAM.md](UPSTREAM.md)；仓库级约定以根 `AGENTS.md` 为准，本文件补充引擎自身的实现、数据和验证规则。
 
-**这里是一等代码，不是 vendored 第三方。** 需要为 Windows 改引擎就直接改，和改 `server/` 一样评审和测试，不要为了"保持和上游一致"而绕路。唯一例外是 `googlepinyinime-rev/`、`utfcpp/` 和 `voice/third_party/`：那三个确实是上游副本，保留其格式与许可，别去重排版。
+**这里是一等代码，不是 vendored 第三方。** 需要为 Windows 改引擎就直接改，和改 `server/` 一样评审和测试，不要为了"保持和上游一致"而绕路。唯一例外是 `googlepinyinime-rev/`、`ngram/kenlm/`、`utfcpp/` 和 `voice/third_party/`：那四个确实是上游副本，保留其格式与许可，别去重排版。
 
 `helpcode/` 负责辅助码。`voice/` 是可选语音模块，规则见 `voice/AGENTS.md`；导入的 Windows 独立程序位于 `voice/platforms/windows/`，默认不构建，也不进入公共库目标。词库不在本目录内，由 `product-lock.json` 钉住的发布产物在构建时下载。
 
@@ -18,7 +18,7 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure --timeout 20
 ```
 
-`googlepinyinime-rev/src/share/` 和 `utfcpp/source` 现在都在树里，普通检出即可，不需要 `git submodule update`。
+`googlepinyinime-rev/src/share/`、`ngram/kenlm/` 和 `utfcpp/source` 现在都在树里，普通检出即可，不需要 `git submodule update`。
 
 **改了引擎就要跑测试。** 引擎的缺陷会以"某个输入模式偶发不出候选"的形式出现在前端，编译通过说明不了什么。
 

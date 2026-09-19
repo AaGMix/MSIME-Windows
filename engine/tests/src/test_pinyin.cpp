@@ -53,11 +53,11 @@ class ScopedLocalAppDataOverride
         fs::remove_all(root_);
         fs::create_directories(app_dir_);
 
-        // msime.db 是回归断言的主体，缺失即环境不完整；而当前产品布局已不再发布
-        // 整句解码器的两个数据文件（dict_pinyin.dat/user_dict.dat），引擎对它们
-        // 的缺失也是优雅降级（PinyinDecoder::sentence 直接返回空串），所以这里
-        // 仅在源目录存在时才拷贝，不把它们当硬依赖。
-        for (const auto &file_name : {"msime.db", "dict_pinyin.dat", "user_dict.dat"})
+        // msime.db 是回归断言的主体，缺失即环境不完整。其余几个都不是硬依赖：
+        // dict_pinyin.dat 随安装包发布，user_dict.dat 是可写用户文件、由引擎自建，
+        // 两者缺失时 PinyinDecoder::sentence 直接返回空串；sc.lm 缺失则退回启发式
+        // 打分，整句候选只是变差、不会消失。所以这里仅在源目录存在时才拷贝。
+        for (const auto &file_name : {"msime.db", "dict_pinyin.dat", "user_dict.dat", "sc.lm"})
         {
             const fs::path source = source_dir / file_name;
             const fs::path target = app_dir_ / file_name;
@@ -466,6 +466,126 @@ void test_quanpin_four_syllable_alternative_segmentation()
     expect(found != nullptr, "Expected '简明扼要' among the candidates for 'jianmingeyao'.");
 }
 
+// 两条整句来源的相对次序：词格（Generated，kenlm 打分）必须排在 Google 解码器
+// （Fallback）之前。merge_lattice_candidates 自己的插入点已经由上面的表驱动用例
+// 覆盖，但词典层曾经在合并之后又把 Fallback 提回首位，那一步没有任何测试盯着，
+// 换掉打分模型之后才发现次序是反的。这里断的是词典层的最终结果。
+//
+// 不写死具体句子：词格出什么取决于 msime.db 和 sc.lm，钉死了会随词库更新而碎。
+// 断的是相对位置，且只在两条来源都真的出现时才断。
+void test_quanpin_lattice_precedes_google_fallback()
+{
+    QuanpinDictionary dictionary;
+
+    fmt::println("==== Quanpin Lattice Precedes Google Fallback ====");
+    bool observed = false;
+    for (const auto *query : {"nihaoshijie", "jintiantianqizhenhao", "womenyiqiquchifan"})
+    {
+        const auto result = dictionary.query(query);
+        const auto generated = std::find_if(result.begin(), result.end(), [](const WordItem &item) {
+            return item.source == CandidateSource::Generated;
+        });
+        const auto fallback = std::find_if(result.begin(), result.end(), [](const WordItem &item) {
+            return item.source == CandidateSource::Fallback;
+        });
+        if (generated == result.end() || fallback == result.end())
+            continue;
+        observed = true;
+        expect(generated < fallback,
+               fmt::format("Expected the lattice sentence ahead of the Google fallback for '{}', got '{}' before '{}'",
+                           query, fallback->word, generated->word));
+    }
+    if (!observed)
+    {
+        // sc.lm 或 dict_pinyin.dat 不在数据目录里时两条来源凑不齐，与其他用例一样优雅跳过。
+        fmt::println("Skipped: no query produced both a lattice and a Google fallback sentence.");
+    }
+}
+
+// 多音字的生僻读音不能被词格整句选中。词库里「卷」带一行 gun、「而」带一行
+// neng，权重都是 0；kenlm 只看汉字，这两个字它见得多，于是 gun'qi 出过「卷七」、
+// neng'fa'sheng 出过「而发生」。WordLatticeOptions::reading_prior 按读音占比补上
+// 这一维。依赖真实 msime.db + sc.lm，凑不齐时与其他用例一样优雅跳过。
+void test_quanpin_lattice_rejects_rare_readings()
+{
+    fmt::println("==== Quanpin Lattice Rejects Rare Readings ====");
+
+    // 表驱动的词格用例跑的是无模型的启发式打分，那条路本来就按绝对权重压生僻行，
+    // 出不了这个 bug。所以这里直接拿真实 msime.db + sc.lm 解一次词格。
+    const auto paths = metasequoia::RuntimePaths::legacy();
+    const auto &model = ngram::shared_language_model(paths.resource(metasequoia::assets::language_model));
+    const std::string db_path = quanpin::get_default_db_path();
+    sqlite3 *db = nullptr;
+    if (!model.valid() || sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK)
+    {
+        if (db != nullptr)
+            sqlite3_close(db);
+        fmt::println("Skipped: sc.lm or msime.db is not available.");
+        return;
+    }
+
+    std::unordered_map<std::string, sqlite3_stmt *> statement_cache;
+    for (const auto &probe : {std::pair<const char *, const char *>{"gun'qi", "卷七"},
+                              std::pair<const char *, const char *>{"neng'fa'sheng", "而发生"}})
+    {
+        quanpin::WordLatticeOptions options;
+        options.nbest = 1;
+        options.language_model = &model;
+        const auto lattice_paths = quanpin::decode_word_lattice(
+            quanpin::split_segments(probe.first),
+            quanpin::make_lattice_db_lookup(db, statement_cache, options.span_limit), options);
+        const std::string sentence = lattice_paths.empty() ? "" : lattice_paths.front().sentence;
+        // 「卷」在词库里带一行 gun、「而」带一行 neng，权重都是 0；kenlm 只看汉字，
+        // 这两个字它见得多，reading_prior 之前 gun'qi 出「卷七」、neng'fa'sheng
+        // 出「而发生」。
+        expect(sentence != probe.second,
+               fmt::format("'{}' spells a rare reading and must not win the lattice for '{}'.", probe.second,
+                           probe.first));
+    }
+
+    for (auto &entry : statement_cache)
+        sqlite3_finalize(entry.second);
+    sqlite3_close(db);
+}
+
+// 词格的跨度查询只认精确键，所以每个合法音节在词库里都必须至少查得到一行。少一个，
+// 句子里一旦用到它，整张词格就断了——不是候选变差，是长句联想整个消失。切分器认
+// jv / lue 这类 ü 的另一种拼法，而词库只存 ju / lve，曾经就是这么断的。这条用例把
+// 「切分器认的音节集」和「词库存的键」钉在一起，任何一边漂了都会在这里先炸。
+void test_quanpin_lattice_covers_every_syllable()
+{
+    fmt::println("==== Quanpin Lattice Covers Every Syllable ====");
+
+    const std::string db_path = quanpin::get_default_db_path();
+    sqlite3 *db = nullptr;
+    if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK)
+    {
+        if (db != nullptr)
+            sqlite3_close(db);
+        fmt::println("Skipped: msime.db is not available.");
+        return;
+    }
+
+    std::unordered_map<std::string, sqlite3_stmt *> statement_cache;
+    const auto lookup = quanpin::make_lattice_db_lookup(db, statement_cache, 32);
+    std::string uncovered;
+    size_t uncovered_count = 0;
+    for (const auto &syllable : quanpin::intact_pinyin_list())
+    {
+        if (!lookup({syllable}).empty())
+            continue;
+        if (uncovered_count++ > 0)
+            uncovered += ' ';
+        uncovered += syllable;
+    }
+    expect(uncovered_count == 0, fmt::format("Every syllable needs at least one exact-key row, but {} have none: {}.",
+                                             uncovered_count, uncovered));
+
+    for (auto &entry : statement_cache)
+        sqlite3_finalize(entry.second);
+    sqlite3_close(db);
+}
+
 void test_quanpin_single_letter_jianpin_ranking()
 {
     ScopedLocalAppDataOverride local_appdata("single-letter-jianpin-ranking");
@@ -621,15 +741,64 @@ void test_word_lattice()
     }
 
     {
+        // 门槛是 2 个音节：两音节输入也出整句，但整句排在整串拼音精确命中的词库
+        // 候选之后，不许抢首位。
         std::unordered_map<std::string, std::vector<LatticeLexeme>> table;
         table["nie"] = {{"nie", "捏", 8000}};
         table["zi"] = {{"zi", "子", 9000}};
         table["nie'zi"] = {{"nie'zi", "镊子", 18000}};
         std::vector<WordItem> candidates;
-        candidates.emplace_back("nxzi", "镊子", 18000, CandidateSource::Database, "nie'zi");
+        candidates.emplace_back("nxzi", "捏子", 12000, CandidateSource::Database, "nie'zi");
         quanpin::merge_lattice_candidates(candidates, {"nie", "zi"}, make_table_lattice_lookup(table), "nxzi");
+        expect(candidates.front().word == "捏子" && candidates.front().source == CandidateSource::Database,
+               fmt::format("Expected the exact Database hit to stay first, got '{}'", candidates.front().word));
+        expect(find_candidate(candidates, "镊子") != nullptr,
+               "Expected the two-syllable lattice sentence 镊子 to be merged in.");
+    }
+
+    {
+        // 单音节仍然不出整句：精确查表已经全覆盖。
+        std::unordered_map<std::string, std::vector<LatticeLexeme>> table;
+        table["zi"] = {{"zi", "子", 9000}, {"zi", "字", 8000}};
+        std::vector<WordItem> candidates;
+        candidates.emplace_back("zi", "子", 9000, CandidateSource::Database, "zi");
+        quanpin::merge_lattice_candidates(candidates, {"zi"}, make_table_lattice_lookup(table), "zi");
         expect(candidates.size() == 1 && candidates.front().source == CandidateSource::Database,
-               "Two-syllable merge is a no-op; exact SQLite already covers the key.");
+               "Single-syllable merge is a no-op; exact SQLite already covers the key.");
+    }
+
+    {
+        // generated_sentence_insert_position：跳过开头那串「键与输入完全相等」的
+        // 词库候选，前缀候选和非词库来源都不算，遇到就停。全拼/双拼词典层的 Google
+        // 整句用的是同一个位置，所以两条整句来源都落在词库短语之后。
+        const quanpin::Segments ni_hao{"ni", "hao"};
+        std::vector<WordItem> candidates;
+        candidates.emplace_back("ni'hao", "你好", 30000, CandidateSource::Database, "ni'hao");
+        candidates.emplace_back("ni'hao", "拟好", 9000, CandidateSource::UserDatabase, "ni'hao");
+        candidates.emplace_back("ni", "你", 50000, CandidateSource::Database, "ni");
+        expect(quanpin::generated_sentence_insert_position(candidates, ni_hao) == 2,
+               "Expected the insert position to sit right after the two exact-key hits.");
+
+        std::vector<WordItem> no_exact_hit;
+        no_exact_hit.emplace_back("ni", "你", 50000, CandidateSource::Database, "ni");
+        expect(quanpin::generated_sentence_insert_position(no_exact_hit, ni_hao) == 0,
+               "Expected a prefix-only list to take the sentence at the head.");
+
+        // 前缀区间扫描出来的行音节数、字数都和输入一样（gun'qi 捞出 gun'qiu 的
+        // 滚球），但键不等于输入，不许挡在整句前面。截图里「滚其」排到末尾就是
+        // 按音节数判断的后果。
+        const quanpin::Segments gun_qi{"gun", "qi"};
+        std::vector<WordItem> prefix_scan;
+        prefix_scan.emplace_back("gyqi", "滚球", 30000, CandidateSource::Database, "gun'qiu");
+        prefix_scan.emplace_back("gyqi", "滚起", 12000, CandidateSource::Database, "gun'qi");
+        expect(quanpin::generated_sentence_insert_position(prefix_scan, gun_qi) == 0,
+               "A prefix-range row with the same syllable count must not count as an exact hit.");
+
+        std::vector<WordItem> exact_then_prefix;
+        exact_then_prefix.emplace_back("gyqi", "滚起", 12000, CandidateSource::Database, "gun'qi");
+        exact_then_prefix.emplace_back("gyqi", "滚球", 30000, CandidateSource::Database, "gun'qiu");
+        expect(quanpin::generated_sentence_insert_position(exact_then_prefix, gun_qi) == 1,
+               "A leading exact-key hit still outranks the sentence; the prefix row behind it does not.");
     }
 
     {
@@ -1162,7 +1331,20 @@ void test_quanpin_autocorrect_display()
         const auto prefix =
             std::find_if(full.begin(), full.end(), [](const WordItem &item) { return item.word == "上"; });
         expect(prefix != full.end() && prefix->corrected_from.empty(), "Partial prefix candidates must stay unmarked.");
-        expect(count_marked(full) == 1, "Exactly the full-length corrected candidate may be marked for 'sahnghao'.");
+        // 整句候选（词格 / Google 解码器）走的是同一条纠错读音，字母与该读音相同，
+        // 因此同样带上 corrected_from。整句门槛降到 2 个音节之后 shang'hao 就够格，
+        // 主切分和候选读音 shan'gua'o 各会多出整句，所以不再是「恰好一条」。这里断
+        // 的仍是原来的意图：被标记的必须覆盖整串输入，前缀候选一律不标。
+        const auto letter_count = [](const std::string &pinyin) {
+            return static_cast<size_t>(std::count_if(pinyin.begin(), pinyin.end(), [](char c) { return c != '\''; }));
+        };
+        expect(count_marked(full) >= 1, "The full-length corrected candidate must be marked for 'sahnghao'.");
+        const size_t typed_letters = letter_count("sahnghao");
+        expect(std::all_of(full.begin(), full.end(),
+                           [&](const WordItem &item) {
+                               return item.corrected_from.empty() || letter_count(item.pinyin) == typed_letters;
+                           }),
+               "Only candidates covering the whole typed input may be marked for 'sahnghao'.");
 
         const auto keneng = dictionary.query("keneng", "ke'neng", both);
         expect(count_marked(keneng) == 0, "A legal spelling must produce no marks.");
@@ -1445,6 +1627,9 @@ int main(int argc, char *argv[])
         test_shuangpin_query_manual_apostrophe();
         test_quanpin_order_corrections();
         test_quanpin_four_syllable_alternative_segmentation();
+        test_quanpin_lattice_precedes_google_fallback();
+        test_quanpin_lattice_rejects_rare_readings();
+        test_quanpin_lattice_covers_every_syllable();
         test_quanpin_single_letter_jianpin_ranking();
         test_quanpin_query_timings();
         test_quanpin_autocorrect_switches_and_guard();

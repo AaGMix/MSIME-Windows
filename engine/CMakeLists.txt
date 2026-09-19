@@ -101,6 +101,8 @@ if(WIN32)
         APPEND PROPERTY COMPILE_OPTIONS ${METASEQUOIA_PINYIN_FILE_IO_OPTIONS})
 endif()
 
+add_subdirectory(ngram)
+
 add_library(MetasequoiaImeEngine STATIC ${METASEQUOIA_IME_ENGINE_SOURCES})
 add_library(MetasequoiaIme::Engine ALIAS MetasequoiaImeEngine)
 
@@ -122,6 +124,7 @@ target_link_libraries(MetasequoiaImeEngine
         fmt::fmt-header-only
         ${METASEQUOIA_IME_SQLITE_TARGET}
         Threads::Threads
+        metasequoia_ime_ngram
 )
 
 if(WIN32)

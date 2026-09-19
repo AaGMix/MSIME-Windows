@@ -233,6 +233,7 @@ QuanpinDictionary::QuanpinDictionary(std::string db_path, metasequoia::RuntimePa
     : cache_(128), series_cache_(128), segmentation_cache_(128), resolution_cache_(128), paths_(std::move(paths)),
       decoder_(paths_.resource(metasequoia::assets::pinyin_model),
                paths_.user(metasequoia::assets::pinyin_user_dictionary)),
+      language_model_(&ngram::shared_language_model(paths_.resource(metasequoia::assets::language_model))),
       db_path_(db_path.empty() ? metasequoia::path_to_utf8(paths_.dictionary(metasequoia::assets::main_dictionary))
                                : std::move(db_path))
 {
@@ -497,45 +498,48 @@ std::vector<WordItem> QuanpinDictionary::query_series(const std::string &raw_inp
         result.insert(result.end(), partial_result.begin(), partial_result.end());
     }
 
-    if (segments.size() >= 3 && quanpin::has_only_complete_pinyin_segments(segments))
+    if (segments.size() >= 2 && quanpin::has_only_complete_pinyin_segments(segments))
     {
-        // Keep one local Google-Pinyin sentence as the primary whole-sentence
-        // suggestion.  The lattice is a secondary source; it should add only
-        // its best path rather than filling the candidate page with near-
-        // duplicate low-quality sentences.
-        const std::string normalized = remove_delimiters(segmentation.empty() ? raw_input : segmentation);
-        const std::string google_sentence = search_sentence_from_ime_engine(normalized);
+        // 两条整句来源各出一句：词格（kenlm 三元模型打分）在前，Google 解码器在后。
+        // 词格换成 sc.lm 之后整体比 Google 那条准，所以由它占首位；Google 那条保留，
+        // 它在词格覆盖不到的输入上仍然有用。两边都只出一句，免得近似重复的整句把
+        // 候选页挤满。
+        //
+        // 两条都插在 generated_sentence_insert_position 给的位置上，也就是开头那串
+        // 「整串拼音精确命中词库」的候选之后：整句是猜出来的，不该压过词库里真有的
+        // 短语。相对次序仍由插入点决定——merge_lattice_candidates 算出的位置就是这条
+        // Fallback 所在的下标，词格随后落在它之前。
+        //
+        // Google 解码器自己重新切分，这正是它的价值所在（词格覆盖不到的输入靠它），
+        // 所以默认喂裸串。但手动分隔符是用户明确表达的切分意图，去掉之后 nu'e 会被
+        // 它读成 nüe 而出「虐」。撇号本来就是它认的音节分隔符（双拼那条一直是连着
+        // 撇号传的），手打分隔符时原样传下去即可。
+        const std::string google_input = raw_input.find('\'') != std::string::npos
+                                             ? raw_input
+                                             : remove_delimiters(segmentation.empty() ? raw_input : segmentation);
+        const std::string google_sentence = search_sentence_from_ime_engine(google_input);
         if (!google_sentence.empty())
         {
             const auto duplicate = std::find_if(result.begin(), result.end(),
                                                 [&](const WordItem &item) { return item.word == google_sentence; });
             if (duplicate == result.end())
+            {
                 // 整句 fallback 必须带上 canonical quanpin，否则以它结尾的造词无法落库：
                 // update_creating_word_progress 依赖 canonical_pinyin 才能拼出完整读音。
                 // segmentation 为空时保持为空，交由既有逻辑判定为不可落库。
-                result.insert(result.begin(), WordItem(segmentation.empty() ? raw_input : segmentation, google_sentence,
-                                                       1, CandidateSource::Fallback, segmentation));
+                const size_t insert_at = quanpin::generated_sentence_insert_position(result, segments);
+                result.insert(result.begin() + static_cast<std::ptrdiff_t>(insert_at),
+                              WordItem(segmentation.empty() ? raw_input : segmentation, google_sentence, 1,
+                                       CandidateSource::Fallback, segmentation));
+            }
         }
 
         quanpin::WordLatticeOptions lattice_options;
         lattice_options.nbest = 1;
-        quanpin::merge_lattice_candidates(result, segments,
-                                          quanpin::make_lattice_db_lookup(db_, statement_cache_,
-                                                                          quanpin::QuerySource::Quanpin,
-                                                                          lattice_options.span_limit),
-                                          segmentation.empty() ? raw_input : segmentation, lattice_options);
-        if (!google_sentence.empty())
-        {
-            const auto google = std::find_if(result.begin(), result.end(), [&](const WordItem &item) {
-                return item.word == google_sentence && item.source == CandidateSource::Fallback;
-            });
-            if (google != result.end() && google != result.begin())
-            {
-                WordItem preferred = std::move(*google);
-                result.erase(google);
-                result.insert(result.begin(), std::move(preferred));
-            }
-        }
+        lattice_options.language_model = language_model_;
+        quanpin::merge_lattice_candidates(
+            result, segments, quanpin::make_lattice_db_lookup(db_, statement_cache_, lattice_options.span_limit),
+            segmentation.empty() ? raw_input : segmentation, lattice_options);
     }
 
     if (result.size() < kSparsePinyinFallbackThreshold)

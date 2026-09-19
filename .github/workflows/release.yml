@@ -468,6 +468,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ci/download-dictionaries.sh
 
+      # The word-lattice language model is the one product input that is neither built from this
+      # repository's sources nor published in the dictionary release: it is converted here from the
+      # ARPA corpus pinned in language-model/lock.json. Both the download and the converted result
+      # are checked against that lock, so this step is reproducible rather than a fetch of whatever
+      # the upstream file server serves today. It configures engine/ngram alone, so it needs no
+      # vcpkg and no SQLite on this runner.
+      - name: Build the word-lattice language model
+        shell: pwsh
+        run: ./scripts/build-language-model.ps1
+
       - name: Decide the signing mode
         id: signing
         shell: pwsh
