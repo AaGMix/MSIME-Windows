@@ -42,6 +42,15 @@ pwsh -File ./Prepare-PackageFiles.ps1 -TargetVersion 1.2.3 -RepoRoot .. `
 - 安装器在数据目录里放一个 `.metasequoiaime-data` 标记文件。覆盖安装的清理和卸载的整目录删除**只在看到这个标记（或目录就是历史默认位置）时才执行**——用户可能把数据目录指到一个本来就有自己文件的文件夹
 - 静默安装用 `/DATADIR="D:\MetasequoiaIME"` 指定；该值在 `PrepareToInstall` 里和向导页走同一套校验
 
+## 运行时依赖检查
+
+安装包不携带 WebView2 Runtime 和 VC 运行库——前者有自己的 Evergreen 更新通道，后者是系统级共享组件。但缺了任何一个，输入法装完就是坏的，而故障出现在安装结束之后（Server 起不来，或者候选窗一片空白），用户看不到任何解释。所以 `msime_setup.iss` 的 `InitializeSetup` 在安装开始前先查一遍，缺哪个就当场说清楚，并给出下载地址。
+
+- **Microsoft Edge WebView2 Runtime**：读 EdgeUpdate 客户端键 `{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}` 的 `pv`。机器级安装由 32 位的 EdgeUpdate 写入，所以主查 `HKLM32`，再看 `HKLM64` 和 `HKCU`（用户级安装）。`pv` 缺失或残留成 `0.0.0.0` 都算没装
+- **Visual C++ 2015–2022 可再发行组件包（x64）**：读 `Software\Microsoft\VisualStudio\14.0\VC\Runtimes\x64` 的 `Installed` / `Major` / `Minor`，`HKLM32` 和 `HKLM64` 两个视图都查。要求 **14.20 以上**（VC++ 2019 起）：`server_exe\` 里每个 exe 都导入了 `vcruntime140_1.dll`，它从那一版才开始随 redist 分发，只装了 2015 / 2017 版的机器同样有 `Installed=1`，却照样起不来。32 位 TSF DLL 用静态 CRT（`windows/CMakeLists.txt` 的 `CMAKE_MSVC_RUNTIME_LIBRARY`），所以不检查 x86 redist
+- **不要改成查 `System32` 里的 DLL。** Setup.exe 是 32 位进程，Pascal Script 的 `FileExists` 会被 WOW64 重定向到 `SysWOW64`，查到的是 x86 运行库；只装了 x64 redist 的机器会被误判成缺少 x64 运行库。绕开重定向的办法不可移植：`EnableFsRedirection` 在 Inno Setup 7 里已被移除，而它的替代品在 CI 用的 6.x 里还不存在
+- 缺组件时弹一次对话框：选「是」打开下载页并结束安装，选「否」继续装。**不阻断安装**——用户可能马上就要去补组件，也可能只是在准备环境。静默安装（CI、批量部署）用 `SuppressibleMsgBox` 默认「否」直接继续，缺什么已经写进安装日志（`/LOG=`）
+
 ## 依赖
 
 - Windows 10/11，PowerShell 7（`pwsh`）
