@@ -163,8 +163,12 @@ int main()
     Session after_removal(options);
     after_removal.set_nine_key_enabled(true);
     type(after_removal, "64426");
+    // Removal drops the dictionary row; the sentence composer may still build the same text out of
+    // the surviving single-character entries, so only a database-backed 你好 counts as a leak.
     for (const auto &item : after_removal.snapshot().candidates)
-        require(item.word != "你好", "phrase removal did not persist");
+        require(item.word != "你好" ||
+                    (item.source != CandidateSource::Database && item.source != CandidateSource::UserDatabase),
+                "phrase removal did not persist");
 
     // A persistence failure must preserve the user's commit and surface a diagnostic.
     auto failure_options = learning_options;

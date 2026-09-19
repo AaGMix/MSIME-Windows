@@ -1307,6 +1307,23 @@ TEST_CASE(QuanpinDictionaryUmlautAliasNormalisesQueryAndMarksNonStandardSpelling
     std::filesystem::remove(db_path);
 }
 
+TEST_CASE(QuanpinGoogleSpellingRewritesUmlautForDecoders)
+{
+    // 词库那侧的 canonical 是 nve/lve，Google 的两个解码器（本地
+    // googlepinyinime-rev 与 inputtools 云输入）只认 nue/lue：送出去之前必须换过来，
+    // 否则 nve 会被它们拆成 nv + e。撇号是它们认的音节分隔符，要原样留住。
+    REQUIRE_EQ(quanpin::to_google_spelling("nve'dai'dong'wu"), std::string("nue'dai'dong'wu"));
+    REQUIRE_EQ(quanpin::to_google_spelling("wo'men'lve'de"), std::string("wo'men'lue'de"));
+    REQUIRE_EQ(quanpin::to_google_spelling("jve'qve'xve'yve"), std::string("jue'que'xue'yue"));
+    REQUIRE_EQ(quanpin::to_google_spelling("jv'qv'xv'yv"), std::string("ju'qu'xu'yu"));
+
+    // nv/lv 本身是解码器认的写法，不动；不成音节的块原样透传。
+    REQUIRE_EQ(quanpin::to_google_spelling("nv'er"), std::string("nv'er"));
+    REQUIRE_EQ(quanpin::to_google_spelling("lv'se"), std::string("lv'se"));
+    REQUIRE_EQ(quanpin::to_google_spelling("nvedaidongwu"), std::string("nvedaidongwu"));
+    REQUIRE_EQ(quanpin::to_google_spelling(""), std::string(""));
+}
+
 namespace
 {
 struct HelpcodeSample

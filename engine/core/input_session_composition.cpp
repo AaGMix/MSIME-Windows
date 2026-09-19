@@ -665,7 +665,13 @@ InputSession::CloudQueryState InputSession::get_cloud_query_state() const
 
         if (state.should_query)
         {
-            state.query_text = shuangpin::normalize_input_with_delimiters(state.cache_key, shuangpin_profile_);
+            // 云输入拿的是带撇号的全拼，但 ü 要换成 inputtools 认的写法：它和本地的
+            // Google 解码器一样只认 nue/lue，nve'dai'dong'wu 会被它拆成 nv + e，
+            // 「虐待动物」于是变成「女蛾黛动物」。committed_pinyin / cache_key 不受
+            // 影响，仍是双拼原串。
+            const std::string quanpin_segmentation =
+                shuangpin::normalize_input_with_delimiters(state.cache_key, shuangpin_profile_);
+            state.query_text = quanpin::to_google_spelling(quanpin_segmentation);
         }
         return state;
     }
@@ -679,7 +685,8 @@ InputSession::CloudQueryState InputSession::get_cloud_query_state() const
     }
 
     state.should_query = !request().normalized_input.empty();
-    state.query_text = request().normalized_input;
+    // 全拼敲出来的 nve / lve 同样要换写法；没有音节边界的裸串匹配不上，原样透传。
+    state.query_text = quanpin::to_google_spelling(request().normalized_input);
     return state;
 }
 
