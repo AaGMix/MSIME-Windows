@@ -2379,6 +2379,21 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
                     _pCompositionProcessorEngine ? _pCompositionProcessorEngine->GetVirtualKeyLength() : 0, S_OK,
                     deferredReplayToken);
 
+    // The probe above only covers the immediate path. Nothing further down
+    // handles these two functions, so a key that reaches here still classified
+    // as a smart-punctuation action (a replay, or a prevalidated key state)
+    // would be eaten and silently dropped. Run the same local edit session.
+    if (*pIsEaten && (KeystrokeState.Function == FUNCTION_SMART_PUNCTUATION_CONVERT ||
+                      KeystrokeState.Function == FUNCTION_SMART_PUNCTUATION_REVERT))
+    {
+        _RequestSmartPunctuationEditSession(pContext, wch, KeystrokeState.Function, expectedFocusGeneration);
+        if (deferredReplayToken != 0)
+        {
+            _CompleteDeferredKeyReplay(deferredReplayToken);
+        }
+        return KeyDownDispatchResult::Complete;
+    }
+
     if (expectedFocusGeneration == 0 || expectedFocusGeneration != _deferredKeyFocusGeneration)
     {
         // A COM callback inside key classification changed the focused

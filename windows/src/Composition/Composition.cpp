@@ -587,6 +587,158 @@ void CMetasequoiaIME::_RunPairedPunctuationCaretMove()
 void CMetasequoiaIME::_ClearSmartPunctuationAction()
 {
     _smartPunctuationAction = {};
+    // Every caller clears because the spot the action described is gone. A
+    // rewrite still queued for that spot would backspace into whatever took
+    // its place, so it goes with it. The one caller that clears and then
+    // queues -- _ExecuteSmartPunctuationAction -- clears first.
+    _CancelSmartPunctuationSendInputRewrite();
+}
+
+bool CMetasequoiaIME::_RewritePrecedingCharInPlace(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR expected,
+                                                   WCHAR replacement)
+{
+    if (pContext == nullptr || replacement == 0)
+    {
+        return false;
+    }
+
+    TF_SELECTION tfSelection = {};
+    ULONG fetched = 0;
+    HRESULT hr = pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &tfSelection, &fetched);
+    if (FAILED(hr) || fetched != 1 || tfSelection.range == nullptr)
+    {
+        return false;
+    }
+
+    // Cover the character just committed: one to the left of the caret.
+    LONG shiftedStart = 0;
+    hr = tfSelection.range->Collapse(ec, TF_ANCHOR_START);
+    if (SUCCEEDED(hr))
+    {
+        hr = SafeRangeShiftStart(tfSelection.range, ec, -1, &shiftedStart);
+        if (SUCCEEDED(hr) && shiftedStart != -1)
+        {
+            hr = E_FAIL;
+        }
+    }
+
+    // Read the covered character back before writing. A shallow store accepts
+    // the shift and would accept the write too, reporting success while the
+    // character on screen -- which it never held -- stays as it is. Only a
+    // store that hands the character back can be rewritten in place.
+    if (SUCCEEDED(hr))
+    {
+        WCHAR buffer[2] = {};
+        ULONG got = 0;
+        hr = SafeRangeGetText(tfSelection.range, ec, 0, buffer, 1, &got);
+        if (SUCCEEDED(hr) && (got != 1 || buffer[0] != expected))
+        {
+            hr = E_FAIL;
+        }
+    }
+
+    const WCHAR text[1] = {replacement};
+    const bool rewritten = SUCCEEDED(hr) && SUCCEEDED(SafeRangeSetText(tfSelection.range, ec, 0, text, 1));
+    if (rewritten)
+    {
+        PlaceSmartPunctuationCaret(ec, pContext, tfSelection.range);
+    }
+    tfSelection.range->Release();
+    // Which of the two rewrite paths a host takes is invisible from the outside
+    // until it misbehaves, and the host list is not knowable up front. The
+    // opt-in trace records the decision so a report of "nothing happens in app
+    // X" can be answered without guessing.
+    DebugTsfIssue47(L"smart-punct-inplace-rewrite", FANY_IME_NO_REQUEST_ID, 0, replacement, 0, 0, rewritten ? 1 : 0,
+                    _IsComposing(),
+                    _pCompositionProcessorEngine ? _pCompositionProcessorEngine->GetVirtualKeyLength() : 0, hr,
+                    _CaptureCompositionEpoch());
+    return rewritten;
+}
+
+void CMetasequoiaIME::_CancelSmartPunctuationSendInputRewrite()
+{
+    _pendingSmartPunctuationRewrite = 0;
+    _pendingSmartPunctuationRewriteFocusToken = 0;
+    _pendingSmartPunctuationRewriteForegroundWindow = nullptr;
+    _pendingSmartPunctuationRewriteDeadline = 0;
+}
+
+bool CMetasequoiaIME::_QueueSmartPunctuationSendInputRewrite(WCHAR replacement)
+{
+    if (replacement == 0 || _msgWndHandle == nullptr)
+    {
+        return false;
+    }
+
+    const uint64_t focusToken = _CaptureFocusSessionToken();
+    if (focusToken == 0)
+    {
+        return false;
+    }
+
+    _pendingSmartPunctuationRewrite = replacement;
+    _pendingSmartPunctuationRewriteFocusToken = focusToken;
+    _pendingSmartPunctuationRewriteForegroundWindow = GetForegroundWindow();
+    _pendingSmartPunctuationRewriteDeadline = GetTickCount64() + SMART_PUNCTUATION_SENDINPUT_TIMEOUT_MS;
+
+    // Posted rather than sent: SendInput from inside the edit session would
+    // interleave the synthetic keys with the one still being processed.
+    if (!PostMessage(_msgWndHandle, WM_RewriteSmartPunctuationViaSendInput,
+                     static_cast<WPARAM>(focusToken & 0xFFFFFFFFULL),
+                     static_cast<LPARAM>((focusToken >> 32) & 0xFFFFFFFFULL)))
+    {
+        _CancelSmartPunctuationSendInputRewrite();
+        return false;
+    }
+    return true;
+}
+
+void CMetasequoiaIME::_RunSmartPunctuationSendInputRewrite()
+{
+    const WCHAR replacement = _pendingSmartPunctuationRewrite;
+    const bool current = replacement != 0 && _IsFocusSessionCurrent(_pendingSmartPunctuationRewriteFocusToken) &&
+                         GetForegroundWindow() == _pendingSmartPunctuationRewriteForegroundWindow &&
+                         GetTickCount64() <= _pendingSmartPunctuationRewriteDeadline;
+    _CancelSmartPunctuationSendInputRewrite();
+
+    if (!current)
+    {
+        // The document this rewrite was computed against is gone. The character
+        // already on screen is left alone rather than backspaced blindly.
+        _ClearSmartPunctuationAction();
+        _InvalidateSmartPunctuationShadow();
+        return;
+    }
+
+    INPUT inputs[4] = {};
+    inputs[0].type = INPUT_KEYBOARD;
+    inputs[0].ki.wVk = VK_BACK;
+    inputs[0].ki.dwExtraInfo = SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO;
+    inputs[1] = inputs[0];
+    inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+
+    inputs[2].type = INPUT_KEYBOARD;
+    inputs[2].ki.wScan = replacement;
+    inputs[2].ki.dwFlags = KEYEVENTF_UNICODE;
+    inputs[2].ki.dwExtraInfo = SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO;
+    inputs[3] = inputs[2];
+    inputs[3].ki.dwFlags |= KEYEVENTF_KEYUP;
+
+    const bool sent = SendInput(ARRAYSIZE(inputs), inputs, sizeof(INPUT)) == ARRAYSIZE(inputs);
+    DebugTsfIssue47(L"smart-punct-sendinput-rewrite", FANY_IME_NO_REQUEST_ID, VK_BACK, replacement, 0, 0, sent ? 1 : 0,
+                    _IsComposing(),
+                    _pCompositionProcessorEngine ? _pCompositionProcessorEngine->GetVirtualKeyLength() : 0,
+                    sent ? S_OK : E_FAIL, _CaptureCompositionEpoch());
+    if (sent)
+    {
+        _smartPunctuationShadowChar = replacement;
+        _smartPunctuationShadowValid = true;
+        return;
+    }
+
+    // Nothing is known about how much of the burst reached the application.
+    _ClearSmartPunctuationAction();
+    _InvalidateSmartPunctuationShadow();
 }
 
 bool CMetasequoiaIME::_CanInterceptSmartPunctuationConvert()
@@ -852,40 +1004,15 @@ HRESULT CMetasequoiaIME::_ExecuteSmartPunctuationAction(TfEditCookie ec, _In_ IT
             return insertPlainSpace();
         }
 
-        TF_SELECTION tfSelection = {};
-        ULONG fetched = 0;
-        HRESULT hr = pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &tfSelection, &fetched);
-        if (FAILED(hr) || fetched != 1 || tfSelection.range == nullptr)
+        // In-place rewrite first: it stays inside the document and never
+        // touches the input queue. A host that cannot be rewritten that way
+        // gets the synthetic Backspace instead -- the character is on its
+        // screen either way, and only one of the two paths can reach it.
+        if (!_RewritePrecedingCharInPlace(ec, pContext, left, asciiOpen) &&
+            !_QueueSmartPunctuationSendInputRewrite(asciiOpen))
         {
             return insertPlainSpace();
         }
-
-        // Cover the Chinese punctuation just committed: one character left of
-        // the caret.
-        LONG shiftedStart = 0;
-        hr = tfSelection.range->Collapse(ec, TF_ANCHOR_START);
-        if (SUCCEEDED(hr))
-        {
-            hr = SafeRangeShiftStart(tfSelection.range, ec, -1, &shiftedStart);
-            if (SUCCEEDED(hr) && shiftedStart != -1)
-            {
-                hr = E_FAIL;
-            }
-        }
-        const WCHAR replacement[1] = {asciiOpen};
-        bool converted = false;
-        if (SUCCEEDED(hr))
-        {
-            converted = SUCCEEDED(SafeRangeSetText(tfSelection.range, ec, 0, replacement, 1));
-        }
-        if (!converted)
-        {
-            tfSelection.range->Release();
-            return insertPlainSpace();
-        }
-
-        PlaceSmartPunctuationCaret(ec, pContext, tfSelection.range);
-        tfSelection.range->Release();
 
         _smartPunctuationAction = {};
         _smartPunctuationAction.kind = SmartPunctuationAction::Kind::AsciiConverted;
@@ -952,39 +1079,16 @@ HRESULT CMetasequoiaIME::_ExecuteSmartPunctuationAction(TfEditCookie ec, _In_ IT
     {
         return insertChinesePunctuation();
     }
-    TF_SELECTION tfSelection = {};
-    ULONG fetched = 0;
-    HRESULT hr = pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &tfSelection, &fetched);
-    if (FAILED(hr) || fetched != 1 || tfSelection.range == nullptr)
+    // Same two paths as the conversion: rewrite the document where the host
+    // exposes one, otherwise backspace the ASCII form off the screen. Falling
+    // through to insertChinesePunctuation() here would leave the ASCII form in
+    // place and append the Chinese one after it ("1.。").
+    if (!_RewritePrecedingCharInPlace(ec, pContext, state.asciiLeft, state.chineseLeft) &&
+        !_QueueSmartPunctuationSendInputRewrite(state.chineseLeft))
     {
         return insertChinesePunctuation();
     }
 
-    LONG shiftedStart = 0;
-    hr = tfSelection.range->Collapse(ec, TF_ANCHOR_START);
-    if (SUCCEEDED(hr))
-    {
-        hr = SafeRangeShiftStart(tfSelection.range, ec, -1, &shiftedStart);
-        if (SUCCEEDED(hr) && shiftedStart != -1)
-        {
-            hr = E_FAIL;
-        }
-    }
-
-    const WCHAR replacement[1] = {state.chineseLeft};
-    bool reverted = false;
-    if (SUCCEEDED(hr))
-    {
-        reverted = SUCCEEDED(SafeRangeSetText(tfSelection.range, ec, 0, replacement, 1));
-    }
-    if (!reverted)
-    {
-        tfSelection.range->Release();
-        return insertChinesePunctuation();
-    }
-
-    PlaceSmartPunctuationCaret(ec, pContext, tfSelection.range);
-    tfSelection.range->Release();
     _smartPunctuationShadowChar = state.chineseLeft;
     _smartPunctuationShadowValid = true;
     return S_OK;
