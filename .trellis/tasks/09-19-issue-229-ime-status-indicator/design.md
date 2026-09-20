@@ -93,8 +93,8 @@ TSF compartment edge
   -> existing switch event + resulting state + point[2]
   -> Main pipe active-client/epoch gate
   -> Server event task
-  -> indicator policy checks config, toolbar state, IME activity, anchor
-  -> Server native D2D badge show/update
+  -> indicator policy checks config, IME activity, anchor
+  -> Server native GDI badge show/update
   -> 1500 ms timer or lifecycle/config event hides badge
 ```
 
