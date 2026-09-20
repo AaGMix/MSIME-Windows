@@ -118,7 +118,8 @@ TEST_CASE(QuanpinSchemeTrailingApostropheIsPreservedInPreeditSegmentation)
 TEST_CASE(HelpcodeSchemaSelectionLoadsAllSupportedSchemas)
 {
     const std::vector<std::pair<std::string, std::string>> schemas{
-        {"lantian", "(KK)"}, {"ziranma", "(KA)"}, {"shouyou2_0", "(KV)"}, {"shouyouplus", "(KE)"}, {"xiaohe", "(KK)"},
+        {"lantian", "(KK)"},     {"ziranma", "(KA)"}, {"shouyou2_0", "(KV)"},
+        {"shouyouplus", "(KE)"}, {"xiaohe", "(KK)"},  {"jiajia", "(KA)"},
     };
 
     for (const auto &[schema, expected] : schemas)
