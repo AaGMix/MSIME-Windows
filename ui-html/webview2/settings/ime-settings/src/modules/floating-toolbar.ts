@@ -1,5 +1,7 @@
 import { applyDropdownValue, setupDropdownMenu, setupToggleButton } from './shared';
+import { syncCaretStateIndicatorPreview } from './appearance';
 import { updateConfig } from './config-sync';
+import { syncAppearancePreviews } from './skin';
 import ftbHTML from '../../../../ftb/default.html?raw';
 
 type FloatingToolbarItem = 'fullwidth' | 'punctuation' | 'character_set' | 'emoji' | 'screen_keyboard' | 'settings';
@@ -28,6 +30,8 @@ let toolbarFontSize = 24;
 
 export function setupFloatingToolbar(): void {
   mountFloatingToolbarPreview();
+  syncCaretStateIndicatorPreview();
+  syncAppearancePreviews();
 
   setupToggleButton('ftbToggleBtn', (active) => {
     updateConfig('general.floating_toolbar', active);

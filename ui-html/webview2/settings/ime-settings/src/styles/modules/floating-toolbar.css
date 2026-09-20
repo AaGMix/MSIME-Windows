@@ -1,8 +1,16 @@
 .floating-toolbar-card { padding: 0; overflow: hidden; }
+.caret-state-indicator-card { padding: 0; overflow: hidden; }
 .floating-toolbar-setting-row { padding: 20px 24px; }
 .floating-toolbar-description { margin-top: 6px; color: var(--text-muted); font-size: 12px; }
 .floating-toolbar-preview { min-height: 190px; padding: 20px 24px 30px; border-top: 1px solid var(--border-color); background: var(--surface-subtle); }
 .floating-toolbar-preview-label { margin-bottom: 28px; color: var(--text-muted); font-size: 12px; }
+.caret-state-preview { padding: 20px 24px 30px; border-top: 1px solid var(--border-color); background: var(--surface-subtle); }
+.caret-state-preview .cand-preview { min-height: 0; padding: 0; background: transparent; }
+.caret-state-preview-host { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 18px; width: 100%; font-family: "Microsoft YaHei UI", sans-serif; font-size: 20px; pointer-events: none; --cand-font-family: "Microsoft YaHei UI", sans-serif; --cand-font-size: 20px; }
+.caret-state-badge { display: flex; align-items: center; justify-content: center; box-sizing: border-box; width: 30px; height: 30px; color: var(--caret-text-override, var(--cand-text)); background: var(--cand-bg); border: 1px solid var(--cand-border); }
+.caret-state-badge-punctuation { display: grid; grid-template-columns: 72px 30px; column-gap: 2px; width: 104px; }
+.caret-state-punctuation-slot,
+.caret-state-mode-slot { display: flex; align-items: center; justify-content: center; min-width: 0; }
 .floating-toolbar-components { overflow: hidden; }
 .floating-toolbar-component-list { padding: 0 20px 10px; }
 .floating-toolbar-component-list .check-option { min-height: 34px; padding: 8px 4px; }
@@ -39,7 +47,8 @@
   filter: invert(1);
 }
 
-html[data-theme="light"] .floating-toolbar-preview {
+html[data-theme="light"] .floating-toolbar-preview,
+html[data-theme="light"] .caret-state-preview {
   background: rgba(0, 0, 0, 0.03);
 }
 

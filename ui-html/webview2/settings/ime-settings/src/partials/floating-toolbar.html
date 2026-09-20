@@ -7,17 +7,24 @@
         <div class="section-title">在桌面显示悬浮工具栏</div>
         <div class="floating-toolbar-description">快速访问输入法状态与常用功能</div>
       </div>
-      <div class="ftb-toggle-btn active" id="ftbToggleBtn" role="switch" aria-checked="true" tabindex="0">
+      <div class="ftb-toggle-btn active" id="ftbToggleBtn" role="switch" aria-label="在桌面显示悬浮工具栏" aria-checked="true" tabindex="0">
         <div class="ftb-toggle-knob"></div>
       </div>
     </div>
 
+    <div class="floating-toolbar-preview" role="img" aria-label="悬浮工具栏预览">
+      <div class="floating-toolbar-preview-label">预览</div>
+      <div class="ftb-preview-host" id="ftbPreviewHost"></div>
+    </div>
+  </div>
+
+  <div class="section caret-state-indicator-card">
     <div class="section-header floating-toolbar-setting-row">
       <div>
         <div class="section-title">光标状态提示</div>
         <div class="floating-toolbar-description">关闭悬浮工具栏后，切换输入模式、全半角或中英文标点时在光标上方短暂显示</div>
       </div>
-      <div class="ftb-toggle-btn active" id="caretStateIndicatorToggleBtn" role="switch" aria-checked="true" tabindex="0">
+      <div class="ftb-toggle-btn active" id="caretStateIndicatorToggleBtn" role="switch" aria-label="关闭悬浮工具栏时显示光标状态提示" aria-checked="true" tabindex="0">
         <div class="ftb-toggle-knob"></div>
       </div>
     </div>
@@ -41,9 +48,19 @@
       </div>
     </div>
 
-    <div class="floating-toolbar-preview" aria-label="悬浮工具栏预览">
+    <div class="caret-state-preview" role="img" aria-label="光标状态提示预览：中、中文标点和中文模式、全角、简体">
       <div class="floating-toolbar-preview-label">预览</div>
-      <div class="ftb-preview-host" id="ftbPreviewHost"></div>
+      <div class="cand-preview" aria-hidden="true">
+        <div class="candidate caret-state-preview-host" id="caretStatePreviewHost">
+          <div class="caret-state-badge">中</div>
+          <div class="caret-state-badge caret-state-badge-punctuation" aria-label="，。  中">
+            <span class="caret-state-punctuation-slot">，。</span>
+            <span class="caret-state-mode-slot">中</span>
+          </div>
+          <div class="caret-state-badge">全</div>
+          <div class="caret-state-badge">简</div>
+        </div>
+      </div>
     </div>
   </div>
 
