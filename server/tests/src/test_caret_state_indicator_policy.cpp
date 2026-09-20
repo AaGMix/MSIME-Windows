@@ -20,6 +20,19 @@ TEST_CASE(caret_state_indicator_upper_positions_clear_the_caret_line)
     REQUIRE_EQ(FanyImeUi::CaretStateIndicatorY(true, 200, 30, 200, 6), 206);
 }
 
+TEST_CASE(caret_state_indicator_horizontal_positions_follow_badge_width)
+{
+    REQUIRE_EQ(FanyImeUi::kCaretStatePunctuationSlotWidthDip, 64);
+    REQUIRE_EQ(FanyImeUi::kCaretStatePunctuationModeGapDip, 2);
+    REQUIRE_EQ(FanyImeUi::kCaretStatePunctuationModeSlotWidthDip, 30);
+    REQUIRE_EQ(FanyImeUi::kCaretStatePunctuationBadgeWidthDip, 96);
+    constexpr int punctuationBadgeWidth = FanyImeUi::kCaretStatePunctuationBadgeWidthDip;
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("top-left", 200, punctuationBadgeWidth, 6), 98);
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("top", 200, punctuationBadgeWidth, 6), 152);
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("top-right", 200, punctuationBadgeWidth, 6), 206);
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("bottom", 200, punctuationBadgeWidth, 6), 98);
+}
+
 TEST_CASE(caret_state_indicator_maps_input_mode_to_one_glyph)
 {
     using FanyImeUi::InputModeGlyph;
@@ -37,8 +50,7 @@ TEST_CASE(caret_state_indicator_combines_punctuation_and_input_mode)
     REQUIRE_EQ(PunctuationInputModeText(false, false, false), L",.  英");
     REQUIRE_EQ(PunctuationInputModeText(true, true, true), L"，。  日");
     REQUIRE_EQ(PunctuationInputModeText(false, true, true), L",.  日");
-    REQUIRE_EQ(PunctuationInputModeText(true, true, false).size(),
-               PunctuationInputModeText(false, true, false).size());
+    REQUIRE_EQ(PunctuationInputModeText(true, true, false).size(), PunctuationInputModeText(false, true, false).size());
 }
 
 TEST_CASE(caret_state_indicator_maps_single_state_switches_to_one_glyph)

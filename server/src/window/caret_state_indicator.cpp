@@ -17,9 +17,6 @@ constexpr UINT kHideTimer = 1;
 constexpr UINT kHideDelayMs = 1500;
 constexpr int kBaseHeightDip = 30;
 constexpr int kAdditionalCharacterWidthDip = 20;
-constexpr int kPunctuationSlotWidthDip = 72;
-constexpr int kPunctuationModeSlotWidthDip = 30;
-constexpr int kPunctuationModeGapDip = 2;
 constexpr int kCaretGapDip = 6;
 constexpr int kCaretLineHeightDip = 24;
 
@@ -50,9 +47,9 @@ void Show(HWND hwnd, const std::wstring &text, POINT caret, bool topmost)
     const int height = PixelSize(kBaseHeightDip, g_state.dpi);
     const int extraCharacters = (std::max)(0, static_cast<int>(text.size()) - 1);
     const int width = text.size() == 5
-                          ? PixelSize(kPunctuationSlotWidthDip, g_state.dpi) +
-                                PixelSize(kPunctuationModeGapDip, g_state.dpi) +
-                                PixelSize(kPunctuationModeSlotWidthDip, g_state.dpi)
+                          ? PixelSize(FanyImeUi::kCaretStatePunctuationSlotWidthDip, g_state.dpi) +
+                                PixelSize(FanyImeUi::kCaretStatePunctuationModeGapDip, g_state.dpi) +
+                                PixelSize(FanyImeUi::kCaretStatePunctuationModeSlotWidthDip, g_state.dpi)
                           : height + PixelSize(kAdditionalCharacterWidthDip * extraCharacters, g_state.dpi);
     const int gap = PixelSize(kCaretGapDip, g_state.dpi);
     const int caretLineHeight = PixelSize(kCaretLineHeightDip, g_state.dpi);
@@ -64,12 +61,8 @@ void Show(HWND hwnd, const std::wstring &text, POINT caret, bool topmost)
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
 
     const std::string &position = GetConfiguredCaretStateIndicatorPosition();
-    int x = caret.x - width - gap;
+    int x = FanyImeUi::CaretStateIndicatorX(position, caret.x, width, gap);
     int y = FanyImeUi::CaretStateIndicatorY(position == "bottom", caret.y, height, caretLineHeight, gap);
-    if (position == "top")
-        x = caret.x - width / 2;
-    else if (position == "top-right")
-        x = caret.x + gap;
     if (position != "bottom" && y < work.top)
         y = FanyImeUi::CaretStateIndicatorY(true, caret.y, height, caretLineHeight, gap);
     x = static_cast<int>((std::max)(work.left, (std::min)(static_cast<LONG>(x), work.right - width)));
@@ -119,10 +112,11 @@ void Paint(HWND hwnd, HDC dc)
     if (g_state.text.size() == 5)
     {
         RECT modeRect = rc;
-        modeRect.left = (std::max)(rc.left, rc.right - PixelSize(kPunctuationModeSlotWidthDip, g_state.dpi));
+        modeRect.left =
+            (std::max)(rc.left, rc.right - PixelSize(FanyImeUi::kCaretStatePunctuationModeSlotWidthDip, g_state.dpi));
         RECT punctuationRect = rc;
-        punctuationRect.right =
-            (std::max)(punctuationRect.left, modeRect.left - PixelSize(kPunctuationModeGapDip, g_state.dpi));
+        punctuationRect.right = (std::max)(
+            punctuationRect.left, modeRect.left - PixelSize(FanyImeUi::kCaretStatePunctuationModeGapDip, g_state.dpi));
         DrawTextW(dc, g_state.text.c_str(), 2, &punctuationRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         DrawTextW(dc, g_state.text.c_str() + 4, 1, &modeRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
