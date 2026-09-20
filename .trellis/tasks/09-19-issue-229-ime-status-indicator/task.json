@@ -1,0 +1,28 @@
+{
+  "id": "issue-229-ime-status-indicator",
+  "name": "issue-229-ime-status-indicator",
+  "title": "Add IME input mode status indicator",
+  "description": "Design and implement issue #229 input-mode status indicator across Windows TSF, Server, and UI HTML.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "windows-server-ui-html",
+  "package": "vendor/opencc",
+  "priority": "P2",
+  "creator": "AaGMix",
+  "assignee": "AaGMix",
+  "createdAt": "2026-09-19",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "develop",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "issue": "229"
+  }
+}
