@@ -17,7 +17,7 @@ it('keeps toolbar and caret controls in separate cards with separate previews', 
   expect(caretCard).toContain('id="caretStateIndicatorPositionBtn"');
   expect(caretCard).toContain('id="caretStatePreviewHost"');
   expect(caretCard).not.toContain('id="ftbPreviewHost"');
-  expect(caretCard).toContain('role="img" aria-label="光标状态提示预览：中、中文标点和中文模式、全角、简体"');
+  expect(caretCard).toContain('role="img" aria-label="光标状态提示预览：每个文字光标左上方分别显示中、中文标点和中文模式、全角、简体"');
   expect(caretCard).toContain('class="cand-preview" aria-hidden="true"');
 });
 
@@ -28,7 +28,11 @@ it('shows the four runtime samples and preserves fixed punctuation slots', () =>
   expect(preview).toContain('>全</div>');
   expect(preview).toContain('>简</div>');
   expect(preview.match(/class="caret-state-badge(?: |")/g)).toHaveLength(4);
+  expect(preview.match(/class="caret-state-preview-item"[^>]*>\s*<div class="caret-state-badge[^>]*>[\s\S]*?<\/div>\s*<span class="caret-state-preview-caret"><\/span>\s*<\/div>/g)).toHaveLength(4);
   expect(styles).toMatch(/\.caret-state-badge\s*\{[^}]*width:\s*30px;[^}]*height:\s*30px;/);
   expect(styles).toMatch(/\.caret-state-badge-punctuation\s*\{[^}]*grid-template-columns:\s*72px 30px;[^}]*column-gap:\s*2px;[^}]*width:\s*104px;/);
-  expect(styles).toMatch(/\.caret-state-preview-host\s*\{[^}]*flex-wrap:\s*wrap;/);
+  expect(styles).toMatch(/\.caret-state-preview-host\s*\{[^}]*grid-template-columns:\s*repeat\(4, max-content\);/);
+  expect(styles).toMatch(/@container\s*\(max-width:\s*279px\)\s*\{\s*\.caret-state-preview-host\s*\{[^}]*grid-template-columns:\s*repeat\(2, max-content\);/);
+  expect(styles).toMatch(/\.caret-state-preview-item\s*\{[^}]*padding:\s*0 8px 30px 0;/);
+  expect(styles).toMatch(/\.caret-state-preview-caret\s*\{[^}]*width:\s*2px;[^}]*height:\s*24px;/);
 });
