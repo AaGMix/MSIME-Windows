@@ -4,6 +4,12 @@
 
 namespace FanyImeUi
 {
+inline constexpr int kCaretStatePunctuationSlotWidthDip = 64;
+inline constexpr int kCaretStatePunctuationModeGapDip = 2;
+inline constexpr int kCaretStatePunctuationModeSlotWidthDip = 30;
+inline constexpr int kCaretStatePunctuationBadgeWidthDip =
+    kCaretStatePunctuationSlotWidthDip + kCaretStatePunctuationModeGapDip + kCaretStatePunctuationModeSlotWidthDip;
+
 enum class CaretStateKind
 {
     Width,
@@ -22,6 +28,15 @@ inline int CaretStateIndicatorY(bool belowCaret, int anchorY, int indicatorHeigh
     // The TSF anchor is GetTextExt.bottom, so an upper badge must also clear
     // the caret's text line. The lower position already starts below it.
     return belowCaret ? anchorY + gap : anchorY - indicatorHeight - caretLineHeight - gap;
+}
+
+inline int CaretStateIndicatorX(const std::string &position, int anchorX, int indicatorWidth, int gap)
+{
+    if (position == "top")
+        return anchorX - indicatorWidth / 2;
+    if (position == "top-right")
+        return anchorX + gap;
+    return anchorX - indicatorWidth - gap;
 }
 
 inline wchar_t InputModeGlyph(bool imeEnabled, bool japaneseMode)
