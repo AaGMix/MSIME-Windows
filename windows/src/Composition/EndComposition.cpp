@@ -104,6 +104,11 @@ void CMetasequoiaIME::_TerminateComposition(TfEditCookie ec, _In_ ITfContext *pC
             ownerContext->AddRef();
         }
 
+        // Read the committed text before any COM call below can change or end
+        // the composition. The cancel path has already wiped the range, so a
+        // cancelled composition classifies to zero and does not count.
+        _CaptureCompositionStats(ec, terminatingComposition);
+
         // remove the display attribute from the composition range.
         _ClearCompositionDisplayAttributes(ec, pContext, terminatingComposition);
 

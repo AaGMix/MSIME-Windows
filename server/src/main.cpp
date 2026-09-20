@@ -21,6 +21,7 @@
 #include "utils/common_utils.h"
 #include "utils/single_instance.h"
 #include "session/session_factory.h"
+#include "statistics/stats_pipe.h"
 #include "webview2/windows_webview2.h"
 #include "voice-input/voice_input_service.h"
 
@@ -157,6 +158,8 @@ int CALLBACK WinMain(_In_ HINSTANCE hInstance, _In_ HINSTANCE /*hPrevInstance*/,
     std::thread aux_pipe_listener(FanyNamedPipe::AuxPipeEventListenerLoopThread);
     /* Short-lived TSF diagnostic batches; isolated from all control pipes. */
     std::thread tsf_diagnostic_pipe_listener(FanyNamedPipe::TsfDiagnosticPipeEventListenerLoopThread);
+    /* Input statistics frames: one-shot per flush, validated before aggregation. */
+    std::thread stats_pipe_listener(MsimeStats::StatsPipeEventListenerLoopThread);
 
     if (pipe_probe)
     {
@@ -217,6 +220,8 @@ int CALLBACK WinMain(_In_ HINSTANCE hInstance, _In_ HINSTANCE /*hPrevInstance*/,
     to_tsf_worker_thread_pipe_listener.join();
     aux_pipe_listener.join();
     tsf_diagnostic_pipe_listener.join();
+    stats_pipe_listener.join();
+    MsimeStats::ShutdownStatsPipe();
 
     ::CloseIpc();
     CoUninitialize();

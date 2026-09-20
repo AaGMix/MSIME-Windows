@@ -28,6 +28,15 @@ inline const wchar_t *FANY_IME_VOICE_CONTROL_NAMED_PIPE = L"\\\\.\\pipe\\FanyIme
 inline constexpr uint32_t FANY_IME_TSF_DIAGNOSTIC_MAGIC = 0x474F4C54; // "TLOG"
 inline constexpr uint32_t FANY_IME_TSF_DIAGNOSTIC_VERSION = 1;
 inline constexpr size_t FANY_IME_TSF_DIAGNOSTIC_MAX_FRAME_BYTES = 16 * 1024;
+// Optional local statistics channel: the TSF DLL is the client and the Server's
+// statistics pipe listener is the server. Named pipes live in the machine-global
+// namespace, so the pipe name must carry a session suffix (fast user switching
+// and RDP sessions could otherwise collide); both sides append the decimal
+// ProcessIdToSessionId(GetCurrentProcessId()) result.
+inline const wchar_t *FANY_IME_STATS_PIPE_NAME_PREFIX = L"\\\\.\\pipe\\FanyImeStatsNamedPipe-";
+inline constexpr uint32_t FANY_IME_STATS_MAGIC = 0x54415453; // "STAT"
+inline constexpr uint32_t FANY_IME_STATS_VERSION = 1;
+inline constexpr size_t FANY_IME_STATS_MAX_FRAME_BYTES = 16 * 1024;
 inline constexpr uint64_t FANY_IME_UNSOLICITED_REQUEST_ID = 0;
 inline constexpr uint64_t FANY_IME_NO_REQUEST_ID = UINT64_MAX;
 
@@ -185,6 +194,36 @@ struct FanyImeTsfDiagnosticBatchHeader
     uint32_t source_process_id = 0;
 };
 
+// Statistics frames never carry text. The TSF DLL classifies committed text
+// inside its own process and the pipe only sees per-class counts; local-day
+// bucketing, active-time and every aggregate live in the stats tool. A frame is
+// header + event_count * sizeof(FanyImeStatsEvent), written in one WriteFile.
+// dropped_count covers the events lost since the previous frame (queue overflow
+// plus failed sends). The tool drops any frame whose magic, version or sizes do
+// not match instead of parsing it.
+struct FanyImeStatsBatchHeader
+{
+    uint32_t magic = FANY_IME_STATS_MAGIC;
+    uint32_t version = FANY_IME_STATS_VERSION;
+    uint32_t header_size = 28;
+    uint32_t payload_bytes = 0;
+    uint32_t event_count = 0;
+    uint32_t dropped_count = 0;
+    uint32_t source_process_id = 0;
+};
+
+// One committed-text event: when it committed and how many user-perceived
+// characters of each class it contained (a UTF-16 surrogate pair counts once).
+struct FanyImeStatsEvent
+{
+    uint64_t timestamp_utc_ft = 0; // raw GetSystemTimeAsFileTime value, UTC 100 ns
+    uint16_t cjk = 0;
+    uint16_t latin = 0;
+    uint16_t digit = 0;
+    uint16_t punct = 0;
+    uint16_t other = 0;
+};
+
 static_assert(sizeof(FanyImeWireChar) == 2, "The IPC ABI requires 16-bit FanyImeWireChar.");
 static_assert(offsetof(FanyImeNamedpipeData, client_id) == 8);
 static_assert(offsetof(FanyImeNamedpipeData, request_id) == 16);
@@ -197,6 +236,21 @@ static_assert(sizeof(FanyImeNamedpipeDataToTsf) == 416);
 static_assert(sizeof(FanyImePipeHello) == 16);
 static_assert(sizeof(FanyImeNamedpipeDataToTsfWorkerThread) == 404);
 static_assert(sizeof(FanyImeTsfDiagnosticBatchHeader) == 28);
+static_assert(sizeof(FanyImeStatsBatchHeader) == 28);
+static_assert(offsetof(FanyImeStatsBatchHeader, magic) == 0);
+static_assert(offsetof(FanyImeStatsBatchHeader, version) == 4);
+static_assert(offsetof(FanyImeStatsBatchHeader, header_size) == 8);
+static_assert(offsetof(FanyImeStatsBatchHeader, payload_bytes) == 12);
+static_assert(offsetof(FanyImeStatsBatchHeader, event_count) == 16);
+static_assert(offsetof(FanyImeStatsBatchHeader, dropped_count) == 20);
+static_assert(offsetof(FanyImeStatsBatchHeader, source_process_id) == 24);
+static_assert(sizeof(FanyImeStatsEvent) == 24);
+static_assert(offsetof(FanyImeStatsEvent, timestamp_utc_ft) == 0);
+static_assert(offsetof(FanyImeStatsEvent, cjk) == 8);
+static_assert(offsetof(FanyImeStatsEvent, latin) == 10);
+static_assert(offsetof(FanyImeStatsEvent, digit) == 12);
+static_assert(offsetof(FanyImeStatsEvent, punct) == 14);
+static_assert(offsetof(FanyImeStatsEvent, other) == 16);
 
 namespace FanyImeReplyType
 {

@@ -2,12 +2,15 @@
 #include "Globals.h"
 #include "MetasequoiaIME.h"
 #include "CompositionProcessorEngine.h"
+#include <algorithm>
 #include <cwctype>
 #include <debugapi.h>
 #include <fmt/xchar.h>
 #include <string>
 #include "FanyDefines.h"
 #include "Ipc.h"
+#include "char_classify.h"
+#include "stats_collector.h"
 
 namespace
 {
@@ -129,6 +132,12 @@ bool AreCaretModifiersPhysicallyDown()
         }
     }
     return false;
+}
+
+bool IsHighSurrogateUnit(wchar_t unit)
+{
+    const uint32_t codeUnit = static_cast<uint32_t>(static_cast<uint16_t>(unit));
+    return codeUnit >= 0xD800 && codeUnit <= 0xDBFF;
 }
 } // namespace
 
@@ -1161,6 +1170,12 @@ STDAPI CMetasequoiaIME::OnCompositionTerminated(TfEditCookie ecWrite, _In_ ITfCo
     // a composition created later.
     ITfComposition *terminatedComposition = pComposition;
     terminatedComposition->AddRef();
+
+    // The host-forced termination keeps the text in the document (see the
+    // Do NOT SetText(empty) note below), so this is a real commit and must be
+    // counted before any teardown runs.
+    _CaptureCompositionStats(ecWrite, terminatedComposition);
+
     _pComposition->Release();
     _pComposition = nullptr;
     _voiceCompositionActive = false;
@@ -1228,11 +1243,85 @@ BOOL CMetasequoiaIME::_IsComposing()
 void CMetasequoiaIME::_SetComposition(_In_ ITfComposition *pComposition)
 {
     _pComposition = pComposition;
+    _compositionStatsCaptured.store(false, std::memory_order_release);
     uint64_t nextEpoch = _compositionEpoch.fetch_add(1, std::memory_order_acq_rel) + 1;
     if (nextEpoch == 0)
     {
         _compositionEpoch.fetch_add(1, std::memory_order_acq_rel);
     }
+}
+
+//+---------------------------------------------------------------------------
+//
+// _CaptureCompositionStats
+//
+// Reads the committed text of a terminating composition and queues one
+// statistics event. Called from the two composition exits; the first observer
+// wins because _TerminateComposition can re-enter OnCompositionTerminated for
+// the same composition. This function only reads: it never writes the range,
+// swallows no HRESULT and changes no teardown ordering. Any failure is silent.
+//----------------------------------------------------------------------------
+
+void CMetasequoiaIME::_CaptureCompositionStats(TfEditCookie ec, _In_ ITfComposition *pComposition)
+{
+    if (_compositionStatsCaptured.exchange(true, std::memory_order_acq_rel))
+    {
+        return;
+    }
+    if (pComposition == nullptr)
+    {
+        return;
+    }
+
+    ITfRange *pRange = nullptr;
+    if (FAILED(pComposition->GetRange(&pRange)) || pRange == nullptr)
+    {
+        return;
+    }
+
+    // Hosts may hand back fewer units than requested, so read in small blocks
+    // and walk the range start forward. A high surrogate at the end of a full
+    // block is left unconsumed so the next read can still pair it; a trailing
+    // isolated one comes back through a short read and counts as other.
+    // Statistics never read an unbounded document range.
+    constexpr size_t kBlockUnits = 256;
+    constexpr size_t kMaxCaptureUnits = 64 * 1024;
+    wchar_t buffer[kBlockUnits] = {};
+    size_t totalCaptured = 0;
+    MsimeStats::CharClassCounts counts;
+    while (totalCaptured < kMaxCaptureUnits)
+    {
+        const size_t request = (std::min)(kBlockUnits, kMaxCaptureUnits - totalCaptured);
+        ULONG fetched = 0;
+        const HRESULT readResult = SafeRangeGetText(pRange, ec, 0, buffer, static_cast<ULONG>(request), &fetched);
+        if (FAILED(readResult) || fetched == 0)
+        {
+            break;
+        }
+
+        size_t consume = fetched;
+        if (fetched == request && IsHighSurrogateUnit(buffer[fetched - 1]))
+        {
+            --consume;
+        }
+        if (consume == 0)
+        {
+            break; // only possible at the capture cap; never spin on one unit
+        }
+
+        counts.Add(MsimeStats::ClassifyText(buffer, consume));
+        totalCaptured += consume;
+
+        LONG shifted = 0;
+        if (FAILED(SafeRangeShiftStart(pRange, ec, static_cast<LONG>(consume), &shifted)) ||
+            shifted != static_cast<LONG>(consume))
+        {
+            break;
+        }
+    }
+
+    pRange->Release();
+    MsimeStats::QueueStatisticsEvent(counts);
 }
 
 //+---------------------------------------------------------------------------
@@ -1342,6 +1431,15 @@ HRESULT CMetasequoiaIME::_AddCharAndFinalize(TfEditCookie ec, _In_ ITfContext *p
     hr = SafeRangeSetText(tfSelection.range, ec, 0, pstrAddString->Get(), (LONG)pstrAddString->GetLength());
     if (hr == S_OK)
     {
+        // Direct write with no composition: this text never passes through
+        // _TerminateComposition / OnCompositionTerminated, so it is the third
+        // and last commit exit and must be counted here.
+        if (_pComposition == nullptr)
+        {
+            MsimeStats::QueueStatisticsEvent(
+                MsimeStats::ClassifyText(pstrAddString->Get(), static_cast<size_t>(pstrAddString->GetLength())));
+        }
+
         // Update the selection, we'll make it an insertion point just past
         // the inserted text.
         tfSelection.range->Collapse(ec, TF_ANCHOR_END);

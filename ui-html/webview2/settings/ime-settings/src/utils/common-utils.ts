@@ -22,6 +22,7 @@ export async function loadHTML(url: string): Promise<string> {
 
 const MODULE_IDS = [
   'floating-toolbar',
+  'stats',
   'appearance',
   'input',
   'helpcode',
