@@ -32,6 +32,7 @@ Help users know the active input mode before they type into the wrong mode, addr
 - Emit a suitable indicator when `Ctrl+Shift+F` changes the simplified/traditional Chinese output mode.
 - Work in Windows Terminal in addition to Win32 EDIT, Chromium/Electron, and Office-style text hosts; host-specific caret/layout limitations must fail closed without breaking input.
 - Provide a user-facing setting named for showing the caret indicator when the floating toolbar is disabled, persist it through both Server settings hosts and both shipped config templates, and include it in locally generated/installable builds so the installed settings page exposes the control.
+- Keep the caret-indicator settings on the existing floating-toolbar page, but move its enable switch and position selector out of the floating-toolbar card into a separate caret-indicator card with its own preview; do not add another sidebar page.
 - Enable the new setting by default for new and upgraded installations.
 - Apply an automatic complementary visibility policy: show the caret indicator only when its setting is enabled and the persistent floating toolbar is disabled; never show both status surfaces at the same time.
 - Allow users to disable both status surfaces by turning off both settings.
@@ -61,6 +62,7 @@ Help users know the active input mode before they type into the wrong mode, addr
 - [ ] Existing input-mode, input-scheme, punctuation, and `Ctrl+Shift+F` simplified/traditional shortcuts produce the appropriate cue when their state changes.
 - [ ] The cue works in Windows Terminal as well as Win32 EDIT, Chromium/Electron, and Office-style focus transitions, or fails closed without disrupting input when the host cannot expose a usable caret anchor.
 - [ ] The installed/local RC settings page exposes and persists the caret-indicator setting.
+- [ ] The floating-toolbar settings page presents the caret indicator in a separate card containing its enable switch, position selector, and a skin-aware preview of `中`, `，。  中`, `全`, and `简`; the floating-toolbar card and preview contain only floating-toolbar controls/content.
 - [ ] Existing floating-toolbar behavior and settings continue to work unchanged.
 - [ ] The badge uses the current candidate skin's resolved background, border, and text colors in light/dark modes, including custom skin colors and the configured candidate text-color override; switching skins does not change its existing geometry or glyph alignment.
 - [ ] Automated checks cover visibility/state policy, configuration persistence, shortcut event mapping, and anchor placement; manual checks cover all supported host categories and the installed RC package.

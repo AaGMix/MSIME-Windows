@@ -104,6 +104,15 @@ pnpm test
 
 Validation: run clang-format 18.1.8 dry-run on changed C++, build Server and Server tests, run `ctest --test-dir server/build-release -C Release --output-on-failure`, and manually inspect built-in/custom skins in light/dark variants at supported DPI scales.
 
+## 8. Separate settings card and preview (follow-up)
+
+- [ ] On the existing floating-toolbar page, move the caret-indicator switch and position selector into a separate card; keep the floating-toolbar card/preview focused on the toolbar.
+- [ ] Add a compact browser-side preview of the actual indicator geometry and candidate-skin palette without adding a sidebar page or new persisted configuration.
+- [ ] Reuse the settings page's candidate-skin/theme preview state rather than adding a second skin catalog or runtime state machine.
+- [ ] Add focused UI tests for card separation and preview updates when candidate skin/theme/text color changes.
+
+Validation: run the settings TypeScript build/tests and package the generated `dist`; manually compare the preview with the native indicator for built-in light/dark skins.
+
 ## Risk notes
 
 - TSF text extent must be requested in an edit session and all COM objects must stay on their owner thread.
