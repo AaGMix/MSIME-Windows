@@ -155,13 +155,12 @@ jobs:
           @'
           这是 fork CI 生成的完整测试安装包，不是正式发布版本。
 
-          安装前请以管理员身份打开 PowerShell，在解压后的目录执行：
+          请先运行 Install-CiTestBuild.cmd。它会请求管理员权限、安装测试证书，
+          然后启动 MetasequoiaIME_Setup_*.exe。不要直接双击安装包：Server 带
+          uiAccess=true，证书未进入本地计算机的 Root 和 TrustedPublisher 时，
+          Windows 会阻止 Server 启动，表现为无法打字且设置无法打开。
 
-            certutil -addstore Root MetasequoiaImeLocalTest.cer
-            certutil -addstore TrustedPublisher MetasequoiaImeLocalTest.cer
-
-          然后运行 MetasequoiaIME_Setup_*.exe。
-          测试结束后如需移除证书，可在 certmgr.msc / certlm.msc 中删除
+          测试完成后如需移除证书，可在 certmgr.msc / certlm.msc 中删除
           “Metasequoia IME Local Test Code Signing”。
           '@ | Set-Content -LiteralPath Output/INSTALL-TEST-BUILD.txt -Encoding utf8
           Get-FileHash Output/MetasequoiaIME_Setup_*.exe -Algorithm SHA256 |
@@ -174,6 +173,7 @@ jobs:
           path: |
             installer/Output/MetasequoiaIME_Setup_*.exe
             installer/Output/MetasequoiaImeLocalTest.cer
+            installer/Install-CiTestBuild.cmd
             installer/Output/INSTALL-TEST-BUILD.txt
             installer/Output/SHA256.txt
           if-no-files-found: error
