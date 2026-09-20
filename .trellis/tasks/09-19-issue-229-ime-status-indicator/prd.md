@@ -15,6 +15,7 @@ Help users know the active input mode before they type into the wrong mode, addr
 
 - Reuse the existing TSF caret/text-extent and focus-session information rather than creating a second source of cursor position or input-mode state.
 - Keep input-mode state authoritative in the existing TSF/Server flow; the indicator is presentation only and must not implement its own mode state machine.
+- Match the active candidate-window skin's background, border, and text colors (including the resolved light/dark variant and custom skin color definitions); keep the indicator's size, placement, glyph layout, and lifetime unchanged. Do not import skin images, CSS effects, or shape changes.
 - Do not change the behavior, defaults, or component set of the existing persistent floating toolbar unless the chosen UX explicitly requires it.
 - The indicator must never take keyboard focus, intercept typing, or obscure the active text caret.
 - Positioning and sizing must remain usable at 100%, 125%, 150%, and 200% DPI and when the focused editor is on another monitor.
@@ -61,6 +62,7 @@ Help users know the active input mode before they type into the wrong mode, addr
 - [ ] The cue works in Windows Terminal as well as Win32 EDIT, Chromium/Electron, and Office-style focus transitions, or fails closed without disrupting input when the host cannot expose a usable caret anchor.
 - [ ] The installed/local RC settings page exposes and persists the caret-indicator setting.
 - [ ] Existing floating-toolbar behavior and settings continue to work unchanged.
+- [ ] The badge uses the current candidate skin's resolved background, border, and text colors in light/dark modes, including custom skin colors and the configured candidate text-color override; switching skins does not change its existing geometry or glyph alignment.
 - [ ] Automated checks cover visibility/state policy, configuration persistence, shortcut event mapping, and anchor placement; manual checks cover all supported host categories and the installed RC package.
 
 ## Open Product Decisions

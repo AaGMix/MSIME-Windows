@@ -96,6 +96,14 @@ pnpm test
 - [ ] For each host, check Shift/language-bar mode switching, full/half switching, punctuation switching, rapid repeated switching, focus loss during the 1.5 s timer, IME switch-away, Server restart, and multi-monitor DPI movement.
 - [ ] Confirm the badge never appears while the floating toolbar is enabled and that turning both settings off shows neither surface.
 
+## 7. Candidate-skin palette for the badge (follow-up)
+
+- [ ] Reuse the candidate presenter's effective surface, border and final text-color resolution for built-in skins, the resolved candidate light/dark mode, and custom `skin.toml` color overrides; avoid a second drifting palette table.
+- [ ] Keep existing badge dimensions, fixed punctuation slots, positioning, font sizing and lifetime unchanged. Do not introduce WebView2, CSS/image rendering or new settings.
+- [ ] Confirm that switching candidate skin/theme is reflected at the next badge display, including when the floating toolbar has a different theme.
+
+Validation: run clang-format 18.1.8 dry-run on changed C++, build Server and Server tests, run `ctest --test-dir server/build-release -C Release --output-on-failure`, and manually inspect built-in/custom skins in light/dark variants at supported DPI scales.
+
 ## Risk notes
 
 - TSF text extent must be requested in an edit session and all COM objects must stay on their owner thread.
