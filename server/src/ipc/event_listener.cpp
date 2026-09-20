@@ -60,6 +60,7 @@
 #include "kaomoji/kaomoji_ime.h"
 #include "log/candidate_diag_log.h"
 #include "log/ftb_diag_log.h"
+#include "statistics/stats_pipe.h"
 #include "voice-input/voice_input_service.h"
 #include <cwchar>
 
@@ -1477,6 +1478,11 @@ void WakeNamedPipeListenersForShutdown()
     WakePipeListener(FANY_IME_AUX_NAMED_PIPE);
     WakePipeListener(FANY_IME_TSF_DIAGNOSTIC_NAMED_PIPE);
     WakePipeListener(FANY_IME_VOICE_CONTROL_NAMED_PIPE);
+    // The statistics listener blocks in ConnectNamedPipe on a PIPE_WAIT
+    // instance just like the others, but its name carries the session id.
+    // Without this wake a Server that never saw a statistics client would hang
+    // in stats_pipe_listener.join() forever.
+    WakePipeListener(MsimeStats::BuildStatsPipeName(MsimeStats::CurrentStatsSessionId()).c_str());
 }
 
 // The pipe server accepts clients before the candidate window exists, so an
@@ -3220,6 +3226,9 @@ void RegisteredPipeMonitorThread(HANDLE clientPipe, UINT pipeRole, uint64_t hand
             SendToTsfWorkerThreadClientViaNamedpipe(
                 hello.client_id, Global::DataFromServerMsgTypeToTsfWorkerThread::PunctuationLockChanged,
                 FormatPunctuationLockWorkerPayload());
+            SendToTsfWorkerThreadClientViaNamedpipe(
+                hello.client_id, Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged,
+                GetConfiguredStatisticsEnabled() ? L"1" : L"0");
         }
     }
 

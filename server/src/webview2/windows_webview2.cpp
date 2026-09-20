@@ -4188,6 +4188,12 @@ HRESULT OnControllerCreatedSettingsWnd(            //
                                 const bool value = json::value_to<bool>(data.at("value"));
                                 if (SetConfiguredStatisticsEnabled(value))
                                 {
+                                    // The DLL gates capture on this: without the
+                                    // broadcast an opt-out would keep classifying
+                                    // and writing frames until the next connect.
+                                    BroadcastToTsfWorkerThreadViaNamedpipe(
+                                        Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged,
+                                        value ? L"1" : L"0");
                                     PostSettingsConfig();
                                 }
                             }

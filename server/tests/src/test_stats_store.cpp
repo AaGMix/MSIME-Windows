@@ -226,9 +226,9 @@ TEST_CASE(stats_store_persistence_across_reopen)
 
     std::string value;
     bool present = false;
-    REQUIRE(reopened->Meta(MsimeStats::kStoreSchemaVersion, value, present, error));
+    REQUIRE(reopened->Meta(MsimeStats::kStoreMetaSchemaVersion, value, present, error));
     REQUIRE(present);
-    REQUIRE_EQ(value, std::string("1"));
+    REQUIRE_EQ(value, std::string(MsimeStats::kStoreSchemaVersion));
 }
 
 TEST_CASE(stats_store_clear_through_boundaries)
@@ -682,8 +682,9 @@ TEST_CASE(stats_store_clear_all_resets_rows_and_meta)
     REQUIRE(store->Meta(MsimeStats::kStoreMetaLastRetentionDay, marker, present, error));
     REQUIRE(!present);
     // schema_version is written on open and is not user data; it must survive.
-    REQUIRE(store->Meta(MsimeStats::kStoreSchemaVersion, marker, present, error));
+    REQUIRE(store->Meta(MsimeStats::kStoreMetaSchemaVersion, marker, present, error));
     REQUIRE(present);
+    REQUIRE_EQ(marker, std::string(MsimeStats::kStoreSchemaVersion));
 
     // Clearing an already empty database is a success that removed nothing.
     REQUIRE(store->ClearAll(removed, error));

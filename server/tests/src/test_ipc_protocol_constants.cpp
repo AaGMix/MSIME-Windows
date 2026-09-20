@@ -50,9 +50,10 @@ TEST_CASE(ipc_pipe_ready_is_a_distinct_server_reply)
     REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationSpaceConvertChanged, 22u);
     REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectDigitChanged, 24u);
     REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectLetterChanged, 25u);
+    REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged, 26u);
     // Opcode 23 (the removed paired-symbol space conversion) is intentionally
     // left unused.
-    REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::MaxKnown, 25u);
+    REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::MaxKnown, 26u);
     REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::FocusSessionReady >
             Global::DataFromServerMsgTypeToTsfWorkerThread::PagingCommaPeriodChanged);
     REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::PipeReady >
@@ -87,8 +88,10 @@ TEST_CASE(ipc_pipe_ready_is_a_distinct_server_reply)
             Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationSpaceConvertChanged);
     REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectLetterChanged >
             Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectDigitChanged);
+    REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged >
+            Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectLetterChanged);
     REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::MaxKnown,
-               Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectLetterChanged);
+               Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged);
 }
 
 TEST_CASE(ipc_client_suspension_is_a_distinct_nonterminal_route_reset)

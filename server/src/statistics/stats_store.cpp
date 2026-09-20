@@ -146,7 +146,7 @@ bool Store::Initialize(std::string &error)
     {
         return false;
     }
-    return SetMeta(kStoreSchemaVersion, kStoreSchemaVersion, error);
+    return SetMeta(kStoreMetaSchemaVersion, kStoreSchemaVersion, error);
 }
 
 bool Store::Exec(const char *sql, std::string &error) const

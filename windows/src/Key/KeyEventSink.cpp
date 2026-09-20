@@ -1623,11 +1623,22 @@ bool CMetasequoiaIME::_ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM
 
 void CMetasequoiaIME::_NotePassthroughStatistics(UINT virtualKey, WCHAR wch, bool keyboardKnownEnabled)
 {
+    if (!Global::StatisticsEnabled.load(std::memory_order_relaxed))
+    {
+        // With the switch off nothing is classified and no frame is written;
+        // the de-duplication marker is left alone because nothing was counted.
+        return;
+    }
+
     const LONG messageTime = GetMessageTime();
-    if (virtualKey == _passthroughStatsVirtualKey && messageTime == _passthroughStatsMessageTime)
+    if (virtualKey != 0 && virtualKey == _passthroughStatsVirtualKey && messageTime == _passthroughStatsMessageTime)
     {
         // The system can query the same key event more than once (a host may
         // also call the keystroke manager directly); only the first pass counts.
+        // The marker is consumed here: the probes for one event arrive back to
+        // back, so anything later is a genuine second press that GetMessageTime
+        // cannot separate from the first one inside the same tick.
+        _passthroughStatsVirtualKey = 0;
         return;
     }
 

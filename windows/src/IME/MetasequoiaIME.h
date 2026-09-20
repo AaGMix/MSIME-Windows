@@ -827,7 +827,10 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
 
     // De-duplicates the passthrough statistics probe: OnTestKeyDown can be
     // called more than once for one key event, and a repeated (virtual key,
-    // message time) pair is that same event. Auto-repeats carry fresh times.
+    // message time) pair is that same event. GetMessageTime only has tick
+    // granularity, so two genuine presses of one key can share a time; the
+    // marker is therefore consumed by the first suppression (virtual key 0 is
+    // not a key) and the probe pair always arrives adjacently.
     UINT _passthroughStatsVirtualKey;
     LONG _passthroughStatsMessageTime;
 

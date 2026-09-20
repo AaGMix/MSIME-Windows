@@ -1,4 +1,5 @@
 #include "stats_collector.h"
+#include "Ipc.h"
 #include <Windows.h>
 #include <atomic>
 #include <cstring>
@@ -46,7 +47,7 @@ bool SendStatsBatch(const FanyImeStatsBatchHeader &header, const FanyImeStatsEve
 {
     const std::wstring pipeName = BuildStatsPipeName();
     HANDLE pipe = INVALID_HANDLE_VALUE;
-    for (int attempt = 0; attempt < 2; ++attempt)
+    for (int attempt = 0; attempt < 3; ++attempt)
     {
         pipe = CreateFileW(pipeName.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
                            SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
@@ -54,10 +55,24 @@ bool SendStatsBatch(const FanyImeStatsBatchHeader &header, const FanyImeStatsEve
         {
             break;
         }
-        if (GetLastError() != ERROR_PIPE_BUSY || !WaitNamedPipeW(pipeName.c_str(), 20))
+        const DWORD error = GetLastError();
+        if (error == ERROR_PIPE_BUSY)
+        {
+            if (!WaitNamedPipeW(pipeName.c_str(), 20))
+            {
+                break;
+            }
+            continue;
+        }
+        // The Server serves one instance at a time and closes it between
+        // connections, so a second host process flushing in that gap sees
+        // ERROR_FILE_NOT_FOUND rather than ERROR_PIPE_BUSY: the name exists
+        // again a moment later. Anything else means nobody is listening.
+        if (error != ERROR_FILE_NOT_FOUND)
         {
             break;
         }
+        Sleep(5);
     }
     if (pipe == INVALID_HANDLE_VALUE)
     {
@@ -96,7 +111,10 @@ void CALLBACK FlushStatisticsEvents(PTP_CALLBACK_INSTANCE, PVOID)
             batchCount = g_queue.PopBatch(batch, MsimeStats::StatsEventQueue::kCapacity);
             header.event_count = static_cast<uint32_t>(batchCount);
             header.payload_bytes = static_cast<uint32_t>(batchCount * sizeof(FanyImeStatsEvent));
-            header.dropped_count = g_queue.TakeDroppedCount();
+            // Only an actually sent frame may consume the counter: an empty
+            // batch is never sent, so taking it here would discard a pending
+            // loss instead of reporting it with the next frame.
+            header.dropped_count = batchCount != 0 ? g_queue.TakeDroppedCount() : 0;
             header.source_process_id = GetCurrentProcessId();
             ReleaseSRWLockExclusive(&g_queueLock);
         }
@@ -137,10 +155,17 @@ void MsimeStats::QueueStatisticsEvent(const CharClassCounts &counts)
     {
         return;
     }
+    if (!Global::StatisticsEnabled.load(std::memory_order_relaxed))
+    {
+        // The Server drops frames while the switch is off, but the opt-out has
+        // to cost the input path nothing: with it off nothing is queued and the
+        // statistics pipe is never opened from a host process.
+        return;
+    }
 
     FILETIME now = {};
     GetSystemTimeAsFileTime(&now);
-    FanyImeStatsEvent event;
+    FanyImeStatsEvent event{};
     event.timestamp_utc_ft = (static_cast<uint64_t>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
     event.cjk = counts.cjk;
     event.latin = counts.latin;

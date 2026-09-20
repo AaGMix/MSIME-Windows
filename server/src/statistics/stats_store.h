@@ -26,7 +26,10 @@ struct sqlite3;
 
 namespace MsimeStats
 {
-// SchemaVersion is written to stats_meta on open.
+// MetaSchemaVersion is the stats_meta key the schema version is written under
+// on open; kStoreSchemaVersion is the value. They must stay distinct: a future
+// migration reads the key back and compares it against the current version.
+inline constexpr const char *kStoreMetaSchemaVersion = "schema_version";
 inline constexpr const char *kStoreSchemaVersion = "1";
 
 // MetaFirstDay holds the smallest day_key currently stored; it doubles as the

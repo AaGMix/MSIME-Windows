@@ -2753,6 +2753,7 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
             const bool previous_paired_punctuation = GetConfiguredPairedPunctuationEnabled();
             const std::string previous_punctuation_lock = GetConfiguredPunctuationLock();
             const bool previous_tsf_diagnostic_log = GetConfiguredTsfDiagnosticLogEnabled();
+            const bool previous_statistics_enabled = GetConfiguredStatisticsEnabled();
             const std::string previous_tsf_preedit_style = GetConfiguredTsfPreeditStyle();
             const std::string previous_theme_mode = GetConfiguredThemeMode();
             const std::string previous_theme_cand = GetConfiguredThemeCand();
@@ -2893,6 +2894,12 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
                     BroadcastToTsfWorkerThreadViaNamedpipe(
                         Global::DataFromServerMsgTypeToTsfWorkerThread::TsfDiagnosticLogChanged,
                         GetConfiguredTsfDiagnosticLogEnabled() ? L"1" : L"0");
+                }
+                if (previous_statistics_enabled != GetConfiguredStatisticsEnabled())
+                {
+                    BroadcastToTsfWorkerThreadViaNamedpipe(
+                        Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged,
+                        GetConfiguredStatisticsEnabled() ? L"1" : L"0");
                 }
                 const VoiceInputConfig &voice_input = GetConfiguredVoiceInput();
                 if (previous_voice_input.enabled != voice_input.enabled ||
@@ -3474,6 +3481,7 @@ LRESULT CALLBACK WndProcSettingsWindow(HWND hwnd, UINT message, WPARAM wParam, L
             const bool previous_paired_punctuation = GetConfiguredPairedPunctuationEnabled();
             const std::string previous_punctuation_lock = GetConfiguredPunctuationLock();
             const bool previous_tsf_diagnostic_log = GetConfiguredTsfDiagnosticLogEnabled();
+            const bool previous_statistics_enabled = GetConfiguredStatisticsEnabled();
             const std::string previous_tsf_preedit_style = GetConfiguredTsfPreeditStyle();
             const std::string previous_theme_mode = GetConfiguredThemeMode();
             const std::string previous_theme_cand = GetConfiguredThemeCand();
@@ -3603,6 +3611,12 @@ LRESULT CALLBACK WndProcSettingsWindow(HWND hwnd, UINT message, WPARAM wParam, L
                     BroadcastToTsfWorkerThreadViaNamedpipe(
                         Global::DataFromServerMsgTypeToTsfWorkerThread::TsfDiagnosticLogChanged,
                         GetConfiguredTsfDiagnosticLogEnabled() ? L"1" : L"0");
+                }
+                if (previous_statistics_enabled != GetConfiguredStatisticsEnabled())
+                {
+                    BroadcastToTsfWorkerThreadViaNamedpipe(
+                        Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged,
+                        GetConfiguredStatisticsEnabled() ? L"1" : L"0");
                 }
                 PostSettingsConfig();
             }

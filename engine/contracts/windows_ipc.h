@@ -222,6 +222,10 @@ struct FanyImeStatsEvent
     uint16_t digit = 0;
     uint16_t punct = 0;
     uint16_t other = 0;
+    // The struct is 24 bytes on the wire; naming the tail keeps the compiler
+    // from shipping indeterminate stack bytes across the process boundary and
+    // reserves the space for a later versioned field. Always written as zero.
+    uint16_t reserved[3] = {0, 0, 0};
 };
 
 static_assert(sizeof(FanyImeWireChar) == 2, "The IPC ABI requires 16-bit FanyImeWireChar.");
@@ -251,6 +255,7 @@ static_assert(offsetof(FanyImeStatsEvent, latin) == 10);
 static_assert(offsetof(FanyImeStatsEvent, digit) == 12);
 static_assert(offsetof(FanyImeStatsEvent, punct) == 14);
 static_assert(offsetof(FanyImeStatsEvent, other) == 16);
+static_assert(offsetof(FanyImeStatsEvent, reserved) == 18);
 
 namespace FanyImeReplyType
 {
@@ -347,7 +352,11 @@ constexpr std::uint32_t SmartPunctuationSpaceConvertChanged = 22;
 constexpr std::uint32_t SmartPunctuationDirectDigitChanged = 24;
 // Direct ASCII punctuation output for ',' '.' ':' after ASCII letters. Payload "0"/"1".
 constexpr std::uint32_t SmartPunctuationDirectLetterChanged = 25;
-constexpr std::uint32_t MaxKnown = SmartPunctuationDirectLetterChanged;
+// Local input statistics master switch. Payload "0"/"1". With it off the DLL
+// classifies nothing, queues nothing and never opens the statistics pipe, so
+// the opt-out costs the input path exactly one relaxed atomic load.
+constexpr std::uint32_t StatisticsEnabledChanged = 26;
+constexpr std::uint32_t MaxKnown = StatisticsEnabledChanged;
 // Source compatibility for the Server's historical spellings.
 constexpr std::uint32_t SwitchToEn = SwitchToEnglish;
 constexpr std::uint32_t SwitchToCn = SwitchToChinese;

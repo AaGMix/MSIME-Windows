@@ -1258,12 +1258,20 @@ void CMetasequoiaIME::_SetComposition(_In_ ITfComposition *pComposition)
 // Reads the committed text of a terminating composition and queues one
 // statistics event. Called from the two composition exits; the first observer
 // wins because _TerminateComposition can re-enter OnCompositionTerminated for
-// the same composition. This function only reads: it never writes the range,
-// swallows no HRESULT and changes no teardown ordering. Any failure is silent.
+// the same composition. This function only reads the document: it walks a
+// private clone of the composition range, swallows no HRESULT and changes no
+// teardown ordering. Any failure is silent.
 //----------------------------------------------------------------------------
 
 void CMetasequoiaIME::_CaptureCompositionStats(TfEditCookie ec, _In_ ITfComposition *pComposition)
 {
+    if (!Global::StatisticsEnabled.load(std::memory_order_relaxed))
+    {
+        // Nothing to capture while the switch is off: no range read, no
+        // classification, no pipe. The capture flag stays untouched so a
+        // composition that spans a settings change is simply not counted.
+        return;
+    }
     if (_compositionStatsCaptured.exchange(true, std::memory_order_acq_rel))
     {
         return;
@@ -1273,8 +1281,19 @@ void CMetasequoiaIME::_CaptureCompositionStats(TfEditCookie ec, _In_ ITfComposit
         return;
     }
 
+    ITfRange *pCompositionRange = nullptr;
+    if (FAILED(pComposition->GetRange(&pCompositionRange)) || pCompositionRange == nullptr)
+    {
+        return;
+    }
+    // The walk below shifts the range start, so it must never touch what the
+    // host handed back: a host that returns the live composition range would
+    // see its composition collapse to the end, and the display-attribute clear
+    // that follows in _TerminateComposition would then leave stale underlines.
     ITfRange *pRange = nullptr;
-    if (FAILED(pComposition->GetRange(&pRange)) || pRange == nullptr)
+    const HRESULT cloneResult = pCompositionRange->Clone(&pRange);
+    pCompositionRange->Release();
+    if (FAILED(cloneResult) || pRange == nullptr)
     {
         return;
     }
