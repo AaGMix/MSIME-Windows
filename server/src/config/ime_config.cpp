@@ -2473,7 +2473,7 @@ bool SetConfiguredCaretStateIndicatorPosition(const std::string &position)
 {
     if (position != "top-left" && position != "top" && position != "top-right" && position != "bottom")
         return false;
-    if (!WriteConfiguredValue("general", "caret_state_indicator_position", position))
+    if (!WriteConfiguredValue("general", "caret_state_indicator_position", EscapeTomlBasicString(position)))
         return false;
     g_caret_state_indicator_position = position;
     return true;
