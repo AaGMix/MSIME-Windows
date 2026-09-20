@@ -804,8 +804,8 @@ int run_test()
                 "Switching without a composition did not update the active scheme.");
         session.switch_scheme(SchemeType::Quanpin);
 
-        const std::vector<std::string> supported_helpcode_schemas{"lantian", "ziranma", "shouyou2_0", "shouyouplus",
-                                                                  "xiaohe"};
+        const std::vector<std::string> supported_helpcode_schemas{"lantian",     "ziranma", "shouyou2_0",
+                                                                  "shouyouplus", "xiaohe",  "jiajia"};
         for (const std::string &schema : supported_helpcode_schemas)
         {
             require(metasequoia::InputSession::is_supported_helpcode_schema(schema) &&

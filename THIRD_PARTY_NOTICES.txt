@@ -1156,5 +1156,9 @@ Sources of helpcodes/*.txt, via MSIME-HelpCode:
   shouyou2_0_helpcode.txt         shouyou2_0   首右 2.0 helpcode scheme
   shouyouplus_helpcode.txt        shouyouplus  首右 plus helpcode scheme
   xiaohe_helpcode.txt             xiaohe       小鹤 shape-code scheme
+  jiajia_helpcode.txt             jiajia       加加辅助码, aligned with the helpcode table
+                                               embedded in the commercial 拼音加加 5.x
+                                               installer (fzm.bin); not an official
+                                               拼音加加 table
 
-Unresolved: CustomPinyinDictionary, rime-jp_sela and ZRM_Aux-code publish no license; the English word list in english.db includes word forms extracted from a commercial dictionary, whose rights belong to its publisher; and the helpcode tables reproduce input schemes whose rights belong to their respective authors. Redistributors who need an explicit grant for those parts should raise it with the Metasequoia IME maintainers rather than assume one. This notice will be updated as those terms are clarified.
+Unresolved: CustomPinyinDictionary, rime-jp_sela and ZRM_Aux-code publish no license; the English word list in english.db includes word forms extracted from a commercial dictionary, whose rights belong to its publisher; and the helpcode tables reproduce input schemes whose rights belong to their respective authors. jiajia_helpcode.txt additionally aligns its codes with a data table extracted from the commercial 拼音加加 5.x installer. Redistributors who need an explicit grant for those parts should raise it with the Metasequoia IME maintainers rather than assume one. This notice will be updated as those terms are clarified.

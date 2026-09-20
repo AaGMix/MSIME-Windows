@@ -29,7 +29,7 @@ You need the **Microsoft Visual C++ 2015–2022 Redistributable (x64)**. The ser
 
 - Chinese input: full pinyin, double pinyin (Xiaohe / Ziranma / Shoudao / Microsoft), Wubi 86
 - Japanese input: romaji, with hiragana, katakana and dictionary candidates; also available as a temporary mode from Chinese
-- Helpcode (形码) filtering on pinyin schemes: five tables, single- and double-code
+- Helpcode (形码) filtering on pinyin schemes: six tables, single- and double-code
 - Optional cloud candidates, and AI suggestions via DeepSeek / OpenAI / SiliconFlow / Groq
 - English-Chinese glosses in the vertical candidate window
 - Mixed Chinese-English input, emoji and kaomoji, a dedicated English candidate mode
