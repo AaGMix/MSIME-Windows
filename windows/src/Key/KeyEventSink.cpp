@@ -2664,9 +2664,8 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
             ResolveKeyCaretAnchor(this, pContext, _tfClientId, keyPoint);
 
         PerfTimer writeShmTimer;
-        WriteDataToSharedMemory(Global::Keycode, wch, Global::ModifiersDown,
-                                includeCaretAnchor ? keyPoint : nullptr, 0, L"",
-                                includeCaretAnchor ? 0b001111 : 0b000111);
+        WriteDataToSharedMemory(Global::Keycode, wch, Global::ModifiersDown, includeCaretAnchor ? keyPoint : nullptr, 0,
+                                L"", includeCaretAnchor ? 0b001111 : 0b000111);
 
         PerfTimer sendKeyEventTimer;
         const KeyEventSendResult sendResult = SendKeyEventToUIProcess(&requestId);
