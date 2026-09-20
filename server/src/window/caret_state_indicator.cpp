@@ -1,6 +1,7 @@
 #include "window/caret_state_indicator.h"
 #include "config/ime_config.h"
 #include "utils/window_utils.h"
+#include "window/caret_state_indicator_policy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,6 +15,7 @@ constexpr int kAdditionalCharacterWidthDip = 20;
 constexpr int kPunctuationModeSlotWidthDip = 30;
 constexpr int kPunctuationModeGapDip = 8;
 constexpr int kCaretGapDip = 6;
+constexpr int kCaretLineHeightDip = 24;
 
 struct State
 {
@@ -43,6 +45,7 @@ void Show(HWND hwnd, const std::wstring &text, POINT caret, bool topmost)
     const int extraCharacters = (std::max)(0, static_cast<int>(text.size()) - 1);
     const int width = height + PixelSize(kAdditionalCharacterWidthDip * extraCharacters, g_state.dpi);
     const int gap = PixelSize(kCaretGapDip, g_state.dpi);
+    const int caretLineHeight = PixelSize(kCaretLineHeightDip, g_state.dpi);
     MONITORINFO info{sizeof(info)};
     RECT work{};
     if (monitor && GetMonitorInfoW(monitor, &info))
@@ -52,15 +55,13 @@ void Show(HWND hwnd, const std::wstring &text, POINT caret, bool topmost)
 
     const std::string &position = GetConfiguredCaretStateIndicatorPosition();
     int x = caret.x - width - gap;
-    int y = caret.y - height - gap;
+    int y = FanyImeUi::CaretStateIndicatorY(position == "bottom", caret.y, height, caretLineHeight, gap);
     if (position == "top")
         x = caret.x - width / 2;
     else if (position == "top-right")
         x = caret.x + gap;
-    if (position == "bottom")
-        y = caret.y + gap;
-    else if (y < work.top)
-        y = caret.y + gap;
+    if (position != "bottom" && y < work.top)
+        y = FanyImeUi::CaretStateIndicatorY(true, caret.y, height, caretLineHeight, gap);
     x = static_cast<int>((std::max)(work.left, (std::min)(static_cast<LONG>(x), work.right - width)));
     y = static_cast<int>((std::max)(work.top, (std::min)(static_cast<LONG>(y), work.bottom - height)));
     SetWindowPos(hwnd, topmost ? HWND_TOPMOST : HWND_TOP, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);

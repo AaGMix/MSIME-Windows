@@ -12,6 +12,14 @@ TEST_CASE(caret_state_indicator_visibility_is_complementary)
     REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, true, 50, -100000));
 }
 
+TEST_CASE(caret_state_indicator_upper_positions_clear_the_caret_line)
+{
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorY(false, 200, 30, 24, 6), 140);
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorY(false, 400, 60, 48, 12), 280);
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorY(true, 200, 30, 24, 6), 206);
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorY(true, 200, 30, 200, 6), 206);
+}
+
 TEST_CASE(caret_state_indicator_maps_input_mode_to_one_glyph)
 {
     using FanyImeUi::InputModeGlyph;
