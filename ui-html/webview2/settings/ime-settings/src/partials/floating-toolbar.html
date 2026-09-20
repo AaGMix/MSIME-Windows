@@ -12,6 +12,35 @@
       </div>
     </div>
 
+    <div class="section-header floating-toolbar-setting-row">
+      <div>
+        <div class="section-title">光标状态提示</div>
+        <div class="floating-toolbar-description">关闭悬浮工具栏后，切换输入模式、全半角或中英文标点时在光标上方短暂显示</div>
+      </div>
+      <div class="ftb-toggle-btn active" id="caretStateIndicatorToggleBtn" role="switch" aria-checked="true" tabindex="0">
+        <div class="ftb-toggle-knob"></div>
+      </div>
+    </div>
+
+    <div class="section-header floating-toolbar-setting-row">
+      <div>
+        <div class="section-title">提示位置</div>
+        <div class="floating-toolbar-description">选择光标状态提示显示在光标的哪个方向</div>
+      </div>
+      <div class="dropdown">
+        <button class="dropdown-toggle" id="caretStateIndicatorPositionBtn">
+          <span>左上方</span>
+          <div class="arrow"><img src="./assets/arrow.svg" alt="arrow"></div>
+        </button>
+        <div class="dropdown-menu compact-scroll-menu" id="caretStateIndicatorPositionMenu">
+          <div class="dropdown-item" data-value="top-left">左上方</div>
+          <div class="dropdown-item" data-value="top">正上方</div>
+          <div class="dropdown-item" data-value="top-right">右上方</div>
+          <div class="dropdown-item" data-value="bottom">下方</div>
+        </div>
+      </div>
+    </div>
+
     <div class="floating-toolbar-preview" aria-label="悬浮工具栏预览">
       <div class="floating-toolbar-preview-label">预览</div>
       <div class="ftb-preview-host" id="ftbPreviewHost"></div>

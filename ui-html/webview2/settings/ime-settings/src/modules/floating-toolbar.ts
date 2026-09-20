@@ -34,6 +34,14 @@ export function setupFloatingToolbar(): void {
     document.getElementById('ftbToggleBtn')?.setAttribute('aria-checked', String(active));
   });
 
+  setupToggleButton('caretStateIndicatorToggleBtn', (active) => {
+    updateConfig('general.caret_state_indicator', active);
+    document.getElementById('caretStateIndicatorToggleBtn')?.setAttribute('aria-checked', String(active));
+  });
+
+  setupDropdownMenu('caretStateIndicatorPositionBtn', 'caretStateIndicatorPositionMenu', '', true,
+    'general.caret_state_indicator_position');
+
   setupDropdownMenu('ftbScaleBtn', 'ftbScaleMenu', '', true, 'general.floating_toolbar_scale', (value) => {
     const parsed = Number(value);
     toolbarScale = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
@@ -70,6 +78,10 @@ export function applyFloatingToolbarItemsConfig(config: FloatingToolbarItemsConf
     if (checkbox) checkbox.checked = toolbarItemState[item];
   });
   updatePreviewItems();
+}
+
+export function applyCaretStateIndicatorPosition(position?: string): void {
+  applyDropdownValue('caretStateIndicatorPositionBtn', 'caretStateIndicatorPositionMenu', position || 'top-left');
 }
 
 export function applyFloatingToolbarAppearanceConfig(scale?: number, fontSize?: number): void {
