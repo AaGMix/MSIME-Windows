@@ -1,5 +1,7 @@
 import { createDictionaryPager, DICTIONARY_PAGE_SIZE } from '../utils/dictionary-pagination';
 import { readDictionaryFile } from '../utils/dictionary-file';
+import { confirmDialog } from '../utils/confirm-dialog';
+import { hoistOverlay } from '../utils/overlay-host';
 import { onHostMessage } from '../utils/host-messages';
 import type { SettingsMessage } from '../../../../shared/messages';
 type DictionaryRequest = Extract<SettingsMessage, { type: 'dictionaryRequest' }>['data'];
@@ -30,11 +32,6 @@ function post(action: DictionaryRequest['action'], data: Partial<Omit<Dictionary
 function showToast(message: string, ok: boolean, durationMs = 3200): void {
   const toast = document.getElementById('dictToast');
   if (!toast) return;
-  const table = document.querySelector<HTMLElement>('.dict-table-wrap');
-  if (table) {
-    const rect = table.getBoundingClientRect();
-    toast.style.left = `${rect.left + rect.width / 2}px`;
-  }
   const messageElement = document.getElementById('dictToastMessage');
   const iconElement = document.getElementById('dictToastIcon');
   if (messageElement) messageElement.textContent = message;
@@ -77,8 +74,8 @@ function renderRows(rows: DictionaryRow[]): void {
     const edit = document.createElement('button'); edit.className = 'dict-row-action'; edit.textContent = '编辑';
     edit.addEventListener('click', () => openDialog(row));
     const remove = document.createElement('button'); remove.className = 'dict-row-action danger'; remove.textContent = '删除';
-    remove.addEventListener('click', () => {
-      if (!window.confirm(`确定删除“${row.word}”吗？`)) return;
+    remove.addEventListener('click', async () => {
+      if (!await confirmDialog(`确定删除“${row.word}”吗？`)) return;
       if (dictionary === 'english') post('delete', { oldWord: row.word, oldDisplay: row.display ?? row.word, word: row.word, display: row.display ?? row.word });
       else post('delete', { oldCode: row.code, oldWord: row.word, code: row.code, word: row.word, weight: row.weight });
     });
@@ -160,6 +157,8 @@ function downloadExport(content: string, filename: string): void {
 }
 
 export function setupDictionary(): void {
+  hoistOverlay(document.getElementById('dictToast'));
+  hoistOverlay(document.getElementById('dictModal'));
   const table = document.querySelector<HTMLElement>('.dict-table-wrap');
   if (table) pager = createDictionaryPager(table, offset => query(offset));
   document.querySelectorAll<HTMLButtonElement>('.dict-tab').forEach((tab) => tab.addEventListener('click', () => {

@@ -1,3 +1,8 @@
+:root {
+  /* 侧边栏宽度；挂在 <body> 下的浮层要靠它算出右侧内容区的水平中心 */
+  --sidebar-width: 200px;
+}
+
 .main {
   display: flex;
   flex: 1;

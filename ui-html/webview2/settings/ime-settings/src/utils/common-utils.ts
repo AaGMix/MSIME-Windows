@@ -1,3 +1,5 @@
+import { dismissHoistedOverlays } from './overlay-host';
+
 // HTML 加载工具
 // Prefer bundling partials so they work in WebView2/file://
 const partials = import.meta.glob<string>('/src/partials/**/*.html', {
@@ -68,4 +70,6 @@ export function showOnlyCurrentModule(moduleName: string): void {
 
   next.style.display = 'block';
   activeModuleName = moduleName;
+  // 词库 / 实用功能的浮层挂在 body 下（见 hoistOverlay），不随模块容器一起隐藏，切页时收起
+  dismissHoistedOverlays();
 }

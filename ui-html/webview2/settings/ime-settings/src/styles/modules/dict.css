@@ -226,11 +226,15 @@
   color: var(--danger-hover);
 }
 
+/* 同样挂在 body 下（见 hoistOverlay）。遮罩让开标题栏，弹窗期间窗口按钮仍可点；
+   左侧留出侧边栏宽度的内边距，对话框因此居中于右侧内容区，而不是整个窗口。 */
 .dict-modal {
   display: none;
   position: fixed;
-  inset: 0;
+  inset: var(--titlebar-height) 0 0;
   z-index: 20;
+  box-sizing: border-box;
+  padding-left: var(--sidebar-width);
   align-items: center;
   justify-content: center;
   background: var(--overlay-bg);
@@ -272,10 +276,36 @@
   margin-top: 24px;
 }
 
+/* 自绘的删除确认框，见 utils/confirm-dialog.ts */
+.dict-confirm-dialog {
+  width: 360px;
+}
+
+.dict-confirm-message {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.dict-button.danger {
+  color: var(--danger-text);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--danger-text) 55%, transparent);
+}
+
+.dict-button.danger:hover {
+  color: var(--danger-hover);
+  background: color-mix(in srgb, var(--danger-text) 12%, transparent);
+}
+
+/* 浮层由 hoistOverlay() 挂到 <body> 下，这里的 fixed 相对窗口解析：水平取右侧内容区的中心
+   （侧边栏右边缘到窗口右边的中点），垂直离窗口底边两行正文的高度（2 × 1.45 × 14px）。
+   两个值都由布局算出，窗口缩放和内容滚动都不会让它跑位。 */
 .dict-toast {
   position: fixed;
-  left: 50%;
-  bottom: 34px;
+  left: calc(50% + var(--sidebar-width) / 2);
+  bottom: 41px;
   z-index: 30;
   box-sizing: border-box;
   display: grid;
@@ -401,5 +431,7 @@ html[data-theme="dark"] .dict-toast.error .dict-toast-icon {
   outline: none;
 }
 
-.dict-pagination { display: flex; align-items: center; gap: 12px; margin: 12px 0; }
+/* 左右内边距与 .dict-table 单元格的 18px 对齐，按钮不贴卡片边框 */
+.dict-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin: 12px 0; padding: 0 18px; }
+.dict-pagination-status { margin-right: auto; }
 .dict-pagination button:disabled { opacity: .45; cursor: default; }
