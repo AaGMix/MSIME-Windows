@@ -35,8 +35,8 @@ TEST_CASE(shortcut_config_upgrade_preserves_word_selection_and_adds_defaults)
 
 TEST_CASE(config_merge_adds_default_caret_state_indicator)
 {
-    const std::string template_text =
-        "[general]\nfloating_toolbar = true\ncaret_state_indicator = true\ncaret_state_indicator_position = \"top-left\"\n";
+    const std::string template_text = "[general]\nfloating_toolbar = true\ncaret_state_indicator = "
+                                      "true\ncaret_state_indicator_position = \"top-left\"\n";
     const std::string old_config = "[general]\nfloating_toolbar = false\n";
     const std::string baseline = "[general]\nfloating_toolbar = true\n";
     const auto merged = MergeConfigIntoTemplate(template_text, old_config, baseline);

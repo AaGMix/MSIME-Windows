@@ -587,11 +587,9 @@ CaretLanguagePunctuationState UpdateCaretLanguagePunctuationState(int imeState, 
         g_latest_status_snapshot = (fallbackIme ? 0b0100 : 0) | (fallbackPunctuation ? 0b0001 : 0);
     }
     if (imeState >= 0)
-        g_latest_status_snapshot =
-            (g_latest_status_snapshot & ~0b0100) | (imeState != 0 ? 0b0100 : 0);
+        g_latest_status_snapshot = (g_latest_status_snapshot & ~0b0100) | (imeState != 0 ? 0b0100 : 0);
     if (punctuationState >= 0)
-        g_latest_status_snapshot =
-            (g_latest_status_snapshot & ~0b0001) | (punctuationState != 0 ? 0b0001 : 0);
+        g_latest_status_snapshot = (g_latest_status_snapshot & ~0b0001) | (punctuationState != 0 ? 0b0001 : 0);
     return {(g_latest_status_snapshot & 0b0100) != 0, (g_latest_status_snapshot & 0b0001) != 0};
 }
 
@@ -1925,20 +1923,17 @@ void WorkerThread()
             PostMessage(::global_hwnd, WM_PUNCSWITCH, task.pipe_data.keycode, 0);
             const bool punctuationEnabled = task.pipe_data.keycode != 0;
             const auto state = UpdateCaretLanguagePunctuationState(-1, punctuationEnabled ? 1 : 0);
-            PostCaretStateText(
-                FanyImeUi::PunctuationInputModeText(punctuationEnabled, state.imeEnabled,
-                                                    GetConfiguredInputMode() == "japanese"),
-                task.pipe_data.point[0], task.pipe_data.point[1]);
+            PostCaretStateText(FanyImeUi::PunctuationInputModeText(punctuationEnabled, state.imeEnabled,
+                                                                   GetConfiguredInputMode() == "japanese"),
+                               task.pipe_data.point[0], task.pipe_data.point[1]);
             break;
         }
 
         case TaskType::DoubleSingleByteSwitch: {
             PostMessage(::global_hwnd, WM_DOUBLESINGLEBYTESWITCH, task.pipe_data.keycode, 0);
-            PostCaretStateText(
-                std::wstring(1,
-                             FanyImeUi::CaretStateGlyph(FanyImeUi::CaretStateKind::Width,
-                                                        task.pipe_data.keycode != 0)),
-                task.pipe_data.point[0], task.pipe_data.point[1]);
+            PostCaretStateText(std::wstring(1, FanyImeUi::CaretStateGlyph(FanyImeUi::CaretStateKind::Width,
+                                                                          task.pipe_data.keycode != 0)),
+                               task.pipe_data.point[0], task.pipe_data.point[1]);
             break;
         }
 

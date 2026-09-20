@@ -4032,20 +4032,20 @@ HRESULT OnControllerCreatedSettingsWnd(            //
                                     PostSettingsConfig();
                                 }
                             }
-                            else if (path == "general.caret_state_indicator")
+                            else if (path == "general.caret_state_indicator" ||
+                                     path == "general.caret_state_indicator_position")
                             {
-                                const bool value = json::value_to<bool>(data.at("value"));
-                                if (SetConfiguredCaretStateIndicatorEnabled(value))
+                                const bool indicator = path == "general.caret_state_indicator";
+                                const bool enabled = indicator && json::value_to<bool>(data.at("value"));
+                                const bool saved = indicator ? SetConfiguredCaretStateIndicatorEnabled(enabled)
+                                                             : SetConfiguredCaretStateIndicatorPosition(
+                                                                   json::value_to<std::string>(data.at("value")));
+                                if (saved)
                                 {
-                                    if (!value && ::global_hwnd_caret_state)
+                                    if (indicator && !enabled && ::global_hwnd_caret_state)
                                         PostMessage(::global_hwnd_caret_state, WM_HIDE_CARET_STATE, 0, 0);
                                     PostSettingsConfig();
                                 }
-                            }
-                            else if (path == "general.caret_state_indicator_position")
-                            {
-                                if (SetConfiguredCaretStateIndicatorPosition(json::value_to<std::string>(data.at("value"))))
-                                    PostSettingsConfig();
                             }
                             else if (path == "general.floating_toolbar_scale")
                             {
