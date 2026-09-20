@@ -27,6 +27,7 @@
 #include "defines/defines.h"
 #include "ipc/ipc.h"
 #include "engine/common/helpcode_utils.h"
+#include "statistics/stats_store.h"
 #include "voice-input/voice_providers.h"
 
 namespace
@@ -64,6 +65,11 @@ int g_candidate_font_size = 16;
 int g_candidate_window_preedit_font_size = 16;
 std::atomic_bool g_diagnostic_log_enabled{false};
 std::atomic_bool g_tsf_diagnostic_log_enabled{false};
+// 本机输入统计，默认关闭。关闭是整个统计链路的门控：线程收到帧也只丢弃，
+// 不会创建 stats.db，这是隐私契约里可观察的那一半。
+std::atomic_bool g_statistics_enabled{false};
+// 统计保留策略（forever|30d|90d|180d|365d），默认永久保留。
+std::string g_statistics_retention = "forever";
 std::string g_candidate_text_color = "auto";
 std::string g_shuangpin_schema = "xiaohe";
 std::string g_wubi_schema = "wubi86";
@@ -1016,6 +1022,13 @@ bool LoadImeConfig()
                                        std::memory_order_relaxed);
         g_tsf_diagnostic_log_enabled.store(tbl["general"]["tsf_diagnostic_log"].value_or(false),
                                            std::memory_order_relaxed);
+        g_statistics_enabled.store(tbl["statistics"]["enabled"].value_or(false), std::memory_order_relaxed);
+        {
+            // 读侧对缺键与非法值一律回落 forever：一个手写坏值不能让自动清理误删数据。
+            const std::string retention = tbl["statistics"]["retention"].value_or(std::string("forever"));
+            MsimeStats::Retention parsed = MsimeStats::Retention::Forever;
+            g_statistics_retention = MsimeStats::ParseRetention(retention, parsed) ? retention : "forever";
+        }
         g_floating_toolbar_items.fullwidth = tbl["general"]["floating_toolbar_fullwidth"].value_or(true);
         g_floating_toolbar_items.punctuation = tbl["general"]["floating_toolbar_punctuation"].value_or(true);
         g_floating_toolbar_items.character_set = tbl["general"]["floating_toolbar_character_set"].value_or(true);
@@ -1805,6 +1818,36 @@ bool SetConfiguredTsfDiagnosticLogEnabled(bool enabled)
     if (!WriteConfiguredValue("general", "tsf_diagnostic_log", enabled ? "true" : "false"))
         return false;
     g_tsf_diagnostic_log_enabled.store(enabled, std::memory_order_relaxed);
+    return true;
+}
+
+bool GetConfiguredStatisticsEnabled()
+{
+    return g_statistics_enabled.load(std::memory_order_relaxed);
+}
+
+bool SetConfiguredStatisticsEnabled(bool enabled)
+{
+    if (!WriteConfiguredValue("statistics", "enabled", enabled ? "true" : "false"))
+        return false;
+    g_statistics_enabled.store(enabled, std::memory_order_relaxed);
+    return true;
+}
+
+const std::string &GetConfiguredStatisticsRetention()
+{
+    return g_statistics_retention;
+}
+
+bool SetConfiguredStatisticsRetention(const std::string &retention)
+{
+    // 先校验后落盘：非法枚举不写文件也不动内存值，设置页的请求会被静默拒绝。
+    MsimeStats::Retention parsed = MsimeStats::Retention::Forever;
+    if (!MsimeStats::ParseRetention(retention, parsed))
+        return false;
+    if (!WriteConfiguredValue("statistics", "retention", EscapeTomlBasicString(retention)))
+        return false;
+    g_statistics_retention = retention;
     return true;
 }
 

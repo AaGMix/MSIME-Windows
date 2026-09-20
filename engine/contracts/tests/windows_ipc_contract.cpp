@@ -126,5 +126,16 @@ int main()
     std::copy(blank[0].begin(), blank[0].end(), header.begin());
     const auto empty = FanyImeVoiceCompositionPipe::ParseFrame(header.data());
     CHECK(empty.valid && empty.first && empty.last && empty.chunk.empty());
-    std::cout << "Windows IPC layout, negotiation, upgrade and voice contracts passed\n";
+
+    // Statistics frames: fixed 28-byte header plus 24-byte events; the Go stats
+    // tool mirrors these numbers in internal/frames, so both sides must change
+    // together.
+    CHECK(FANY_IME_STATS_MAGIC == 0x54415453);
+    CHECK(FANY_IME_STATS_VERSION == 1);
+    CHECK(sizeof(FanyImeStatsBatchHeader) == 28);
+    CHECK(sizeof(FanyImeStatsEvent) == 24);
+    CHECK(offsetof(FanyImeStatsEvent, timestamp_utc_ft) == 0);
+    CHECK(offsetof(FanyImeStatsEvent, cjk) == 8);
+    CHECK(sizeof(FanyImeStatsBatchHeader) + 256 * sizeof(FanyImeStatsEvent) <= FANY_IME_STATS_MAX_FRAME_BYTES);
+    std::cout << "Windows IPC layout, negotiation, upgrade, voice and stats contracts passed\n";
 }

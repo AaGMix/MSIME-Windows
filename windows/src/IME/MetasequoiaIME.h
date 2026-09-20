@@ -245,6 +245,10 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     void _SetComposition(_In_ ITfComposition *pComposition);
     void _TerminateComposition(TfEditCookie ec, _In_ ITfContext *pContext, BOOL isCalledFromDeactivate = FALSE);
     void _SaveCompositionContext(_In_ ITfContext *pContext);
+    // Reads the committed text of a terminating composition and queues one
+    // statistics event for it. Safe to call from both composition exits; only
+    // the first observer captures, and any failure is silent.
+    void _CaptureCompositionStats(TfEditCookie ec, _In_ ITfComposition *pComposition);
 
     // key event handlers for composition/candidate/phrase common objects.
     HRESULT _HandleComplete(TfEditCookie ec, _In_ ITfContext *pContext);
@@ -510,6 +514,11 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
                                   _In_opt_ const WCHAR *translatedWch, _In_opt_ const UINT *modifiersDown,
                                   _Out_ WCHAR *classifiedWch, _Out_ UINT *classifiedCode,
                                   _Out_ _KEYSTROKE_STATE *keyState);
+    // Counts one printable character handed back to the application
+    // (Statistics/stats_passthrough.h). keyboardKnownEnabled is true when the
+    // caller already proved the keyboard is live through a non-zero
+    // _IsKeyEaten out-char; otherwise the disabled compartment is queried here.
+    void _NotePassthroughStatistics(UINT virtualKey, WCHAR wch, bool keyboardKnownEnabled);
     bool _QueueDeferredKeyDown(_In_ ITfContext *pContext, WPARAM wParam, LPARAM lParam, WCHAR translatedWch,
                                UINT modifiersDown, const _KEYSTROKE_STATE &keyState);
     bool _QueueDeferredPreservedKey(_In_ ITfContext *pContext, REFGUID preservedKey);
@@ -766,6 +775,10 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     std::atomic<uint64_t> _expectedWorkerFocusToken;
     std::atomic<uint64_t> _acknowledgedWorkerFocusToken;
     std::atomic<uint64_t> _compositionEpoch;
+    // De-duplicates the two composition exits that can observe the same commit
+    // (_TerminateComposition can re-enter OnCompositionTerminated). Reset when
+    // the next composition is created; see _CaptureCompositionStats.
+    std::atomic<bool> _compositionStatsCaptured{false};
     std::wstring _voiceCompositionAssemble;
     UINT _voiceCompositionAssembleMsg = 0;
     wchar_t _voiceCompositionAssembleGeneration = 0;
@@ -811,6 +824,15 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     // ITfThreadMgrEventSink::OnSetFocus: Chromium swaps its document manager on
     // almost every edit, which would disarm the guard mid-hold.
     bool _backspaceHoldArmed;
+
+    // De-duplicates the passthrough statistics probe: OnTestKeyDown can be
+    // called more than once for one key event, and a repeated (virtual key,
+    // message time) pair is that same event. GetMessageTime only has tick
+    // granularity, so two genuine presses of one key can share a time; the
+    // marker is therefore consumed by the first suppression (virtual key 0 is
+    // not a key) and the probe pair always arrives adjacently.
+    UINT _passthroughStatsVirtualKey;
+    LONG _passthroughStatsMessageTime;
 
     // Bare Shift/Ctrl toggle arming (Weasel-style: release within timeout).
     bool _shiftHotkeyArmed;

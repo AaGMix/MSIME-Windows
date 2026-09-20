@@ -185,6 +185,9 @@ inline std::atomic_bool MicrosoftShuangpinEnabled{false};
 inline std::atomic_bool JapaneseInputModeEnabled{false};
 inline std::atomic_bool CapsLockEnabled{false};
 inline std::atomic_bool TsfDiagnosticLogEnabled{false};
+// Default off, like the persisted setting: until the Server sends the switch on
+// connect, the capture paths classify nothing and never touch the stats pipe.
+inline std::atomic_bool StatisticsEnabled{false};
 inline thread_local bool g_connected = false;
 
 } // namespace Global

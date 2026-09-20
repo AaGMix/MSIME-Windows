@@ -4183,6 +4183,28 @@ HRESULT OnControllerCreatedSettingsWnd(            //
                                     PostSettingsConfig();
                                 }
                             }
+                            else if (path == "statistics.enabled")
+                            {
+                                const bool value = json::value_to<bool>(data.at("value"));
+                                if (SetConfiguredStatisticsEnabled(value))
+                                {
+                                    // The DLL gates capture on this: without the
+                                    // broadcast an opt-out would keep classifying
+                                    // and writing frames until the next connect.
+                                    BroadcastToTsfWorkerThreadViaNamedpipe(
+                                        Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged,
+                                        value ? L"1" : L"0");
+                                    PostSettingsConfig();
+                                }
+                            }
+                            else if (path == "statistics.retention")
+                            {
+                                const std::string value = json::value_to<std::string>(data.at("value"));
+                                if (SetConfiguredStatisticsRetention(value))
+                                {
+                                    PostSettingsConfig();
+                                }
+                            }
                             else if (path.rfind("tencent_tmt.", 0) == 0)
                             {
                                 const std::string value = json::value_to<std::string>(data.at("value"));
@@ -4672,7 +4694,9 @@ void PostSettingsConfig()
             {"quanpin_helpcode", GetConfiguredQuanpinHelpcodeEnabled()},
             {"quanpin_helpcode_schema", GetConfiguredQuanpinHelpcodeSchema()},
             {"show_sp_helpcode_in_candidate_window", GetConfiguredShowShuangpinHelpcodeInCandidateWindow()},
-            {"show_qp_helpcode_in_candidate_window", GetConfiguredShowQuanpinHelpcodeInCandidateWindow()}}}}}};
+            {"show_qp_helpcode_in_candidate_window", GetConfiguredShowQuanpinHelpcodeInCandidateWindow()}}},
+          {"statistics",
+           {{"enabled", GetConfiguredStatisticsEnabled()}, {"retention", GetConfiguredStatisticsRetention()}}}}}};
     const std::wstring message = string_to_wstring(payload.dump());
     ::webviewSettingsWnd->PostWebMessageAsJson(message.c_str());
 }

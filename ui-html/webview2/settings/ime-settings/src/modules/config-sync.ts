@@ -330,6 +330,17 @@ function applyConfigData(data: Record<string, any>, target?: string): void {
       );
     });
   }
+  if (applies('stats')) {
+    const enabled = typeof data?.statistics?.enabled === 'boolean' ? (data.statistics.enabled as boolean) : undefined;
+    const retention = typeof data?.statistics?.retention === 'string' ? (data.statistics.retention as string) : undefined;
+    if (enabled !== undefined || retention !== undefined) {
+      void import('./stats').then((module) => {
+        if (data !== lastSnapshot) return;
+        if (enabled !== undefined) module.applyStatisticsEnabled(enabled);
+        if (retention !== undefined) module.applyStatisticsRetention(retention);
+      });
+    }
+  }
   if (applies('shortcut')) {
     void import('./shortcut').then((module) => { if (data === lastSnapshot) module.applyShortcutConfig(data?.keybindings); });
   }

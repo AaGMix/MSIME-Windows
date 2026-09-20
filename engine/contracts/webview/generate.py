@@ -73,11 +73,16 @@ def main():
     args = parser.parse_args()
     for name, content in generate().items():
         path = ROOT / name
+        payload = content.encode("utf-8")
         if args.check:
-            if not path.exists() or path.read_text() != content:
+            # Byte comparison, not read_text(): text mode folds CRLF to LF and
+            # would hide a line-ending drift in an otherwise identical file.
+            if not path.exists() or path.read_bytes() != payload:
                 raise SystemExit(f"Stale binding: {path}; run generate.py")
         else:
-            path.write_text(content)
+            # newline="\n" keeps the checked-in bytes platform-independent; text
+            # mode's default translation writes CRLF on Windows.
+            path.write_text(content, encoding="utf-8", newline="\n")
 
 
 if __name__ == "__main__":
