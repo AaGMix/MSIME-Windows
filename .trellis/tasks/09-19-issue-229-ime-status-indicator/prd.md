@@ -23,7 +23,7 @@ Help users know the active input mode before they type into the wrong mode, addr
 - Show the indicator only when language/input mode, full-width/half-width mode, or Chinese/English punctuation mode changes; focusing an editable control without changing one of these states must not show it.
 - Render the cue as a compact badge that shows only the changed input mode, but adds current input mode context when punctuation changes.
 - Show only `中`, `英`, or `日` when language/input mode changes.
-- Show `，。  中`, `，。  英`, or `，。  日` for Chinese punctuation, and `,.  中`, `,.  英`, or `,.  日` for English punctuation; spaces separate punctuation from input mode, and both punctuation variants use the same badge dimensions.
+- Show `，。  中`, `，。  英`, or `，。  日` for Chinese punctuation, and `,.  中`, `,.  英`, or `,.  日` for English punctuation; spaces separate punctuation from input mode, both punctuation variants use the same badge dimensions, and the input-mode glyph stays at a fixed size and position.
 - Continue to show `全` or `半` for width mode and `简` or `繁` for simplified/traditional output-mode changes.
 - Automatically hide the indicator approximately 1.5 seconds after the latest show trigger; a newer trigger restarts the timeout.
 - Place the indicator above the caret, with enough vertical clearance that it does not cover the caret or text immediately following it.
@@ -46,7 +46,7 @@ Help users know the active input mode before they type into the wrong mode, addr
 
 - [ ] Changing language/input mode briefly shows only `中`, `英`, or `日`.
 - [ ] Changing punctuation mode briefly shows punctuation plus the current input mode: `，。  中`, `，。  英`, or `，。  日` for Chinese punctuation; `,.  中`, `,.  英`, or `,.  日` for English punctuation.
-- [ ] Chinese- and English-punctuation badges have identical outer dimensions despite their different glyph widths.
+- [ ] Chinese- and English-punctuation badges have identical outer dimensions, and their trailing input-mode glyph remains at the same size and position despite the punctuation glyphs' different widths.
 - [ ] Changing width mode briefly shows `全` or `半`, and changing simplified/traditional output mode briefly shows `简` or `繁`.
 - [ ] The punctuation badge reflects the resulting punctuation state and current input mode, including punctuation modes that do not match the language mode.
 - [ ] Focusing or switching between editable controls without changing input mode does not show the cue.
