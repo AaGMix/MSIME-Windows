@@ -37,26 +37,16 @@ class CCaretStateSwitchEditSession : public CEditSessionBase
         if (FAILED(_pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) || fetched != 1 ||
             !selection.range)
             return S_OK;
-        const TfAnchor caretAnchor = selection.style.ase == TF_AE_START ? TF_ANCHOR_START : TF_ANCHOR_END;
-        selection.range->Collapse(ec, caretAnchor);
-        ITfContextView *view = nullptr;
-        RECT rect{};
-        BOOL clipped = TRUE;
-        if (SUCCEEDED(_pContext->GetActiveView(&view)) && view)
+        POINT anchor{};
+        if (GetCollapsedSelectionPhysicalAnchor(_pContext, ec, selection, &anchor))
         {
-            if (SUCCEEDED(view->GetTextExt(ec, selection.range, &rect, &clipped)) &&
-                (!clipped || (rect.right > rect.left && rect.bottom > rect.top)))
-            {
-                const POINT anchor = GetPhysicalTextAnchor(view, rect);
-                const int point[2] = {anchor.x, anchor.y};
-                if (eventType_ == FanyImePipeEventType::IMESwitch)
-                    SendIMESwitchEventToUIProcessViaNamedPipe(enabled_ ? 1 : 0, point);
-                else if (eventType_ == FanyImePipeEventType::PuncSwitch)
-                    SendPuncSwitchEventToUIProcessViaNamedPipe(enabled_, point);
-                else if (eventType_ == FanyImePipeEventType::DoubleSingleByteSwitch)
-                    SendDoubleSingleByteSwitchEventToUIProcessViaNamedPipe(enabled_, point);
-            }
-            view->Release();
+            const int point[2] = {anchor.x, anchor.y};
+            if (eventType_ == FanyImePipeEventType::IMESwitch)
+                SendIMESwitchEventToUIProcessViaNamedPipe(enabled_ ? 1 : 0, point);
+            else if (eventType_ == FanyImePipeEventType::PuncSwitch)
+                SendPuncSwitchEventToUIProcessViaNamedPipe(enabled_, point);
+            else if (eventType_ == FanyImePipeEventType::DoubleSingleByteSwitch)
+                SendDoubleSingleByteSwitchEventToUIProcessViaNamedPipe(enabled_, point);
         }
         selection.range->Release();
         return S_OK;

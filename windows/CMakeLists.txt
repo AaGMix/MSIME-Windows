@@ -149,6 +149,7 @@ add_library(${PROJECT_NAME} SHARED
     "./src/Register/RegKey.cpp"
     "./src/Register/RegKey.h"
     # Tf
+    "./src/Tf/CaretAnchorPolicy.h"
     "./src/Tf/TfInputProcessorProfile.cpp"
     "./src/Tf/TfInputProcessorProfile.h"
     "./src/Tf/TfTextLayoutSink.cpp"

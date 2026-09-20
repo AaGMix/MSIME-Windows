@@ -3,6 +3,7 @@
 #include "TfTextLayoutSink.h"
 #include "MetasequoiaIME.h"
 #include "GetTextExtentEditSession.h"
+#include "CaretAnchorPolicy.h"
 #include <debugapi.h>
 #include <fmt/xchar.h>
 
@@ -20,6 +21,126 @@ POINT GetPhysicalTextAnchor(_In_ ITfContextView *pContextView, _In_ const RECT &
         }
     }
     return anchor;
+}
+
+namespace
+{
+bool IsUsableTextExtent(const RECT &rect, BOOL clipped)
+{
+    const CaretAnchorRect extent = {rect.left, rect.top, rect.right, rect.bottom};
+    return IsUsableCaretExtent(extent, clipped != FALSE);
+}
+
+enum class AdjacentExtentResult
+{
+    Absent,
+    Boundary,
+    Usable,
+    Failed,
+};
+
+AdjacentExtentResult MeasureAdjacentTextExtent(ITfContextView *view, TfEditCookie ec, ITfRange *caretRange, LONG count,
+                                               RECT *rect)
+{
+    ITfRange *range = nullptr;
+    if (FAILED(caretRange->Clone(&range)) || !range)
+        return AdjacentExtentResult::Failed;
+
+    LONG shifted = 0;
+    const HRESULT shiftResult =
+        count < 0 ? range->ShiftStart(ec, count, &shifted, nullptr) : range->ShiftEnd(ec, count, &shifted, nullptr);
+    if (FAILED(shiftResult))
+    {
+        range->Release();
+        return AdjacentExtentResult::Failed;
+    }
+    if (shifted != count)
+    {
+        range->Release();
+        return AdjacentExtentResult::Absent;
+    }
+
+    WCHAR text[2]{};
+    ULONG fetched = 0;
+    if (FAILED(range->GetText(ec, 0, text, 2, &fetched)) || fetched == 0)
+    {
+        range->Release();
+        return AdjacentExtentResult::Failed;
+    }
+    if (text[0] == L'\r' || text[0] == L'\n' || text[0] == 0x2028 || text[0] == 0x2029)
+    {
+        range->Release();
+        return AdjacentExtentResult::Boundary;
+    }
+
+    BOOL clipped = TRUE;
+    const HRESULT extentResult = view->GetTextExt(ec, range, rect, &clipped);
+    range->Release();
+    return SUCCEEDED(extentResult) && IsUsableTextExtent(*rect, clipped) ? AdjacentExtentResult::Usable
+                                                                         : AdjacentExtentResult::Failed;
+}
+} // namespace
+
+bool GetCollapsedSelectionPhysicalAnchor(ITfContext *pContext, TfEditCookie ec, const TF_SELECTION &selection,
+                                         POINT *anchor)
+{
+    if (!pContext || !selection.range || !anchor)
+        return false;
+
+    ITfRange *caretRange = nullptr;
+    if (FAILED(selection.range->Clone(&caretRange)) || !caretRange)
+        return false;
+
+    const TfAnchor caretAnchor = selection.style.ase == TF_AE_START ? TF_ANCHOR_START : TF_ANCHOR_END;
+    if (FAILED(caretRange->Collapse(ec, caretAnchor)))
+    {
+        caretRange->Release();
+        return false;
+    }
+
+    ITfContextView *view = nullptr;
+    if (FAILED(pContext->GetActiveView(&view)) || !view)
+    {
+        caretRange->Release();
+        return false;
+    }
+
+    RECT previousRect{};
+    RECT nextRect{};
+    const AdjacentExtentResult previous = MeasureAdjacentTextExtent(view, ec, caretRange, -1, &previousRect);
+    const AdjacentExtentResult next = MeasureAdjacentTextExtent(view, ec, caretRange, 1, &nextRect);
+
+    bool resolved = false;
+    RECT caretRect{};
+    if (previous != AdjacentExtentResult::Failed && next != AdjacentExtentResult::Failed &&
+        (previous == AdjacentExtentResult::Usable || next == AdjacentExtentResult::Usable))
+    {
+        const CaretAnchorRect previousAnchor = {previousRect.left, previousRect.top, previousRect.right,
+                                                previousRect.bottom};
+        const CaretAnchorRect nextAnchor = {nextRect.left, nextRect.top, nextRect.right, nextRect.bottom};
+        CaretAnchorPoint selected{};
+        if (SelectAdjacentCaretAnchor(previous == AdjacentExtentResult::Usable ? &previousAnchor : nullptr,
+                                      next == AdjacentExtentResult::Usable ? &nextAnchor : nullptr, &selected))
+        {
+            caretRect = {selected.x, selected.y, selected.x, selected.y};
+            resolved = true;
+        }
+    }
+    else if (previous == AdjacentExtentResult::Absent && next == AdjacentExtentResult::Absent)
+    {
+        BOOL clipped = TRUE;
+        if (SUCCEEDED(view->GetTextExt(ec, caretRange, &caretRect, &clipped)) && IsUsableTextExtent(caretRect, clipped))
+        {
+            resolved = true;
+        }
+    }
+
+    if (resolved)
+        *anchor = GetPhysicalTextAnchor(view, caretRect);
+
+    view->Release();
+    caretRange->Release();
+    return resolved;
 }
 
 CTfTextLayoutSink::CTfTextLayoutSink(_In_ CMetasequoiaIME *pTextService)

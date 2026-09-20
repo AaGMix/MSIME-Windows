@@ -44,22 +44,12 @@ class CKeyCaretAnchorEditSession : public CEditSessionBase
             !selection.range)
             return S_OK;
 
-        const TfAnchor caretAnchor = selection.style.ase == TF_AE_START ? TF_ANCHOR_START : TF_ANCHOR_END;
-        selection.range->Collapse(ec, caretAnchor);
-        ITfContextView *view = nullptr;
-        RECT rect{};
-        BOOL clipped = TRUE;
-        if (SUCCEEDED(_pContext->GetActiveView(&view)) && view)
+        POINT anchor{};
+        if (GetCollapsedSelectionPhysicalAnchor(_pContext, ec, selection, &anchor))
         {
-            if (SUCCEEDED(view->GetTextExt(ec, selection.range, &rect, &clipped)) &&
-                (!clipped || (rect.right > rect.left && rect.bottom > rect.top)))
-            {
-                const POINT anchor = GetPhysicalTextAnchor(view, rect);
-                point_[0] = anchor.x;
-                point_[1] = anchor.y;
-                *resolved_ = true;
-            }
-            view->Release();
+            point_[0] = anchor.x;
+            point_[1] = anchor.y;
+            *resolved_ = true;
         }
         selection.range->Release();
         return S_OK;
@@ -2560,9 +2550,8 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
             ResolveKeyCaretAnchor(this, pContext, _tfClientId, keyPoint);
 
         PerfTimer writeShmTimer;
-        WriteDataToSharedMemory(Global::Keycode, wch, Global::ModifiersDown,
-                                includeCaretAnchor ? keyPoint : nullptr, 0, L"",
-                                includeCaretAnchor ? 0b001111 : 0b000111);
+        WriteDataToSharedMemory(Global::Keycode, wch, Global::ModifiersDown, includeCaretAnchor ? keyPoint : nullptr, 0,
+                                L"", includeCaretAnchor ? 0b001111 : 0b000111);
 
         PerfTimer sendKeyEventTimer;
         const KeyEventSendResult sendResult = SendKeyEventToUIProcess(&requestId);
