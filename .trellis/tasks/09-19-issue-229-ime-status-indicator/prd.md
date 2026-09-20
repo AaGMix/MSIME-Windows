@@ -13,7 +13,7 @@ Help users know the active input mode before they type into the wrong mode, addr
 
 ## Requirements
 
-- Reuse the existing TSF caret/text-extent and focus-session information rather than creating a second source of cursor position or input-mode state. For transient switch events, do not trust a host's collapsed-selection `GetTextExt` as the primary anchor: measure cloned adjacent character ranges and recover the caret from the previous character's right edge or next character's left edge without mutating the actual selection; ambiguous, clipped, degenerate, or unavailable geometry must fail closed.
+- Reuse the existing TSF caret/text-extent and focus-session information rather than creating a second source of cursor position or input-mode state.
 - Keep input-mode state authoritative in the existing TSF/Server flow; the indicator is presentation only and must not implement its own mode state machine.
 - Match the active candidate-window skin's background, border, and text colors (including the resolved light/dark variant and custom skin color definitions); keep the indicator's size, placement, glyph layout, and lifetime unchanged. Do not import skin images, CSS effects, or shape changes.
 - Do not change the behavior, defaults, or component set of the existing persistent floating toolbar unless the chosen UX explicitly requires it.
@@ -60,7 +60,7 @@ Help users know the active input mode before they type into the wrong mode, addr
 - [ ] The cue does not activate, steal focus, consume keystrokes, or alter composition/candidate behavior.
 - [ ] The cue is removed when the focus session becomes stale, the input method deactivates, or the feature is disabled.
 - [ ] Existing input-mode, input-scheme, punctuation, and `Ctrl+Shift+F` simplified/traditional shortcuts produce the appropriate cue when their state changes.
-- [ ] The cue works in Telegram, Windows Terminal, Win32 EDIT, Chromium/Electron, and Office-style focus transitions, or fails closed without disrupting input when the host cannot expose a usable caret anchor. Telegram's collapsed-selection extent must not place the cue above the real text line when its normal composition-range candidate anchor is correct.
+- [ ] The cue works in Windows Terminal as well as Win32 EDIT, Chromium/Electron, and Office-style focus transitions, or fails closed without disrupting input when the host cannot expose a usable caret anchor.
 - [ ] The installed/local RC settings page exposes and persists the caret-indicator setting.
 - [ ] The floating-toolbar settings page presents the caret indicator in a separate card containing its enable switch, position selector, and a skin-aware preview of `中`, `，。  中`, `全`, and `简`; each sample includes a simulated text caret in a clearly separated visual area, and the samples use one row when space permits or two rows of two when constrained, never four rows. Changing the position selector immediately moves all four preview badges to the selected position relative to their carets, including initial and refreshed configuration snapshots; the floating-toolbar card and preview contain only floating-toolbar controls/content.
 - [ ] Existing floating-toolbar behavior and settings continue to work unchanged.

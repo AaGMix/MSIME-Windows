@@ -39,7 +39,7 @@ Rollback point: the Server window can be disabled by config without touching TSF
 
 - [ ] Restore the existing `IMESwitch`, `PuncSwitch`, and `DoubleSingleByteSwitch` sends only for real compartment edges, not initialization/focus/reconnect synchronization.
 - [ ] Trace and cover existing input-mode, input-scheme, and punctuation shortcut paths; add the smallest compatible event mapping for `Ctrl+Shift+F` simplified/traditional changes without changing shortcut behavior.
-- [ ] Resolve the current selection's physical caret anchor in an edit session on the TSF owner thread at switch time. Clone rather than mutate the real selection; prefer adjacent one-character extents over the host's collapsed-range extent, derive the caret from the previous character's right edge or next character's left edge, and fail closed on clipped, degenerate, cross-line, bidi/overlapping, or unavailable geometry.
+- [ ] Resolve the current selection's physical text anchor in an edit session on the TSF owner thread at switch time.
 - [ ] Populate the existing switch event's `keycode` and `point[2]` fields; keep protocol struct layout and event ids unchanged.
 - [ ] Preserve existing complete `StatusSnapshot` sends as the authoritative state synchronization path.
 - [ ] Ensure stale focus sessions, missing layouts, empty/non-editable contexts, and failed pipe sends silently suppress only the badge notification.
@@ -66,7 +66,6 @@ Validation:
 
 - [ ] Unit tests prove the pure trigger/visibility mapping.
 - [ ] Manual focus churn confirms stale events cannot display beside a newly focused application.
-- [ ] Manual Telegram testing confirms the transient cue shares the correct text line with the caret when the normal composition-range candidate window is correctly positioned; cover mid-line, line start/end, wrapped lines, empty input, and mixed-direction text.
 - [ ] Manual Windows Terminal testing confirms the indicator appears when a valid anchor is available, or fails closed without affecting text input when it is not.
 
 ## 5. Settings UI
@@ -92,7 +91,7 @@ pnpm test
 - [ ] Run Server tests and x64/x86 TSF builds.
 - [ ] Run settings TypeScript build/tests.
 - [ ] Verify contract/shared-copy checks remain clean; no WebView contract change is expected.
-- [ ] Manually verify Telegram, Win32 EDIT, Chromium/Electron, Office-style editors, and Windows Terminal.
+- [ ] Manually verify Win32 EDIT, Chromium/Electron, Office-style editors, and Windows Terminal.
 - [ ] Build and install a local RC package using the locally installed Inno Setup 6 compiler at the machine-specific path, supplied only as a command argument and never committed.
 - [ ] For each host, check Shift/language-bar mode switching, full/half switching, punctuation switching, rapid repeated switching, focus loss during the 1.5 s timer, IME switch-away, Server restart, and multi-monitor DPI movement.
 - [ ] Confirm the badge never appears while the floating toolbar is enabled and that turning both settings off shows neither surface.
