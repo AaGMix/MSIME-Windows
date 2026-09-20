@@ -69,9 +69,9 @@ int SendClientSuspendedEventToServerViaNamedPipe();
 int SendIMEStatusSnapshotToUIProcessViaNamedPipe(bool kbdIsOpen, bool fullwidthIsOpen, bool puncIsOpen,
                                                  bool assertsFocusOwnership = false);
 int SendIMEStatusEventToUIProcessViaNamedPipe(bool kbdIsOpen, bool fullwidthIsOpen, bool puncIsOpen);
-int SendIMESwitchEventToUIProcessViaNamedPipe(UINT uImeStatus);
-int SendPuncSwitchEventToUIProcessViaNamedPipe(BOOL isPunc);
-int SendDoubleSingleByteSwitchEventToUIProcessViaNamedPipe(BOOL isDoubleSingleByte);
+int SendIMESwitchEventToUIProcessViaNamedPipe(UINT uImeStatus, const int point[2]);
+int SendPuncSwitchEventToUIProcessViaNamedPipe(BOOL isPunc, const int point[2]);
+int SendDoubleSingleByteSwitchEventToUIProcessViaNamedPipe(BOOL isDoubleSingleByte, const int point[2]);
 
 bool SendToAuxNamedpipe(const std::wstring &pipeData, bool waitForAcknowledgement = false);
 

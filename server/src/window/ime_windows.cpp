@@ -26,6 +26,8 @@
 #include "utils/ime_utils.h"
 #include "window_hook.h"
 #include "window/floating_toolbar_visibility_policy.h"
+#include "window/caret_state_indicator.h"
+#include "window/caret_state_indicator_policy.h"
 #include "log/candidate_diag_log.h"
 #include "log/ftb_diag_log.h"
 #include "voice-input/voice_input_service.h"
@@ -1791,6 +1793,10 @@ void ApplyConfiguredFloatingToolbarVisibility(const wchar_t *reason)
     const HWND foreground = GetForegroundWindow();
     const bool fullscreen = foreground && CheckFullscreen(foreground);
     const bool configured = GetConfiguredFloatingToolbarEnabled();
+    if (configured && ::global_hwnd_caret_state)
+    {
+        PostMessage(::global_hwnd_caret_state, WM_HIDE_CARET_STATE, 0, 0);
+    }
     const bool should_show = FanyImeUi::ShouldShowFloatingToolbar(configured, fullscreen, g_is_ime_active);
     const bool is_visible = IsWindowVisible(::global_hwnd_ftb) != FALSE;
     const bool paint_grace = IsFloatingToolbarPaintGraceActive();
@@ -2141,6 +2147,15 @@ int CreateCandidateWindow(HINSTANCE hInstance)
     const int ftbCornerInset = static_cast<int>(std::lround(10.0 * static_cast<double>(scale > 0 ? scale : 1.0f)));
     const int ftbX = ftbMonitor.right - ftbWidth - ftbCornerInset;
     const int ftbY = ftbMonitor.bottom - ftbHeight - ftbTaskbarHeight - ftbCornerInset;
+    HWND hwnd_caret_state =
+        CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT, szWindowClass,
+                        lpWindowNameCaretState, WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, hInstance, nullptr);
+    if (!hwnd_caret_state)
+        return 1;
+    ::global_hwnd_caret_state = hwnd_caret_state;
+    SetLayeredWindowAttributes(hwnd_caret_state, 0, 245, LWA_ALPHA);
+    ShowWindow(hwnd_caret_state, SW_HIDE);
+
     HWND hwnd_ftb = CreateWindowEx( //
         dwExStyle,                  //
         szWindowClass,              //
@@ -2277,6 +2292,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     if (hwnd == ::global_hwnd_ftb)
     {
         return WndProcFtbWindow(hwnd, message, wParam, lParam);
+    }
+    if (hwnd == ::global_hwnd_caret_state)
+    {
+        return WndProcCaretStateWindow(hwnd, message, wParam, lParam);
     }
 
     return DefWindowProc(hwnd, message, wParam, lParam);
@@ -2739,6 +2758,7 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
             const std::string previous_layout = GetConfiguredCandidateWindowLayout();
             const std::string previous_candidate_skin = GetConfiguredCandidateSkin();
             const bool previous_floating_toolbar = GetConfiguredFloatingToolbarEnabled();
+            const bool previous_caret_state_indicator = GetConfiguredCaretStateIndicatorEnabled();
             const FloatingToolbarItemsConfig previous_floating_toolbar_items = GetConfiguredFloatingToolbarItems();
             const double previous_floating_toolbar_scale = GetConfiguredFloatingToolbarScale();
             const int previous_floating_toolbar_font_size = GetConfiguredFloatingToolbarFontSize();
@@ -2817,6 +2837,11 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
                 {
                     ApplyConfiguredFloatingToolbarVisibility(L"config-sync");
                     SyncMenuFloatingToolbarToggle();
+                }
+                if (previous_caret_state_indicator != GetConfiguredCaretStateIndicatorEnabled() &&
+                    !GetConfiguredCaretStateIndicatorEnabled() && ::global_hwnd_caret_state)
+                {
+                    PostMessage(::global_hwnd_caret_state, WM_HIDE_CARET_STATE, 0, 0);
                 }
                 if (!FloatingToolbarItemsEqual(previous_floating_toolbar_items, GetConfiguredFloatingToolbarItems()))
                 {
@@ -3460,6 +3485,7 @@ LRESULT CALLBACK WndProcSettingsWindow(HWND hwnd, UINT message, WPARAM wParam, L
             const std::string previous_layout = GetConfiguredCandidateWindowLayout();
             const std::string previous_candidate_skin = GetConfiguredCandidateSkin();
             const bool previous_floating_toolbar = GetConfiguredFloatingToolbarEnabled();
+            const bool previous_caret_state_indicator = GetConfiguredCaretStateIndicatorEnabled();
             const FloatingToolbarItemsConfig previous_floating_toolbar_items = GetConfiguredFloatingToolbarItems();
             const double previous_floating_toolbar_scale = GetConfiguredFloatingToolbarScale();
             const int previous_floating_toolbar_font_size = GetConfiguredFloatingToolbarFontSize();
@@ -3525,6 +3551,11 @@ LRESULT CALLBACK WndProcSettingsWindow(HWND hwnd, UINT message, WPARAM wParam, L
                 {
                     ApplyConfiguredFloatingToolbarVisibility(L"config-sync");
                     SyncMenuFloatingToolbarToggle();
+                }
+                if (previous_caret_state_indicator != GetConfiguredCaretStateIndicatorEnabled() &&
+                    !GetConfiguredCaretStateIndicatorEnabled() && ::global_hwnd_caret_state)
+                {
+                    PostMessage(::global_hwnd_caret_state, WM_HIDE_CARET_STATE, 0, 0);
                 }
                 if (!FloatingToolbarItemsEqual(previous_floating_toolbar_items, GetConfiguredFloatingToolbarItems()))
                 {
@@ -3810,6 +3841,60 @@ LRESULT CALLBACK WndProcSettingsWindow(HWND hwnd, UINT message, WPARAM wParam, L
         }
         break;
     }
+    }
+    return DefWindowProc(hwnd, message, wParam, lParam);
+}
+
+LRESULT CALLBACK WndProcCaretStateWindow(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    if (IsSystemLightDarkToggle(message, lParam))
+    {
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+
+    switch (message)
+    {
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
+    case WM_NCHITTEST:
+        return HTTRANSPARENT;
+    case WM_PAINT: {
+        PAINTSTRUCT ps{};
+        HDC dc = BeginPaint(hwnd, &ps);
+        CaretStateIndicator::Paint(hwnd, dc);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_TIMER:
+        if (wParam == 1)
+        {
+            KillTimer(hwnd, 1);
+            CaretStateIndicator::Hide(hwnd);
+            ::is_global_wnd_caret_state_shown = false;
+            return 0;
+        }
+        break;
+    case WM_SHOW_CARET_STATE: {
+        std::unique_ptr<CaretStateIndicator::ShowRequest> request(
+            reinterpret_cast<CaretStateIndicator::ShowRequest *>(lParam));
+        if (!request || !FanyImeUi::ShouldShowCaretStateIndicator(
+                            GetConfiguredCaretStateIndicatorEnabled(), GetConfiguredFloatingToolbarEnabled(),
+                            g_is_ime_active, request ? request->caret.x : 0, request ? request->caret.y : -100000))
+        {
+            CaretStateIndicator::Hide(hwnd);
+            ::is_global_wnd_caret_state_shown = false;
+            return 0;
+        }
+        const bool topmost = EnsureSmallWindowsTopmost(L"show-caret-state");
+        CaretStateIndicator::Show(hwnd, request->text, request->caret, topmost);
+        ::is_global_wnd_caret_state_shown = true;
+        return 0;
+    }
+    case WM_HIDE_CARET_STATE:
+        CaretStateIndicator::Hide(hwnd);
+        ::is_global_wnd_caret_state_shown = false;
+        return 0;
     }
     return DefWindowProc(hwnd, message, wParam, lParam);
 }

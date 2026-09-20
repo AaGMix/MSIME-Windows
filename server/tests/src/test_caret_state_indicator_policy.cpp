@@ -1,0 +1,44 @@
+#include "tests/includes/test_framework.h"
+#include "window/caret_state_indicator_policy.h"
+
+TEST_CASE(caret_state_indicator_visibility_is_complementary)
+{
+    REQUIRE(FanyImeUi::ShouldShowCaretStateIndicator(true, false, true, 50, 100));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(false, false, true, 50, 100));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, true, true, 50, 100));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, false, 50, 100));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, true, 0, 0));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, true, 50, -10000));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, true, 50, -100000));
+}
+
+TEST_CASE(caret_state_indicator_maps_input_mode_to_one_glyph)
+{
+    using FanyImeUi::InputModeGlyph;
+    REQUIRE_EQ(InputModeGlyph(true, false), L'中');
+    REQUIRE_EQ(InputModeGlyph(false, false), L'英');
+    REQUIRE_EQ(InputModeGlyph(true, true), L'日');
+}
+
+TEST_CASE(caret_state_indicator_combines_punctuation_and_input_mode)
+{
+    using FanyImeUi::PunctuationInputModeText;
+    REQUIRE_EQ(PunctuationInputModeText(true, true, false), L"，。  中");
+    REQUIRE_EQ(PunctuationInputModeText(false, true, false), L",.  中");
+    REQUIRE_EQ(PunctuationInputModeText(true, false, false), L"，。  英");
+    REQUIRE_EQ(PunctuationInputModeText(false, false, false), L",.  英");
+    REQUIRE_EQ(PunctuationInputModeText(true, true, true), L"，。  日");
+    REQUIRE_EQ(PunctuationInputModeText(false, true, true), L",.  日");
+    REQUIRE_EQ(PunctuationInputModeText(true, true, false).size(),
+               PunctuationInputModeText(false, true, false).size());
+}
+
+TEST_CASE(caret_state_indicator_maps_single_state_switches_to_one_glyph)
+{
+    using FanyImeUi::CaretStateGlyph;
+    using FanyImeUi::CaretStateKind;
+    REQUIRE_EQ(CaretStateGlyph(CaretStateKind::Width, true), L'全');
+    REQUIRE_EQ(CaretStateGlyph(CaretStateKind::Width, false), L'半');
+    REQUIRE_EQ(CaretStateGlyph(CaretStateKind::CharacterSet, false), L'简');
+    REQUIRE_EQ(CaretStateGlyph(CaretStateKind::CharacterSet, true), L'繁');
+}
