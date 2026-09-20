@@ -16,6 +16,10 @@ diagnostic_log = false
 tsf_diagnostic_log = false
 # 悬浮工具栏
 floating_toolbar = true
+# 悬浮工具栏关闭时，在光标附近显示短暂状态提示
+caret_state_indicator = true
+# 光标状态提示位置：top-left / top / top-right / bottom
+caret_state_indicator_position = "top-left"
 # 悬浮工具栏组件（中英文切换始终显示）
 floating_toolbar_fullwidth = true
 floating_toolbar_punctuation = true
