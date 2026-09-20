@@ -99,7 +99,7 @@ pnpm test
 ## 7. Candidate-skin palette for the badge (follow-up)
 
 - [ ] Reuse the candidate presenter's effective surface, border and final text-color resolution for built-in skins, the resolved candidate light/dark mode, and custom `skin.toml` color overrides; avoid a second drifting palette table.
-- [ ] Keep existing badge dimensions, fixed punctuation slots, positioning, font sizing and lifetime unchanged. Do not introduce WebView2, CSS/image rendering or new settings.
+- [ ] Keep punctuation badges compact and synchronized between native rendering and the settings preview: 64 DIP punctuation slot + 2 DIP gap + fixed 30 DIP input-mode slot = 96 DIP total, with identical Chinese/ASCII outer dimensions and unchanged 20 DIP font size.
 - [ ] Confirm that switching candidate skin/theme is reflected at the next badge display, including when the floating toolbar has a different theme.
 
 Validation: run clang-format 18.1.8 dry-run on changed C++, build Server and Server tests, run `ctest --test-dir server/build-release -C Release --output-on-failure`, and manually inspect built-in/custom skins in light/dark variants at supported DPI scales.
