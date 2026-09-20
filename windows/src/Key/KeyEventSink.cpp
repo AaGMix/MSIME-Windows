@@ -16,6 +16,8 @@
 #include "FanyUtils.h"
 #include "FanyDefines.h"
 #include "FanyLog.h"
+#include "EditSession.h"
+#include "TfTextLayoutSink.h"
 #include "../Utils/PerfTimer.h"
 #include <chrono>
 #include "../../../engine/contracts/ipc_negotiation.h"
@@ -27,6 +29,63 @@
 namespace
 {
 constexpr UINT kMaxDeferredKeyReplayAttempts = 8;
+
+class CKeyCaretAnchorEditSession : public CEditSessionBase
+{
+  public:
+    CKeyCaretAnchorEditSession(CMetasequoiaIME *textService, ITfContext *context, int point[2], bool *resolved)
+        : CEditSessionBase(textService, context), point_(point), resolved_(resolved)
+    {
+    }
+
+    STDMETHODIMP DoEditSession(TfEditCookie ec) override
+    {
+        TF_SELECTION selection{};
+        ULONG fetched = 0;
+        if (FAILED(_pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) || fetched != 1 ||
+            !selection.range)
+            return S_OK;
+
+        const TfAnchor caretAnchor = selection.style.ase == TF_AE_START ? TF_ANCHOR_START : TF_ANCHOR_END;
+        selection.range->Collapse(ec, caretAnchor);
+        ITfContextView *view = nullptr;
+        RECT rect{};
+        BOOL clipped = TRUE;
+        if (SUCCEEDED(_pContext->GetActiveView(&view)) && view)
+        {
+            if (SUCCEEDED(view->GetTextExt(ec, selection.range, &rect, &clipped)) &&
+                (!clipped || (rect.right > rect.left && rect.bottom > rect.top)))
+            {
+                const POINT anchor = GetPhysicalTextAnchor(view, rect);
+                point_[0] = anchor.x;
+                point_[1] = anchor.y;
+                *resolved_ = true;
+            }
+            view->Release();
+        }
+        selection.range->Release();
+        return S_OK;
+    }
+
+  private:
+    int *point_;
+    bool *resolved_;
+};
+
+bool ResolveKeyCaretAnchor(CMetasequoiaIME *textService, ITfContext *context, TfClientId clientId, int point[2])
+{
+    point[0] = 0;
+    point[1] = Global::INVALID_Y;
+    bool resolved = false;
+    auto *session = new (std::nothrow) CKeyCaretAnchorEditSession(textService, context, point, &resolved);
+    if (!session)
+        return false;
+    HRESULT sessionResult = E_FAIL;
+    const HRESULT requestResult =
+        context->RequestEditSession(clientId, session, TF_ES_SYNC | TF_ES_READ, &sessionResult);
+    session->Release();
+    return SUCCEEDED(requestResult) && SUCCEEDED(sessionResult) && resolved;
+}
 
 // A recovery checkpoint may need one INPUT for every raw pinyin character and
 // one MOVE_LEFT for every character to the right of the caret.  Keep enough
@@ -2599,8 +2658,15 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
         Global::wch = wch;
         Global::ModifiersDown = capturedModifiers;
 
+        int keyPoint[2] = {0, Global::INVALID_Y};
+        const bool includeCaretAnchor = KeystrokeState.Function == FUNCTION_TOGGLE_CHARACTER_SET;
+        if (includeCaretAnchor)
+            ResolveKeyCaretAnchor(this, pContext, _tfClientId, keyPoint);
+
         PerfTimer writeShmTimer;
-        WriteDataToSharedMemory(Global::Keycode, wch, Global::ModifiersDown, nullptr, 0, L"", 0b000111);
+        WriteDataToSharedMemory(Global::Keycode, wch, Global::ModifiersDown,
+                                includeCaretAnchor ? keyPoint : nullptr, 0, L"",
+                                includeCaretAnchor ? 0b001111 : 0b000111);
 
         PerfTimer sendKeyEventTimer;
         const KeyEventSendResult sendResult = SendKeyEventToUIProcess(&requestId);

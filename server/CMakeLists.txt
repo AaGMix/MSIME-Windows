@@ -228,6 +228,8 @@ set(SRC_FILES
     "./src/window/tray_menu_presenter.h"
     "./src/window/floating_toolbar_presenter.cpp"
     "./src/window/floating_toolbar_presenter.h"
+    "./src/window/caret_state_indicator.cpp"
+    "./src/window/caret_state_indicator.h"
     "./src/window/ime_windows.cpp"
     "./src/window/ime_windows.h"
     "./src/window/window_hook.cpp"

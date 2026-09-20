@@ -1796,35 +1796,35 @@ int SendIMEDeactivationEventToUIProcessViaNamedPipe()
     return 0;
 }
 
-int SendIMESwitchEventToUIProcessViaNamedPipe(UINT uImeStatus)
+int SendIMESwitchEventToUIProcessViaNamedPipe(UINT uImeStatus, const int point[2])
 {
     namedpipeData = {};
     namedpipeData.event_type = FanyImePipeEventType::IMESwitch;
-    /* 利用其他的字段，把 IME 的中英状态传递过去 */
     namedpipeData.keycode = uImeStatus;
+    namedpipeData.point[0] = point[0];
+    namedpipeData.point[1] = point[1];
     SendToNamedpipe();
-
     return 0;
 }
 
-int SendPuncSwitchEventToUIProcessViaNamedPipe(BOOL isPunc)
+int SendPuncSwitchEventToUIProcessViaNamedPipe(BOOL isPunc, const int point[2])
 {
     namedpipeData = {};
     namedpipeData.event_type = FanyImePipeEventType::PuncSwitch;
-    /* 利用其他的字段，把标点符号的中英状态传递过去 */
     namedpipeData.keycode = isPunc;
+    namedpipeData.point[0] = point[0];
+    namedpipeData.point[1] = point[1];
     SendToNamedpipe();
-
     return 0;
 }
 
-int SendDoubleSingleByteSwitchEventToUIProcessViaNamedPipe(BOOL isDoubleSingleByte)
+int SendDoubleSingleByteSwitchEventToUIProcessViaNamedPipe(BOOL isDoubleSingleByte, const int point[2])
 {
     namedpipeData = {};
     namedpipeData.event_type = FanyImePipeEventType::DoubleSingleByteSwitch;
-    /* 利用其他的字段，把全角/半角的状态传递过去 */
     namedpipeData.keycode = isDoubleSingleByte;
+    namedpipeData.point[0] = point[0];
+    namedpipeData.point[1] = point[1];
     SendToNamedpipe();
-
     return 0;
 }
