@@ -163,6 +163,7 @@ jobs:
           测试完成后如需移除证书，可在 certmgr.msc / certlm.msc 中删除
           “Metasequoia IME Local Test Code Signing”。
           '@ | Set-Content -LiteralPath Output/INSTALL-TEST-BUILD.txt -Encoding utf8
+          Copy-Item -LiteralPath Install-CiTestBuild.cmd -Destination Output/Install-CiTestBuild.cmd
           Get-FileHash Output/MetasequoiaIME_Setup_*.exe -Algorithm SHA256 |
             Format-List | Out-File Output/SHA256.txt -Encoding utf8
 
@@ -173,7 +174,7 @@ jobs:
           path: |
             installer/Output/MetasequoiaIME_Setup_*.exe
             installer/Output/MetasequoiaImeLocalTest.cer
-            installer/Install-CiTestBuild.cmd
+            installer/Output/Install-CiTestBuild.cmd
             installer/Output/INSTALL-TEST-BUILD.txt
             installer/Output/SHA256.txt
           if-no-files-found: error
