@@ -107,9 +107,9 @@ Validation: run clang-format 18.1.8 dry-run on changed C++, build Server and Ser
 ## 8. Separate settings card and preview (follow-up)
 
 - [ ] On the existing floating-toolbar page, move the caret-indicator switch and position selector into a separate card; keep the floating-toolbar card/preview focused on the toolbar.
-- [ ] Add a compact browser-side preview of the actual indicator geometry and candidate-skin palette without adding a sidebar page or new persisted configuration. Show all four samples in one row when space permits, switch directly to two rows of two when constrained, never allow four rows, and include a simulated text caret with every sample.
+- [ ] Add a compact browser-side preview of the actual indicator geometry and candidate-skin palette without adding a sidebar page or new persisted configuration. Show all four samples in one row when space permits, switch directly to two rows of two when constrained, never allow four rows, and include a simulated text caret in a clearly separated visual area for every sample. Drive all four preview positions immediately from the existing position dropdown and configuration snapshot.
 - [ ] Reuse the settings page's candidate-skin/theme preview state rather than adding a second skin catalog or runtime state machine.
-- [ ] Add focused UI tests for card separation, four-column/two-column responsive layout, one simulated caret per sample, and preview updates when candidate skin/theme/text color changes.
+- [ ] Add focused UI tests for card separation, four-column/two-column responsive layout, visually separated samples, one simulated caret per sample, all four selector positions, initial/refreshed snapshot application, and preview updates when candidate skin/theme/text color changes.
 
 Validation: run the settings TypeScript build/tests and package the generated `dist`; manually compare the preview with the native indicator for built-in light/dark skins.
 
