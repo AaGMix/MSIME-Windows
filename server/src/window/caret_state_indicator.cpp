@@ -14,7 +14,7 @@ constexpr int kBaseHeightDip = 30;
 constexpr int kAdditionalCharacterWidthDip = 20;
 constexpr int kPunctuationSlotWidthDip = 72;
 constexpr int kPunctuationModeSlotWidthDip = 30;
-constexpr int kPunctuationModeGapDip = 4;
+constexpr int kPunctuationModeGapDip = 2;
 constexpr int kCaretGapDip = 6;
 constexpr int kCaretLineHeightDip = 24;
 
