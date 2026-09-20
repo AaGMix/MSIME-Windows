@@ -83,7 +83,7 @@ Suggested label: `关闭悬浮工具栏时显示状态提示`.
 
 Turning on the floating toolbar hides an active badge immediately. Turning off the toolbar does not itself show a badge; the next supported state change does.
 
-The existing floating-toolbar settings page keeps both features discoverable without adding another sidebar destination, but separates them into two cards. The toolbar card owns only its switch and toolbar preview. A dedicated caret-indicator card owns the indicator switch, position selector, and a browser-side preview that uses the same candidate-skin preview tokens; it is a visual sample only and does not duplicate runtime state or positioning logic.
+The existing floating-toolbar settings page keeps both features discoverable without adding another sidebar destination, but separates them into two cards. The toolbar card owns only its switch and toolbar preview. A dedicated caret-indicator card owns the indicator switch, position selector, and a browser-side preview that uses the same candidate-skin preview tokens; it is a visual sample only and does not duplicate runtime state or positioning logic. Each of the four samples includes a simulated text caret and preserves the native badge-to-caret offset. A four-column grid keeps all samples on one row when the preview is wide enough; a container query switches directly to two columns below that width, guaranteeing two rows rather than allowing four one-item rows.
 
 ## Data Flow
 
