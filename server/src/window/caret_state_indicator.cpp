@@ -12,8 +12,9 @@ constexpr UINT kHideTimer = 1;
 constexpr UINT kHideDelayMs = 1500;
 constexpr int kBaseHeightDip = 30;
 constexpr int kAdditionalCharacterWidthDip = 20;
+constexpr int kPunctuationSlotWidthDip = 72;
 constexpr int kPunctuationModeSlotWidthDip = 30;
-constexpr int kPunctuationModeGapDip = 8;
+constexpr int kPunctuationModeGapDip = 4;
 constexpr int kCaretGapDip = 6;
 constexpr int kCaretLineHeightDip = 24;
 
@@ -43,7 +44,12 @@ void Show(HWND hwnd, const std::wstring &text, POINT caret, bool topmost)
     g_state.dpi = static_cast<UINT>(std::lround(GetScaleForPoint(caret) * 96.0f));
     const int height = PixelSize(kBaseHeightDip, g_state.dpi);
     const int extraCharacters = (std::max)(0, static_cast<int>(text.size()) - 1);
-    const int width = height + PixelSize(kAdditionalCharacterWidthDip * extraCharacters, g_state.dpi);
+    const int width =
+        text.size() == 5
+            ? PixelSize(kPunctuationSlotWidthDip, g_state.dpi) +
+                  PixelSize(kPunctuationModeGapDip, g_state.dpi) +
+                  PixelSize(kPunctuationModeSlotWidthDip, g_state.dpi)
+            : height + PixelSize(kAdditionalCharacterWidthDip * extraCharacters, g_state.dpi);
     const int gap = PixelSize(kCaretGapDip, g_state.dpi);
     const int caretLineHeight = PixelSize(kCaretLineHeightDip, g_state.dpi);
     MONITORINFO info{sizeof(info)};
