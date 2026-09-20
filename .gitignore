@@ -23,3 +23,9 @@ log.txt
 /language-model/sc.lm
 /language-model/sc.lm.incoming
 __pycache__/
+
+# Local AI-agent and Trellis workspace metadata.
+/.trellis/
+/.agents/
+/.pi/
+AGENTS.md

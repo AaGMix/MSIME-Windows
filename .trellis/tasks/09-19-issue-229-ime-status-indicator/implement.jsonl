@@ -1,2 +1,0 @@
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"The feature crosses TSF compartment events, versioned IPC payloads, Server window ownership, config persistence, and settings UI."}
-{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse existing switch event ids, payload point fields, candidate positioning helpers, D2D resources, and settings toggle/config-sync patterns instead of adding parallel mechanisms."}
