@@ -11,6 +11,8 @@ constexpr UINT kHideTimer = 1;
 constexpr UINT kHideDelayMs = 1500;
 constexpr int kBaseHeightDip = 30;
 constexpr int kAdditionalCharacterWidthDip = 20;
+constexpr int kPunctuationModeSlotWidthDip = 30;
+constexpr int kPunctuationModeGapDip = 8;
 constexpr int kCaretGapDip = 6;
 
 struct State
@@ -89,8 +91,22 @@ void Paint(HWND hwnd, HDC dc)
         CreateFontW(-PixelSize(20, g_state.dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
     HGDIOBJ old = SelectObject(dc, font);
-    DrawTextW(dc, g_state.text.c_str(), static_cast<int>(g_state.text.size()), &rc,
-              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (g_state.text.size() == 5)
+    {
+        RECT modeRect = rc;
+        modeRect.left = (std::max)(rc.left, rc.right - PixelSize(kPunctuationModeSlotWidthDip, g_state.dpi));
+        RECT punctuationRect = rc;
+        punctuationRect.right =
+            (std::max)(punctuationRect.left,
+                       modeRect.left - PixelSize(kPunctuationModeGapDip, g_state.dpi));
+        DrawTextW(dc, g_state.text.c_str(), 2, &punctuationRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(dc, g_state.text.c_str() + 4, 1, &modeRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    else
+    {
+        DrawTextW(dc, g_state.text.c_str(), static_cast<int>(g_state.text.size()), &rc,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
     SelectObject(dc, old);
     DeleteObject(font);
 }
