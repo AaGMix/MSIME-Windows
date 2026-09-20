@@ -17,6 +17,13 @@ inline bool ShouldShowCaretStateIndicator(bool indicatorEnabled, bool floatingTo
            (anchorX != 0 || anchorY != 0);
 }
 
+inline int CaretStateIndicatorY(bool belowCaret, int anchorY, int indicatorHeight, int caretLineHeight, int gap)
+{
+    // The TSF anchor is GetTextExt.bottom, so an upper badge must also clear
+    // the caret's text line. The lower position already starts below it.
+    return belowCaret ? anchorY + gap : anchorY - indicatorHeight - caretLineHeight - gap;
+}
+
 inline wchar_t InputModeGlyph(bool imeEnabled, bool japaneseMode)
 {
     return imeEnabled ? (japaneseMode ? L'日' : L'中') : L'英';
