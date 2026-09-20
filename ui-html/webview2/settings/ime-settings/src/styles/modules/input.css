@@ -54,12 +54,8 @@
   min-width: 110px;
 }
 
-.punctuation-lock-section .section-header {
-  padding: 4px 0;
-}
-
-.punctuation-lock-section .input-option-divider {
-  margin: 12px 0;
+.punctuation-lock-options .radio-option {
+  padding: 8px 4px;
 }
 
 .input-setting-description {

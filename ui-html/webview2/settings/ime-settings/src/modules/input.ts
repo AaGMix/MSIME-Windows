@@ -252,15 +252,14 @@ export function setupInput(): void {
       if (radio.checked && !radio.disabled) updateConfig('input.word_to_character_keys', radio.value);
     });
   });
-  // punctuation_lock 是单值配置（follow/chinese/english），两个开关互斥：
-  // 打开一个就要把另一个回填成关闭，否则界面会出现两个都亮的假象。
-  setupToggleButton('alwaysChinesePunctuationToggleBtn', (active) => {
-    if (active) applyToggleState('alwaysEnglishPunctuationToggleBtn', false);
-    updateConfig('input.punctuation_lock', active ? 'chinese' : 'follow');
-  });
-  setupToggleButton('alwaysEnglishPunctuationToggleBtn', (active) => {
-    if (active) applyToggleState('alwaysChinesePunctuationToggleBtn', false);
-    updateConfig('input.punctuation_lock', active ? 'english' : 'follow');
+  // punctuation_lock 是单值配置（follow/chinese/english），用单选组表达三者互斥。
+  document.querySelectorAll<HTMLInputElement>('input[name="punctuation-lock"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      if (applyingInputConfig) return;
+      if (!radio.checked) return;
+      if (radio.value !== 'follow' && radio.value !== 'chinese' && radio.value !== 'english') return;
+      updateConfig('input.punctuation_lock', radio.value);
+    });
   });
   setupToggleButton('autocorrectTranspositionToggleBtn', (active) => {
     updateConfig('quanpin.autocorrect_transposition', active);
