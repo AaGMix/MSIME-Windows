@@ -28,14 +28,23 @@ const CALENDAR_MAX_WEEKS = 200;
 /** 按日明细只展示最近 30 天（overview.daily 是全量历史）。 */
 const DETAIL_DAYS = 30;
 const STATUS_TIMEOUT_MS = 4000;
+/** 统计页可见时的轮询间隔：一次查询只是 Server 端的一次 SQLite 只读快照。 */
+const OVERVIEW_POLL_MS = 5000;
+/** 焦点、可见性、轮询可能同时触发，这个间隔内只真正发一次查询。 */
+const OVERVIEW_MIN_INTERVAL_MS = 1000;
+/** 在途概览查询超过这个时间没回来，就当它丢了，允许再发。 */
+const OVERVIEW_STALE_MS = 15000;
 
 let statisticsEnabled = false;
 let lastOverview: StatsOverview | null = null;
+let lastOverviewSignature = '';
 let calendarWeeks = CALENDAR_MIN_WEEKS;
 let calendarCellPx = CALENDAR_CELL_PX;
 let calendarObserver: ResizeObserver | null = null;
 let requestCounter = 0;
 let statusTimer: number | null = null;
+let lastOverviewRequestAt = 0;
+let overviewPollTimer: number | null = null;
 const pendingRequests = new Map<string, StatsRequest['action']>();
 
 // ------------------------------------------------------------------ 纯函数（单测覆盖）
@@ -203,19 +212,33 @@ function renderEmptyState(): void {
 }
 
 function renderOverview(overview: StatsOverview): void {
+  // 轮询每隔几秒就回来一份概览，没打字时内容完全一样。各 render 都是整棵子树
+  // replaceChildren，会抹掉热力图的横向滚动和正在看的 tooltip，所以数据没变就不重绘。
+  const signature = JSON.stringify(overview);
+  const unchanged = signature === lastOverviewSignature && lastOverview !== null;
+  lastOverviewSignature = signature;
   lastOverview = overview;
+  if (unchanged) {
+    return;
+  }
   renderEmptyState();
   const hasData = overview.hasData;
   setHidden('statsContent', !hasData);
   if (!hasData) {
     return;
   }
+  // 重建热力图会把滚动位置打回 0，列数没变时原样放回去。
+  const calendarBox = byId('statsCalendar');
+  const calendarScroll = calendarBox?.scrollLeft ?? 0;
   renderCards(overview);
   renderSpeed(overview);
   renderCalendar(overview);
   renderHourly(overview);
   renderCategories(overview);
   renderDetails(overview);
+  if (calendarBox) {
+    calendarBox.scrollLeft = calendarScroll;
+  }
 }
 
 function statCard(title: string, value: string, unit: string, note: string): HTMLElement {
@@ -429,6 +452,18 @@ function setClearStatus(message: string, isError: boolean): void {
 
 function post(action: StatsRequest['action']): void {
   const requestId = `stats-${++requestCounter}`;
+  if (action === 'overview') {
+    // 所有概览查询（含 setup 的首次请求、清空后的回填）都记时间，
+    // refreshOverview 的节流才不会在刚查完之后又补一次。
+    lastOverviewRequestAt = Date.now();
+    // 在途的旧概览请求丢了响应就再也不会销账，这里顺手清掉，免得 map 越积越长；
+    // 迟到的响应会因为查不到 action 被 handleResponse 忽略。
+    for (const [id, pending] of pendingRequests) {
+      if (pending === 'overview') {
+        pendingRequests.delete(id);
+      }
+    }
+  }
   pendingRequests.set(requestId, action);
   window.chrome?.webview?.postMessage(serializeHostMessage({ type: 'statsRequest', data: { requestId, action } }));
 }
@@ -514,31 +549,76 @@ function setupCalendarResize(): void {
   applyMetrics();
 }
 
+/** 统计页当前是不是真的在用户眼前：窗口没被隐藏，且侧栏停在统计模块上。 */
+function isStatsPageVisible(): boolean {
+  if (document.visibilityState !== 'visible') {
+    return false;
+  }
+  const panel = byId('stats');
+  // offsetParent 为空说明自己或祖先 display:none，覆盖 showOnlyCurrentModule
+  // 之外的隐藏路径；空面板（partial 还没插入）也会被挡掉。
+  return !!panel && panel.offsetParent !== null;
+}
+
+/** 同一时刻只留一个在途概览查询，Server 慢时不至于堆成一串。 */
+function hasPendingOverview(): boolean {
+  // 响应只在 statsResponse 里销账：万一丢了一条，不能让刷新从此永久停摆，
+  // 超过这个时间的在途请求一律当作没有。
+  if (Date.now() - lastOverviewRequestAt > OVERVIEW_STALE_MS) {
+    return false;
+  }
+  for (const action of pendingRequests.values()) {
+    if (action === 'overview') {
+      return true;
+    }
+  }
+  return false;
+}
+
+function refreshOverview(): void {
+  if (!isStatsPageVisible() || hasPendingOverview()) {
+    return;
+  }
+  if (Date.now() - lastOverviewRequestAt < OVERVIEW_MIN_INTERVAL_MS) {
+    return;
+  }
+  post('overview');
+}
+
 /**
- * 统计不是推送模型，只在「重新看到统计页」时补一次查询。设置窗口关闭只是隐藏
- * （文档与已加载的模块都保留），侧栏切走再切回也不会重跑 setup，所以这两种路径
- * 都要在这里刷新，否则用户打开开关、打字、再回来看不到新计数。
+ * 统计不是推送模型（数据由 Server 进程写库，设置窗口是另一个进程，自己开库查），
+ * 所以「什么时候补一次查询」全靠这里的几个触发源：
+ *   - 侧栏切走再切回：模块不会重跑 setup，只靠 IntersectionObserver 的显隐翻转；
+ *   - 设置窗口关掉再打开：只是隐藏 + controller.put_IsVisible(false)，走 visibilitychange；
+ *   - 窗口一直开着、用户切到别的程序打字再点回来：上面两个都不会触发，只有 focus；
+ *   - 人就盯着统计页、在旁边的窗口里打字：连 focus 都没有，靠可见时的轮询兜底。
+ * 都汇到 refreshOverview，由它做节流和在途去重，避免几个触发源叠在一起连发。
  */
 function setupOverviewRefresh(): void {
   const root = byId('stats-settings');
   if (root && typeof IntersectionObserver !== 'undefined') {
     let visible = false;
-    let firstShow = true;
     new IntersectionObserver((entries) => {
       const nowVisible = entries.some((entry) => entry.isIntersecting);
+      // 首次显示紧跟 setupStats 的初始请求，被 refreshOverview 的节流挡掉。
       if (nowVisible && !visible) {
-        // 首次显示紧跟 setupStats 的初始请求，不重复查询。
-        if (!firstShow) post('overview');
-        firstShow = false;
+        refreshOverview();
       }
       visible = nowVisible;
     }).observe(root);
   }
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && byId('stats')?.style.display !== 'none') {
-      post('overview');
-    }
+    refreshOverview();
   });
+  window.addEventListener('focus', () => {
+    refreshOverview();
+  });
+  if (overviewPollTimer !== null) {
+    window.clearInterval(overviewPollTimer);
+  }
+  // 常驻定时器：不可见时 refreshOverview 直接返回，窗口隐藏后浏览器还会自己降频，
+  // 比按显隐反复建销定时器少一份状态。
+  overviewPollTimer = window.setInterval(refreshOverview, OVERVIEW_POLL_MS);
 }
 
 /** 配置快照回填：statistics.enabled 的 boolean 守卫在 config-sync 里，这里只应用。 */
