@@ -1,5 +1,7 @@
 import { createDictionaryPager, DICTIONARY_PAGE_SIZE } from '../utils/dictionary-pagination';
 import { onHostMessage } from '../utils/host-messages';
+import { confirmDialog } from '../utils/confirm-dialog';
+import { hoistOverlay } from '../utils/overlay-host';
 import type { SettingsMessage } from '../../../../shared/messages';
 type DictionaryRequest = Extract<SettingsMessage, { type: 'dictionaryRequest' }>['data'];
 import { serializeHostMessage } from '../../../../shared/messages';
@@ -37,9 +39,7 @@ function syncHeader(): void {
 
 function showToast(message: string, ok: boolean, durationMs = 3200): void {
   const toast = document.getElementById('quickPhraseToast');
-  const table = document.getElementById('quickPhraseTableWrap');
   if (!toast) return;
-  if (table) { const rect = table.getBoundingClientRect(); toast.style.left = `${rect.left + rect.width / 2}px`; }
   document.getElementById('quickPhraseToastMessage')!.textContent = message;
   document.getElementById('quickPhraseToastIcon')!.textContent = ok ? '' : '!';
   toast.className = `dict-toast visible ${ok ? 'success' : 'error'}`;
@@ -62,7 +62,7 @@ function renderRows(rows: QuickPhraseRow[]): void {
     const actions = document.createElement('td');
     const edit = document.createElement('button'); edit.className = 'dict-row-action'; edit.textContent = '编辑'; edit.addEventListener('click', () => openDialog(row));
     const remove = document.createElement('button'); remove.className = 'dict-row-action danger'; remove.textContent = '删除';
-    remove.addEventListener('click', () => { if (window.confirm(`确定删除“${row.word}”吗？`)) post('delete', { oldCode: row.code, oldWord: row.word, code: row.code, word: row.word, weight: row.weight }); });
+    remove.addEventListener('click', async () => { if (await confirmDialog(`确定删除“${row.word}”吗？`)) post('delete', { oldCode: row.code, oldWord: row.word, code: row.code, word: row.word, weight: row.weight }); });
     actions.append(edit, remove); tr.appendChild(actions); return tr;
   }));
   syncHeader();
@@ -102,6 +102,8 @@ function downloadExport(content: string, filename: string): void {
 }
 
 export function setupToolsSettings(): void {
+  hoistOverlay(document.getElementById('quickPhraseToast'));
+  hoistOverlay(document.getElementById('quickPhraseModal'));
   const table = document.getElementById('quickPhraseTableWrap');
   if (table) pager = createDictionaryPager(table, offset => query(offset));
   setupToggleButton('clipboardHistoryToggleBtn', (active) => {

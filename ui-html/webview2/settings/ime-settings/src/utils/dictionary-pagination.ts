@@ -12,14 +12,19 @@ export function createDictionaryPager(table: HTMLElement, load: (offset: number)
   previous.type = next.type = 'button';
   previous.className = next.className = 'dict-button secondary';
   previous.textContent = '上一页'; next.textContent = '下一页';
+  status.className = 'dict-pagination-status';
   status.setAttribute('aria-live', 'polite');
-  footer.append(previous, status, next); table.after(footer);
+  // 状态文本在左、两个翻页按钮并排靠右；状态为空时按钮仍靠右（见 dict.css 的 margin-right: auto）。
+  footer.append(status, previous, next); table.after(footer);
   const sync = () => {
     previous.disabled = pending || offset === 0;
     next.disabled = pending || !hasMore;
   };
-  previous.addEventListener('click', () => load(Math.max(0, offset - DICTIONARY_PAGE_SIZE)));
-  next.addEventListener('click', () => load(offset + DICTIONARY_PAGE_SIZE));
+  // 翻页后表格滚动条回到最上方：新一页的第一条应该是可见的，而不是停在上一页的滚动位置。
+  // 结果是异步回来的，但此刻内容还没换，先置 0 不会被后面的 replaceChildren 顶回去。
+  const turnTo = (target: number) => { table.scrollTop = 0; load(target); };
+  previous.addEventListener('click', () => turnTo(Math.max(0, offset - DICTIONARY_PAGE_SIZE)));
+  next.addEventListener('click', () => turnTo(offset + DICTIONARY_PAGE_SIZE));
   sync();
   return {
     get offset() { return offset; },

@@ -3,7 +3,7 @@
 /**/
 
 .sidebar {
-  width: 200px;
+  width: var(--sidebar-width);
   display: flex;
   flex-direction: column;
   padding: 12px 0;
