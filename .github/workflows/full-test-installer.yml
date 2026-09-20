@@ -1,0 +1,179 @@
+name: Build full test installer
+
+on:
+  push:
+    branches: [ci/issue-229-full-installer]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-test-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Build full test installer
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui-html/webview2/settings/ime-settings/pnpm-lock.yaml
+
+      - name: Restore dependency binaries
+        id: vcpkg-cache
+        uses: ./.github/actions/vcpkg-cache
+        with:
+          scope: issue-229-full-installer
+
+      - name: Stamp the version resource
+        shell: pwsh
+        run: |
+          python scripts/apply_version.py
+          python scripts/apply_version.py --check
+
+      - name: Install Windows TSF dependencies
+        shell: pwsh
+        run: |
+          vcpkg install --triplet x86-windows-static
+          vcpkg install --triplet x64-windows-static
+
+      - name: Build Windows TSF x86
+        shell: pwsh
+        run: |
+          cmake -S windows -B windows/build32-release -A Win32 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x86-windows-static
+          cmake --build windows/build32-release --config Release --parallel
+          ./scripts/ci/check-tsf-dll.ps1 -BuildDir windows/build32-release
+
+      - name: Build Windows TSF x64
+        shell: pwsh
+        run: |
+          cmake -S windows -B windows/build64-release -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static
+          cmake --build windows/build64-release --config Release --parallel
+          ./scripts/ci/check-tsf-dll.ps1 -BuildDir windows/build64-release
+
+      - name: Install Server dependencies
+        shell: pwsh
+        run: ./scripts/ci/install-boost.ps1
+
+      - name: Build Server
+        shell: pwsh
+        env:
+          CL: /utf-8
+        run: |
+          cmake -S server -B server/build-release -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows
+          cmake --build server/build-release --config Release --parallel
+          ./scripts/ci/check-server-binaries.ps1 -BuildDir server/build-release/bin/Release
+          ./scripts/ci/embed-server-manifest.ps1 -BuildDir server/build-release/bin/Release
+          ./scripts/ci/check-server-binaries.ps1 -BuildDir server/build-release/bin/Release
+
+      - name: Build settings page
+        shell: pwsh
+        working-directory: ui-html/webview2/settings/ime-settings
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Download locked dictionaries
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAGING_ROOT: .
+        run: bash scripts/ci/download-dictionaries.sh
+
+      - name: Build locked language model
+        shell: pwsh
+        run: ./scripts/build-language-model.ps1
+
+      - name: Collect full installer payload
+        shell: pwsh
+        working-directory: installer
+        run: >
+          ./Prepare-PackageFiles.ps1
+          -RepoRoot (Resolve-Path '..').Path
+          -TsfDirectory windows -ServerDirectory server -UiHtmlDirectory ui-html -NoticesDirectory .
+          -HelpCodeDirectory engine/helpcode -IncludeSymbols
+
+      - name: Record exact product inputs
+        shell: pwsh
+        run: >
+          python scripts/product_lock.py manifest
+          --windows-commit "${{ github.sha }}"
+          --output installer/app_data/product-manifest.json
+
+      - name: Sign payload with temporary test certificate
+        shell: pwsh
+        working-directory: installer
+        run: ./Sign-PackageBinaries-Local.ps1
+
+      - name: Install Inno Setup language file
+        shell: pwsh
+        run: ./scripts/ci/install-inno-language.ps1
+
+      - name: Compile full installer
+        shell: pwsh
+        working-directory: installer
+        run: ./Compile-Installer.ps1
+
+      - name: Sign installer and export test certificate
+        shell: pwsh
+        working-directory: installer
+        run: |
+          ./Sign-Installer-Local.ps1
+          $certificate = Get-ChildItem Cert:\CurrentUser\My |
+            Where-Object Subject -eq 'CN=Metasequoia IME Local Test Code Signing' |
+            Sort-Object NotAfter -Descending |
+            Select-Object -First 1
+          if (-not $certificate) { throw 'Local test certificate was not created' }
+          Export-Certificate -Cert $certificate -FilePath Output/MetasequoiaImeLocalTest.cer -Type CERT -Force | Out-Null
+          @'
+          这是 fork CI 生成的完整测试安装包，不是正式发布版本。
+
+          安装前请以管理员身份打开 PowerShell，在解压后的目录执行：
+
+            certutil -addstore Root MetasequoiaImeLocalTest.cer
+            certutil -addstore TrustedPublisher MetasequoiaImeLocalTest.cer
+
+          然后运行 MetasequoiaIME_Setup_*.exe。
+          测试结束后如需移除证书，可在 certmgr.msc / certlm.msc 中删除
+          “Metasequoia IME Local Test Code Signing”。
+          '@ | Set-Content -LiteralPath Output/INSTALL-TEST-BUILD.txt -Encoding utf8
+          Get-FileHash Output/MetasequoiaIME_Setup_*.exe -Algorithm SHA256 |
+            Format-List | Out-File Output/SHA256.txt -Encoding utf8
+
+      - name: Upload full installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: MetasequoiaIME-issue-229-full-test
+          path: |
+            installer/Output/MetasequoiaIME_Setup_*.exe
+            installer/Output/MetasequoiaImeLocalTest.cer
+            installer/Output/INSTALL-TEST-BUILD.txt
+            installer/Output/SHA256.txt
+          if-no-files-found: error
+          retention-days: 14
