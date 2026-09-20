@@ -115,7 +115,7 @@ constexpr FuzzyPinyinRuleKey kFuzzyPinyinRuleKeys[] = {
     {"fuzzy_uan_uang", metasequoia::FuzzyPinyinRule::UAN_UANG},
 };
 bool g_floating_toolbar_enabled = true;
-bool g_caret_state_indicator_enabled = true;
+bool g_caret_state_indicator_enabled = false;
 std::string g_caret_state_indicator_position = "top-left";
 FloatingToolbarItemsConfig g_floating_toolbar_items;
 double g_floating_toolbar_scale = 1.0;
@@ -1017,7 +1017,7 @@ bool LoadImeConfig()
                 g_fuzzy_pinyin_rules |= static_cast<std::uint32_t>(entry.rule);
         }
         g_floating_toolbar_enabled = tbl["general"]["floating_toolbar"].value_or(true);
-        g_caret_state_indicator_enabled = tbl["general"]["caret_state_indicator"].value_or(true);
+        g_caret_state_indicator_enabled = tbl["general"]["caret_state_indicator"].value_or(false);
         g_caret_state_indicator_position = tbl["general"]["caret_state_indicator_position"].value_or("top-left");
         if (g_caret_state_indicator_position != "top-left" && g_caret_state_indicator_position != "top" &&
             g_caret_state_indicator_position != "top-right" && g_caret_state_indicator_position != "bottom")

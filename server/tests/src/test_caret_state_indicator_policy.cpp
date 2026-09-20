@@ -1,15 +1,14 @@
 #include "tests/includes/test_framework.h"
 #include "window/caret_state_indicator_policy.h"
 
-TEST_CASE(caret_state_indicator_visibility_is_complementary)
+TEST_CASE(caret_state_indicator_visibility_is_independent_of_floating_toolbar)
 {
-    REQUIRE(FanyImeUi::ShouldShowCaretStateIndicator(true, false, true, 50, 100));
-    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(false, false, true, 50, 100));
-    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, true, true, 50, 100));
-    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, false, 50, 100));
-    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, true, 0, 0));
-    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, true, 50, -10000));
-    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, true, 50, -100000));
+    REQUIRE(FanyImeUi::ShouldShowCaretStateIndicator(true, true, 50, 100));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(false, true, 50, 100));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, 50, 100));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, true, 0, 0));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, true, 50, -10000));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, true, 50, -100000));
 }
 
 TEST_CASE(caret_state_indicator_upper_positions_clear_the_caret_line)

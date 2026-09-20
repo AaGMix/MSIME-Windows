@@ -31,11 +31,11 @@ Help users know the active input mode before they type into the wrong mode, addr
 - Emit the indicator for the existing input-mode, input-scheme, and Chinese/English punctuation shortcut paths when they cause a real state change; do not invent a second shortcut mapping.
 - Emit a suitable indicator when `Ctrl+Shift+F` changes the simplified/traditional Chinese output mode.
 - Work in Windows Terminal in addition to Win32 EDIT, Chromium/Electron, and Office-style text hosts; host-specific caret/layout limitations must fail closed without breaking input.
-- Provide a user-facing setting named for showing the caret indicator when the floating toolbar is disabled, persist it through both Server settings hosts and both shipped config templates, and include it in locally generated/installable builds so the installed settings page exposes the control.
+- Provide a user-facing setting for the caret indicator, persist it through both Server settings hosts and both shipped config templates, and include it in locally generated/installable builds so the installed settings page exposes the control.
 - Keep the caret-indicator settings on the existing floating-toolbar page, but move its enable switch and position selector out of the floating-toolbar card into a separate caret-indicator card with its own preview; do not add another sidebar page. Lay out the four preview samples in one row when space permits and in two rows of two when constrained, never as four single-item rows; show a simulated text caret with every sample and give each sample a clearly separated visual area. Changing the existing position selector must immediately move every preview badge to the selected `top-left`, `top`, `top-right`, or `bottom` position relative to its caret.
-- Enable the new setting by default for new and upgraded installations.
-- Apply an automatic complementary visibility policy: show the caret indicator only when its setting is enabled and the persistent floating toolbar is disabled; never show both status surfaces at the same time.
-- Allow users to disable both status surfaces by turning off both settings.
+- Disable the new setting by default for new and upgraded installations.
+- Keep the caret indicator and persistent floating toolbar independent; enabling or disabling either setting must not change or suppress the other surface.
+- Allow users to enable either surface, both surfaces, or neither surface.
 
 ## Out of Scope
 
@@ -52,7 +52,7 @@ Help users know the active input mode before they type into the wrong mode, addr
 - [ ] Changing width mode briefly shows `全` or `半`, and changing simplified/traditional output mode briefly shows `简` or `繁`.
 - [ ] The punctuation badge reflects the resulting punctuation state and current input mode, including punctuation modes that do not match the language mode.
 - [ ] Focusing or switching between editable controls without changing input mode does not show the cue.
-- [ ] With the floating toolbar enabled, the near-cursor cue stays hidden even when its own setting is enabled.
+- [ ] With the floating toolbar enabled, the near-cursor cue still follows its own independent setting.
 - [ ] With both settings disabled, neither status surface is shown.
 - [ ] Each supported state change immediately updates and re-shows the cue without requiring Server restart or refocusing the application.
 - [ ] The cue hides approximately 1.5 seconds after the latest supported state-change trigger.

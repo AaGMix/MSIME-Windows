@@ -2,9 +2,9 @@
 
 ## 1. Pure policy and configuration
 
-- [ ] Add a small Server policy header for complementary visibility, single-state glyph mapping, and punctuation-with-input-mode text mapping.
-- [ ] Add focused unit tests for toolbar-on suppression, preference-off suppression, IME inactive suppression, punctuation/input-mode mapping, single-state glyph mapping, and invalid events.
-- [ ] Add `general.caret_state_indicator = true` to both shipped config templates.
+- [ ] Add a small Server policy header for independent visibility, single-state glyph mapping, and punctuation-with-input-mode text mapping.
+- [ ] Add focused unit tests for preference-off suppression, IME inactive suppression, independence from the floating-toolbar setting, punctuation/input-mode mapping, single-state glyph mapping, and invalid events.
+- [ ] Add `general.caret_state_indicator = false` to both shipped config templates.
 - [ ] Add Server config load/get/set support and preserve the key through template merging.
 - [ ] Add the field to both settings snapshot writers and both config-update dispatchers.
 
@@ -59,7 +59,7 @@ Rollback point: comment/removal of explicit switch sends restores current behavi
 
 - [ ] Keep existing active-client and activation-epoch gates for switch events.
 - [ ] Route accepted language tasks to the indicator as a single input-mode glyph; route punctuation tasks with punctuation plus current input mode and anchor; keep width and character-set tasks as single-state text.
-- [ ] Hide on client suspension/deactivation, focus-session replacement, Server shutdown, preference disable, or floating-toolbar enable.
+- [ ] Hide on client suspension/deactivation, focus-session replacement, Server shutdown, or preference disable.
 - [ ] Do not trigger from `StatusSnapshot`, `FocusRestored`, activation, or plain focus changes.
 
 Validation:
@@ -70,10 +70,10 @@ Validation:
 
 ## 5. Settings UI
 
-- [ ] Add `关闭悬浮工具栏时显示状态提示` to the existing floating-toolbar settings section and verify the installed/local RC package contains the updated settings assets.
+- [ ] Add `显示光标状态提示` to the existing floating-toolbar settings section and verify the installed/local RC package contains the updated settings assets.
 - [ ] Bind it to `general.caret_state_indicator` through existing toggle/config-sync helpers.
 - [ ] Ensure snapshot refresh and external config changes update the switch.
-- [ ] Keep the control available while the toolbar is enabled so users can preconfigure fallback behavior; its label explains that it applies only when the toolbar is off.
+- [ ] Keep the control independent of the toolbar switch so users can enable either surface, both surfaces, or neither.
 
 Validation:
 
@@ -94,7 +94,7 @@ pnpm test
 - [ ] Manually verify Win32 EDIT, Chromium/Electron, Office-style editors, and Windows Terminal.
 - [ ] Build and install a local RC package using the locally installed Inno Setup 6 compiler at the machine-specific path, supplied only as a command argument and never committed.
 - [ ] For each host, check Shift/language-bar mode switching, full/half switching, punctuation switching, rapid repeated switching, focus loss during the 1.5 s timer, IME switch-away, Server restart, and multi-monitor DPI movement.
-- [ ] Confirm the badge never appears while the floating toolbar is enabled and that turning both settings off shows neither surface.
+- [ ] Confirm the caret indicator and floating toolbar each follow only their own setting, including both-on and both-off configurations.
 
 ## 7. Candidate-skin palette for the badge (follow-up)
 

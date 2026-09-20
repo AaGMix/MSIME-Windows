@@ -9,7 +9,7 @@ Add a small native badge near the active text caret when the user changes one of
 - width mode: `全`, `半`
 - simplified/traditional output mode: `简`, `繁`
 
-The badge is a transient Server-owned popup. It is enabled only when the new preference is on and the existing floating toolbar is off. It hides 1.5 seconds after the latest accepted switch.
+The badge is a transient Server-owned popup. It is disabled by default and, when enabled, operates independently of the persistent floating toolbar. It hides 1.5 seconds after the latest accepted switch.
 
 ## Boundaries
 
@@ -50,7 +50,7 @@ Server validates that a switch event belongs to the active client/activation epo
 
 A small policy module owns the pure decisions:
 
-- whether the badge may show (`indicator_enabled && !floating_toolbar_enabled && ime_active`)
+- whether the badge may show (`indicator_enabled && ime_active`)
 - event-to-glyph mapping, including shortcut/state categories and simplified/traditional output mode
 - above-caret placement and fallback geometry
 - rejection of invalid anchors/stale events
@@ -61,15 +61,15 @@ Placement reuses the candidate-window monitor, DPI, and work-area helpers. The b
 
 For the badge palette, follow the active **candidate-window** skin and its resolved `theme_cand` light/dark variant, not the floating toolbar's `theme_ftb`. Use the same candidate surface, border and final text colors (including a configured text-color override) for built-in skins; custom skins use their `skin.toml` color overrides with the same fallback behavior as the candidate presenter. Keep the badge's existing Win32 rendering, geometry, font size and text layout; skin background images, CSS effects, shadows and corner shapes are out of scope. Resolve the palette when painting/showing so a subsequent switch reflects a skin or theme change; no extra WebView2 controller or settings field is needed.
 
-Every accepted trigger replaces the glyph and anchor, shows without activation, raises through the existing small-window topmost lifecycle, and restarts a 1500 ms timer. Timer expiry hides the badge. IME deactivation, client suspension/focus-session replacement, enabling the floating toolbar, disabling the preference, and shutdown hide it immediately.
+Every accepted trigger replaces the glyph and anchor, shows without activation, raises through the existing small-window topmost lifecycle, and restarts a 1500 ms timer. Timer expiry hides the badge. IME deactivation, client suspension/focus-session replacement, disabling the preference, and shutdown hide it immediately.
 
 ### Configuration and settings
 
-Add one boolean under `[general]`, defaulting to true:
+Add one boolean under `[general]`, defaulting to false:
 
-`caret_state_indicator = true`
+`caret_state_indicator = false`
 
-Semantics: allow the transient caret badge when the persistent floating toolbar is disabled. It is not an independent always-show mode.
+Semantics: independently enable the transient caret badge. The persistent floating toolbar setting does not suppress or alter it.
 
 The key is added to:
 
@@ -79,9 +79,9 @@ The key is added to:
 - both settings snapshot writers and update dispatchers
 - the existing floating-toolbar settings page as a switch below the toolbar enable switch
 
-Suggested label: `关闭悬浮工具栏时显示状态提示`.
+Suggested label: `显示光标状态提示`.
 
-Turning on the floating toolbar hides an active badge immediately. Turning off the toolbar does not itself show a badge; the next supported state change does.
+Changing the floating-toolbar setting does not show, hide, enable, or disable the caret indicator. Each surface follows its own setting.
 
 The existing floating-toolbar settings page keeps both features discoverable without adding another sidebar destination, but separates them into two cards. The toolbar card owns only its switch and toolbar preview. A dedicated caret-indicator card owns the indicator switch, position selector, and a browser-side preview that uses the same candidate-skin preview tokens; it is a visual sample only and does not duplicate runtime state or positioning logic. Each of the four samples uses its own framed visual area, includes a simulated text caret, and preserves the native badge-to-caret offset. A four-column grid keeps all samples on one row when the preview is wide enough; a container query switches directly to two columns below that width, guaranteeing two rows rather than allowing four one-item rows. The existing position dropdown callback and configuration-snapshot application both update one `data-position` value on the shared preview host, so all four samples immediately reflect `top-left`, `top`, `top-right`, or `bottom` without introducing separate preview state.
 
@@ -105,7 +105,7 @@ Normal `StatusSnapshot` traffic remains the authoritative full-state synchroniza
 - No IPC ABI change: existing event ids and existing payload fields are reused.
 - Older Server versions already understand the switch event ids and will only update their existing UI path.
 - New Server behavior remains gated by its local config and active-client validation.
-- Existing user configs gain the default-enabled key through template merge; actual display remains suppressed while the default-enabled floating toolbar is visible.
+- Existing user configs gain the default-disabled key through template merge; the floating toolbar keeps its existing independent default and behavior.
 - The existing floating toolbar's behavior, defaults, layout, and component settings do not change.
 
 ## Trade-offs
