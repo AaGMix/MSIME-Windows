@@ -48,17 +48,29 @@
       </div>
     </div>
 
-    <div class="caret-state-preview" role="img" aria-label="光标状态提示预览：中、中文标点和中文模式、全角、简体">
+    <div class="caret-state-preview" role="img" aria-label="光标状态提示预览：每个文字光标左上方分别显示中、中文标点和中文模式、全角、简体">
       <div class="floating-toolbar-preview-label">预览</div>
       <div class="cand-preview" aria-hidden="true">
         <div class="candidate caret-state-preview-host" id="caretStatePreviewHost">
-          <div class="caret-state-badge">中</div>
-          <div class="caret-state-badge caret-state-badge-punctuation" aria-label="，。  中">
-            <span class="caret-state-punctuation-slot">，。</span>
-            <span class="caret-state-mode-slot">中</span>
+          <div class="caret-state-preview-item">
+            <div class="caret-state-badge">中</div>
+            <span class="caret-state-preview-caret"></span>
           </div>
-          <div class="caret-state-badge">全</div>
-          <div class="caret-state-badge">简</div>
+          <div class="caret-state-preview-item">
+            <div class="caret-state-badge caret-state-badge-punctuation" aria-label="，。  中">
+              <span class="caret-state-punctuation-slot">，。</span>
+              <span class="caret-state-mode-slot">中</span>
+            </div>
+            <span class="caret-state-preview-caret"></span>
+          </div>
+          <div class="caret-state-preview-item">
+            <div class="caret-state-badge">全</div>
+            <span class="caret-state-preview-caret"></span>
+          </div>
+          <div class="caret-state-preview-item">
+            <div class="caret-state-badge">简</div>
+            <span class="caret-state-preview-caret"></span>
+          </div>
         </div>
       </div>
     </div>
