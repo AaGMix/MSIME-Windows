@@ -1,8 +1,14 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+import { applyCaretStateIndicatorPosition, setupFloatingToolbar } from './floating-toolbar';
+import { setupDropdownMenu, applyDropdownValue } from './shared';
 import partial from '../partials/floating-toolbar.html?raw';
+
+vi.mock('./shared', () => ({ setupDropdownMenu: vi.fn(), applyDropdownValue: vi.fn(), setupToggleButton: vi.fn() }));
+vi.mock('./appearance', () => ({ syncCaretStateIndicatorPreview: vi.fn() }));
+vi.mock('./skin', () => ({ syncAppearancePreviews: vi.fn() }));
 
 const styles = readFileSync(fileURLToPath(new URL('../styles/modules/floating-toolbar.css', import.meta.url)), 'utf8');
 
@@ -29,10 +35,42 @@ it('shows the four runtime samples and preserves fixed punctuation slots', () =>
   expect(preview).toContain('>简</div>');
   expect(preview.match(/class="caret-state-badge(?: |")/g)).toHaveLength(4);
   expect(preview.match(/class="caret-state-preview-item"[^>]*>\s*<div class="caret-state-badge[^>]*>[\s\S]*?<\/div>\s*<span class="caret-state-preview-caret"><\/span>\s*<\/div>/g)).toHaveLength(4);
+  expect(preview).toContain('data-position="top-left"');
   expect(styles).toMatch(/\.caret-state-badge\s*\{[^}]*width:\s*30px;[^}]*height:\s*30px;/);
   expect(styles).toMatch(/\.caret-state-badge-punctuation\s*\{[^}]*grid-template-columns:\s*72px 30px;[^}]*column-gap:\s*2px;[^}]*width:\s*104px;/);
-  expect(styles).toMatch(/\.caret-state-preview-host\s*\{[^}]*grid-template-columns:\s*repeat\(4, max-content\);/);
-  expect(styles).toMatch(/@container\s*\(max-width:\s*279px\)\s*\{\s*\.caret-state-preview-host\s*\{[^}]*grid-template-columns:\s*repeat\(2, max-content\);/);
-  expect(styles).toMatch(/\.caret-state-preview-item\s*\{[^}]*padding:\s*0 8px 30px 0;/);
+  expect(styles).toMatch(/\.caret-state-preview-host\s*\{[^}]*grid-template-columns:\s*repeat\(4, 132px\);/);
+  expect(styles).toMatch(/@container\s*\(max-width:\s*569px\)\s*\{\s*\.caret-state-preview-host\s*\{[^}]*grid-template-columns:\s*repeat\(2, 132px\);/);
+  expect(styles).toMatch(/\.caret-state-preview-item\s*\{[^}]*width:\s*132px;[^}]*height:\s*132px;[^}]*border:/);
   expect(styles).toMatch(/\.caret-state-preview-caret\s*\{[^}]*width:\s*2px;[^}]*height:\s*24px;/);
+  expect(styles).toMatch(/\.caret-state-badge\s*\{[^}]*top:\s*23px;[^}]*right:\s*29px;/);
+  expect(styles).toMatch(/\[data-position="top"\] \.caret-state-badge/);
+  expect(styles).toMatch(/\[data-position="top-right"\] \.caret-state-badge/);
+  expect(styles).toMatch(/\[data-position="bottom"\] \.caret-state-badge\s*\{\s*top:\s*89px;/);
+});
+
+it('applies each selector choice immediately to all samples and also follows config snapshots', () => {
+  const label = { setAttribute: vi.fn() };
+  const host = { dataset: { position: 'top-left' }, closest: () => label };
+  vi.stubGlobal('document', {
+    getElementById: (id: string) => id === 'caretStatePreviewHost' ? host : null,
+    querySelectorAll: () => []
+  });
+  try {
+    setupFloatingToolbar();
+    const call = vi.mocked(setupDropdownMenu).mock.calls.find(([button]) => button === 'caretStateIndicatorPositionBtn');
+    expect(call?.[4]).toBe('general.caret_state_indicator_position');
+    const change = call?.[5];
+    for (const [position, direction] of [
+      ['top-left', '左上方'], ['top', '正上方'], ['top-right', '右上方'], ['bottom', '下方']
+    ]) {
+      expect(change?.(position)).toBe(position);
+      expect(host.dataset.position).toBe(position);
+      expect(label.setAttribute).toHaveBeenLastCalledWith('aria-label', expect.stringContaining(`每个文字光标${direction}`));
+      applyCaretStateIndicatorPosition(position);
+      expect(applyDropdownValue).toHaveBeenLastCalledWith('caretStateIndicatorPositionBtn', 'caretStateIndicatorPositionMenu', position);
+      expect(host.dataset.position).toBe(position);
+    }
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
