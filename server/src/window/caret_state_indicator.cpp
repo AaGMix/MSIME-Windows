@@ -1,10 +1,15 @@
 #include "window/caret_state_indicator.h"
 #include "config/ime_config.h"
+#include "skin/candidate_skin_catalog.h"
+#include "utils/common_utils.h"
 #include "utils/window_utils.h"
+#include "window/candidate_skin_palette.h"
 #include "window/caret_state_indicator_policy.h"
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <optional>
 
 namespace
 {
@@ -44,12 +49,11 @@ void Show(HWND hwnd, const std::wstring &text, POINT caret, bool topmost)
     g_state.dpi = static_cast<UINT>(std::lround(GetScaleForPoint(caret) * 96.0f));
     const int height = PixelSize(kBaseHeightDip, g_state.dpi);
     const int extraCharacters = (std::max)(0, static_cast<int>(text.size()) - 1);
-    const int width =
-        text.size() == 5
-            ? PixelSize(kPunctuationSlotWidthDip, g_state.dpi) +
-                  PixelSize(kPunctuationModeGapDip, g_state.dpi) +
-                  PixelSize(kPunctuationModeSlotWidthDip, g_state.dpi)
-            : height + PixelSize(kAdditionalCharacterWidthDip * extraCharacters, g_state.dpi);
+    const int width = text.size() == 5
+                          ? PixelSize(kPunctuationSlotWidthDip, g_state.dpi) +
+                                PixelSize(kPunctuationModeGapDip, g_state.dpi) +
+                                PixelSize(kPunctuationModeSlotWidthDip, g_state.dpi)
+                          : height + PixelSize(kAdditionalCharacterWidthDip * extraCharacters, g_state.dpi);
     const int gap = PixelSize(kCaretGapDip, g_state.dpi);
     const int caretLineHeight = PixelSize(kCaretLineHeightDip, g_state.dpi);
     MONITORINFO info{sizeof(info)};
@@ -87,13 +91,27 @@ void Paint(HWND hwnd, HDC dc)
 {
     RECT rc{};
     GetClientRect(hwnd, &rc);
-    const bool light = ResolveConfiguredTheme(GetConfiguredThemeFtb()) == "light";
-    HBRUSH bg = CreateSolidBrush(light ? RGB(255, 255, 255) : RGB(32, 32, 32));
+    const bool light = ResolveConfiguredTheme(GetConfiguredThemeCand()) == "light";
+    const std::string skinId = GetConfiguredCandidateSkin();
+    std::optional<CandidateSkinCatalog::Package> package;
+    if (!CandidateSkinCatalog::IsBuiltIn(skinId))
+        package =
+            CandidateSkinCatalog::Load(std::filesystem::path(CommonUtils::get_ime_data_path_w()) / L"skins", skinId);
+    const CandidateSkinCatalog::CandidateColors *packageColors =
+        package ? &(light ? package->light : package->dark) : nullptr;
+    const CandidateSkinPalette fallbackPalette =
+        ResolveCandidateSkinPalette(skinId, light, GetConfiguredCandidateTextColor());
+    const CandidateSkinPalette resolvedPalette =
+        ResolveCandidateSkinPalette(skinId, light, GetConfiguredCandidateTextColor(), packageColors);
+    const CandidateSkinPalette palette = FlattenCandidateSkinPaletteForGdi(resolvedPalette, fallbackPalette.surface);
+    HBRUSH bg = CreateSolidBrush(FlattenCandidateColor(palette.surface, palette.surface));
     FillRect(dc, &rc, bg);
     DeleteObject(bg);
-    FrameRect(dc, &rc, static_cast<HBRUSH>(GetStockObject(light ? GRAY_BRUSH : WHITE_BRUSH)));
+    HBRUSH border = CreateSolidBrush(FlattenCandidateColor(palette.border, palette.surface));
+    FrameRect(dc, &rc, border);
+    DeleteObject(border);
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, light ? RGB(26, 26, 26) : RGB(255, 255, 255));
+    SetTextColor(dc, FlattenCandidateColor(palette.text, palette.surface));
     HFONT font =
         CreateFontW(-PixelSize(20, g_state.dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
@@ -104,8 +122,7 @@ void Paint(HWND hwnd, HDC dc)
         modeRect.left = (std::max)(rc.left, rc.right - PixelSize(kPunctuationModeSlotWidthDip, g_state.dpi));
         RECT punctuationRect = rc;
         punctuationRect.right =
-            (std::max)(punctuationRect.left,
-                       modeRect.left - PixelSize(kPunctuationModeGapDip, g_state.dpi));
+            (std::max)(punctuationRect.left, modeRect.left - PixelSize(kPunctuationModeGapDip, g_state.dpi));
         DrawTextW(dc, g_state.text.c_str(), 2, &punctuationRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         DrawTextW(dc, g_state.text.c_str() + 4, 1, &modeRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
