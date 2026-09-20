@@ -160,8 +160,10 @@ function applyConfigData(data: Record<string, any>, target?: string): void {
   }
   if (data?.input?.punctuation_lock === 'chinese' || data?.input?.punctuation_lock === 'english' ||
       data?.input?.punctuation_lock === 'follow') {
-    applyToggleState('alwaysEnglishPunctuationToggleBtn', data.input.punctuation_lock === 'english');
-    applyToggleState('alwaysChinesePunctuationToggleBtn', data.input.punctuation_lock === 'chinese');
+    const lock = data.input.punctuation_lock;
+    document.querySelectorAll<HTMLInputElement>('input[name="punctuation-lock"]').forEach((radio) => {
+      radio.checked = radio.value === lock;
+    });
   }
   if (typeof data?.general?.candidate_translations === 'boolean') {
     applyToggleState('candidateTranslationsToggleBtn', data.general.candidate_translations);
