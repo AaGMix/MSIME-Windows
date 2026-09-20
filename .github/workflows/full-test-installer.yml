@@ -53,6 +53,7 @@ jobs:
 
       - name: Install Windows TSF dependencies
         shell: pwsh
+        working-directory: windows
         run: |
           vcpkg install --triplet x86-windows-static
           vcpkg install --triplet x64-windows-static
