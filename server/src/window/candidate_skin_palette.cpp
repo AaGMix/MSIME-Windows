@@ -90,26 +90,29 @@ D2D1_COLOR_F ParseCandidateCssColor(const std::string &text, D2D1_COLOR_F fallba
 
 CandidateSkinPalette ResolveCandidateSkinPalette(const std::string &skinId, bool light,
                                                  const std::string &configuredTextColor,
-                                                 const CandidateSkinCatalog::CandidateColors *packageColors)
+                                                 const CandidateSkinCatalog::CandidateColors *packageColors,
+                                                 const std::string &baseSkinId)
 {
+    const std::string &paletteSkinId = baseSkinId.empty() ? skinId : baseSkinId;
     CandidateSkinPalette palette{
         CandidateColorFromRgb(light ? 0xFFFFFF : 0x202020),
         light ? D2D1::ColorF(0, 0.12f) : ParseCandidateCssColor("#9b9b9b2e", CandidateColorFromRgb(0x3A3A3A, 0.18f)),
         CandidateColorFromRgb(light ? 0x1A1A1A : 0xE9E8E8),
     };
-    if (skinId == "wechat")
+    if (paletteSkinId == "wechat")
     {
         palette = light ? CandidateSkinPalette{CandidateColorFromRgb(0xF7F7F7), CandidateColorFromRgb(0xDEDEDE),
                                                CandidateColorFromRgb(0x333333)}
                         : CandidateSkinPalette{CandidateColorFromRgb(0x151515), CandidateColorFromRgb(0x292929),
                                                CandidateColorFromRgb(0xB7B7B7)};
     }
-    else if (skinId == "willow_green")
+    else if (paletteSkinId == "willow_green")
     {
         palette.surface = CandidateColorFromRgb(light ? 0xF4F5F3 : 0x2D2F2E);
+        palette.border = D2D1::ColorF(0, 0.0f);
         palette.text = CandidateColorFromRgb(light ? 0x343936 : 0xD8DBD8);
     }
-    else if (skinId == "graphite")
+    else if (paletteSkinId == "graphite")
     {
         palette = light ? CandidateSkinPalette{CandidateColorFromRgb(0xFBFBFC), CandidateColorFromRgb(0xE2E5E9),
                                                CandidateColorFromRgb(0x586476)}

@@ -20,6 +20,15 @@ TEST_CASE(caret_state_indicator_upper_positions_clear_the_caret_line)
     REQUIRE_EQ(FanyImeUi::CaretStateIndicatorY(true, 200, 30, 200, 6), 206);
 }
 
+TEST_CASE(caret_state_indicator_flips_away_from_work_area_and_suppresses_when_neither_side_fits)
+{
+    using FanyImeUi::CaretStateIndicatorPlacementY;
+    REQUIRE_EQ(*CaretStateIndicatorPlacementY(true, 170, 30, 24, 6, 0, 200), 110);
+    REQUIRE_EQ(*CaretStateIndicatorPlacementY(false, 30, 30, 24, 6, 0, 200), 36);
+    REQUIRE(!CaretStateIndicatorPlacementY(true, 50, 80, 24, 6, 0, 100));
+    REQUIRE(!CaretStateIndicatorPlacementY(false, 50, 80, 24, 6, 0, 100));
+}
+
 TEST_CASE(caret_state_indicator_horizontal_positions_follow_badge_width)
 {
     REQUIRE_EQ(FanyImeUi::kCaretStatePunctuationSlotWidthDip, 64);
@@ -46,6 +55,9 @@ TEST_CASE(caret_state_indicator_maps_input_mode_to_one_glyph)
     REQUIRE_EQ(InputModeGlyph(true, false), L'中');
     REQUIRE_EQ(InputModeGlyph(false, false), L'英');
     REQUIRE_EQ(InputModeGlyph(true, true), L'日');
+    REQUIRE_EQ(FanyImeUi::InputModeEventGlyph(true, false, true), L'英');
+    REQUIRE_EQ(FanyImeUi::InputModeEventGlyph(false, false, true), L'英');
+    REQUIRE_EQ(FanyImeUi::InputModeEventGlyph(true, true, false), L'日');
 }
 
 TEST_CASE(caret_state_indicator_combines_punctuation_and_input_mode)

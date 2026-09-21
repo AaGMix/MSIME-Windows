@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 
 namespace FanyImeUi
@@ -30,6 +31,19 @@ inline int CaretStateIndicatorY(bool belowCaret, int anchorY, int indicatorHeigh
     return belowCaret ? anchorY + gap : anchorY - indicatorHeight - caretLineHeight - gap;
 }
 
+inline std::optional<int> CaretStateIndicatorPlacementY(bool requestedBelow, int anchorY, int indicatorHeight,
+                                                        int caretLineHeight, int gap, int workTop, int workBottom)
+{
+    const int above = CaretStateIndicatorY(false, anchorY, indicatorHeight, caretLineHeight, gap);
+    const int below = CaretStateIndicatorY(true, anchorY, indicatorHeight, caretLineHeight, gap);
+    const auto fits = [workTop, workBottom, indicatorHeight](int y) {
+        return y >= workTop && y <= workBottom - indicatorHeight;
+    };
+    if (requestedBelow)
+        return fits(below) ? std::optional<int>(below) : (fits(above) ? std::optional<int>(above) : std::nullopt);
+    return fits(above) ? std::optional<int>(above) : (fits(below) ? std::optional<int>(below) : std::nullopt);
+}
+
 inline int CaretStateIndicatorX(const std::string &position, int anchorX, int indicatorWidth, int gap)
 {
     if (position == "top")
@@ -47,6 +61,11 @@ inline int CaretStateIndicatorTextWidth(int height, int scaledAdditionalCharacte
 inline wchar_t InputModeGlyph(bool imeEnabled, bool japaneseMode)
 {
     return imeEnabled ? (japaneseMode ? L'日' : L'中') : L'英';
+}
+
+inline wchar_t InputModeEventGlyph(bool imeEnabled, bool japaneseMode, bool capsLockEdge)
+{
+    return capsLockEdge ? L'英' : InputModeGlyph(imeEnabled, japaneseMode);
 }
 
 inline std::wstring PunctuationInputModeText(bool punctuationEnabled, bool imeEnabled, bool japaneseMode)

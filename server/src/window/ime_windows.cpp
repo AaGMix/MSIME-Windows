@@ -3899,13 +3899,13 @@ LRESULT CALLBACK WndProcCaretStateWindow(HWND hwnd, UINT message, WPARAM wParam,
             return 0;
         }
         const bool topmost = EnsureSmallWindowsTopmost(L"show-caret-state");
-        CaretStateIndicator::Show(hwnd, request->text, request->caret, topmost);
-        ::is_global_wnd_caret_state_shown = true;
+        ::is_global_wnd_caret_state_shown = CaretStateIndicator::Show(hwnd, request->text, request->caret, topmost);
         return 0;
     }
     case WM_HIDE_CARET_STATE:
         CaretStateIndicator::Hide(hwnd);
-        DiscardPendingCaretStateShowRequests(hwnd);
+        // Posted messages are FIFO. Do not discard shows queued after this
+        // hide: they belong to a newer state switch on the same UI thread.
         ::is_global_wnd_caret_state_shown = false;
         return 0;
     case WM_NCDESTROY:

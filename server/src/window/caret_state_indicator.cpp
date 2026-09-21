@@ -3,6 +3,7 @@
 #include "skin/candidate_skin_catalog.h"
 #include "utils/common_utils.h"
 #include "utils/window_utils.h"
+#include "webview2/windows_webview2.h"
 #include "window/candidate_skin_palette.h"
 #include "window/caret_state_indicator_policy.h"
 
@@ -20,6 +21,44 @@ constexpr int kAdditionalCharacterWidthDip = 20;
 constexpr int kCaretGapDip = 6;
 constexpr int kCaretLineHeightDip = 24;
 
+struct PaletteCache
+{
+    std::string skinId;
+    std::string textColor;
+    bool light = false;
+    uint64_t revision = 0;
+    CandidateSkinPalette palette{};
+    bool valid = false;
+};
+
+PaletteCache g_paletteCache;
+
+const CandidateSkinPalette &ResolvePalette()
+{
+    const bool light = ResolveConfiguredTheme(GetConfiguredThemeCand()) == "light";
+    const std::string skinId = GetConfiguredCandidateSkin();
+    const std::string textColor = GetConfiguredCandidateTextColor();
+    const uint64_t revision = GetCandidateSkinReloadRevision();
+    if (g_paletteCache.valid && g_paletteCache.skinId == skinId && g_paletteCache.textColor == textColor &&
+        g_paletteCache.light == light && g_paletteCache.revision == revision)
+        return g_paletteCache.palette;
+
+    std::optional<CandidateSkinCatalog::Package> package;
+    if (!CandidateSkinCatalog::IsBuiltIn(skinId))
+        package =
+            CandidateSkinCatalog::Load(std::filesystem::path(CommonUtils::get_ime_data_path_w()) / L"skins", skinId);
+    const CandidateSkinCatalog::CandidateColors *packageColors =
+        package ? &(light ? package->light : package->dark) : nullptr;
+    const std::string baseSkinId = package ? package->base : skinId;
+    const CandidateSkinPalette fallbackPalette = ResolveCandidateSkinPalette(baseSkinId, light, textColor);
+    const CandidateSkinPalette resolvedPalette =
+        ResolveCandidateSkinPalette(skinId, light, textColor, packageColors, baseSkinId);
+    g_paletteCache = {
+        skinId, textColor, light, revision, FlattenCandidateSkinPaletteForGdi(resolvedPalette, fallbackPalette.surface),
+        true};
+    return g_paletteCache.palette;
+}
+
 struct State
 {
     std::wstring text = L"中";
@@ -36,10 +75,10 @@ int PixelSize(int dip, UINT dpi)
 
 namespace CaretStateIndicator
 {
-void Show(HWND hwnd, const std::wstring &text, POINT caret, bool topmost)
+bool Show(HWND hwnd, const std::wstring &text, POINT caret, bool topmost)
 {
     if (!hwnd || !IsWindow(hwnd))
-        return;
+        return false;
 
     HMONITOR monitor = MonitorFromPoint(caret, MONITOR_DEFAULTTONEAREST);
     g_state.text = text;
@@ -63,14 +102,25 @@ void Show(HWND hwnd, const std::wstring &text, POINT caret, bool topmost)
 
     const std::string &position = GetConfiguredCaretStateIndicatorPosition();
     int x = FanyImeUi::CaretStateIndicatorX(position, caret.x, width, gap);
-    int y = FanyImeUi::CaretStateIndicatorY(position == "bottom", caret.y, height, caretLineHeight, gap);
-    if (position != "bottom" && y < work.top)
-        y = FanyImeUi::CaretStateIndicatorY(true, caret.y, height, caretLineHeight, gap);
+    const std::optional<int> placement = FanyImeUi::CaretStateIndicatorPlacementY(
+        position == "bottom", caret.y, height, caretLineHeight, gap, work.top, work.bottom);
+    if (!placement)
+    {
+        Hide(hwnd);
+        return false;
+    }
+    const int y = *placement;
     x = static_cast<int>((std::max)(work.left, (std::min)(static_cast<LONG>(x), work.right - width)));
-    y = static_cast<int>((std::max)(work.top, (std::min)(static_cast<LONG>(y), work.bottom - height)));
-    SetWindowPos(hwnd, topmost ? HWND_TOPMOST : HWND_TOP, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    // Resolve once per skin/config revision. Paint must remain disk-I/O free.
+    ResolvePalette();
+    if (!SetWindowPos(hwnd, topmost ? HWND_TOPMOST : HWND_TOP, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW))
+    {
+        Hide(hwnd);
+        return false;
+    }
     SetTimer(hwnd, kHideTimer, kHideDelayMs, nullptr);
     InvalidateRect(hwnd, nullptr, FALSE);
+    return true;
 }
 
 void Hide(HWND hwnd)
@@ -85,19 +135,8 @@ void Paint(HWND hwnd, HDC dc)
 {
     RECT rc{};
     GetClientRect(hwnd, &rc);
-    const bool light = ResolveConfiguredTheme(GetConfiguredThemeCand()) == "light";
-    const std::string skinId = GetConfiguredCandidateSkin();
-    std::optional<CandidateSkinCatalog::Package> package;
-    if (!CandidateSkinCatalog::IsBuiltIn(skinId))
-        package =
-            CandidateSkinCatalog::Load(std::filesystem::path(CommonUtils::get_ime_data_path_w()) / L"skins", skinId);
-    const CandidateSkinCatalog::CandidateColors *packageColors =
-        package ? &(light ? package->light : package->dark) : nullptr;
-    const CandidateSkinPalette fallbackPalette =
-        ResolveCandidateSkinPalette(skinId, light, GetConfiguredCandidateTextColor());
-    const CandidateSkinPalette resolvedPalette =
-        ResolveCandidateSkinPalette(skinId, light, GetConfiguredCandidateTextColor(), packageColors);
-    const CandidateSkinPalette palette = FlattenCandidateSkinPaletteForGdi(resolvedPalette, fallbackPalette.surface);
+    CandidateSkinPalette fallbackPalette = ResolveCandidateSkinPalette("fluent", false, "auto");
+    const CandidateSkinPalette &palette = g_paletteCache.valid ? g_paletteCache.palette : fallbackPalette;
     HBRUSH bg = CreateSolidBrush(FlattenCandidateColor(palette.surface, palette.surface));
     FillRect(dc, &rc, bg);
     DeleteObject(bg);
