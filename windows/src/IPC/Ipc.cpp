@@ -974,8 +974,11 @@ int WriteDataToNamedPipe(              //
 )
 {
     // Every logical event starts from a clean packet so status/UI events can
-    // never leak key or pinyin data from the preceding request.
+    // never leak key or pinyin data from the preceding request. An omitted
+    // anchor uses the established invalid-Y sentinel so older Servers fail
+    // closed instead of treating zero-initialized coordinates as screen (0, 0).
     namedpipeData = {};
+    namedpipeData.point[1] = Global::INVALID_Y;
 
     if (write_flag >> 0 & 1u)
     {

@@ -5,6 +5,7 @@
 #include "CompositionProcessorEngine.h"
 #include "KeyHandlerEditSession.h"
 #include "KeyRepeatGuard.h"
+#include "CaretAnchorPolicy.h"
 #include "Compartment.h"
 #include "MetasequoiaIMEBaseStructure.h"
 #include <debugapi.h>
@@ -2556,13 +2557,12 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
 
         int keyPoint[2] = {0, Global::INVALID_Y};
         const bool includeCaretAnchor = KeystrokeState.Function == FUNCTION_TOGGLE_CHARACTER_SET;
-        if (includeCaretAnchor)
-            ResolveKeyCaretAnchor(this, pContext, _tfClientId, keyPoint);
+        const bool caretAnchorResolved =
+            includeCaretAnchor && ResolveKeyCaretAnchor(this, pContext, _tfClientId, keyPoint);
 
         PerfTimer writeShmTimer;
-        WriteDataToSharedMemory(Global::Keycode, wch, Global::ModifiersDown,
-                                includeCaretAnchor ? keyPoint : nullptr, 0, L"",
-                                includeCaretAnchor ? 0b001111 : 0b000111);
+        WriteDataToSharedMemory(Global::Keycode, wch, Global::ModifiersDown, caretAnchorResolved ? keyPoint : nullptr,
+                                0, L"", KeyEventPayloadWriteMask(includeCaretAnchor, caretAnchorResolved));
 
         PerfTimer sendKeyEventTimer;
         const KeyEventSendResult sendResult = SendKeyEventToUIProcess(&requestId);
