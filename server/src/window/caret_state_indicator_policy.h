@@ -63,16 +63,22 @@ inline wchar_t InputModeGlyph(bool imeEnabled, bool japaneseMode)
     return imeEnabled ? (japaneseMode ? L'日' : L'中') : L'英';
 }
 
-inline wchar_t InputModeEventGlyph(bool imeEnabled, bool japaneseMode, bool capsLockEdge)
+inline wchar_t EffectiveInputModeGlyph(bool imeEnabled, bool japaneseMode, bool capsLockEnabled)
 {
-    return capsLockEdge ? L'英' : InputModeGlyph(imeEnabled, japaneseMode);
+    return capsLockEnabled ? L'英' : InputModeGlyph(imeEnabled, japaneseMode);
 }
 
-inline bool ShouldShowInputModeEvent(bool capsLockEdge, bool capsLockEnabled)
+inline wchar_t InputModeEventGlyph(bool imeEnabled, bool japaneseMode, bool capsLockEnabled)
 {
-    // Fresh alphabetic input stays English while Caps Lock is enabled.
-    // A Caps Lock key edge itself always announces English once.
-    return capsLockEdge || !capsLockEnabled;
+    return EffectiveInputModeGlyph(imeEnabled, japaneseMode, capsLockEnabled);
+}
+
+inline bool ShouldShowInputModeEvent(bool capsLockEdge, bool capsLockEnabled, bool imeEnabled, bool japaneseMode)
+{
+    if (!capsLockEdge)
+        return !capsLockEnabled;
+    return EffectiveInputModeGlyph(imeEnabled, japaneseMode, !capsLockEnabled) !=
+           EffectiveInputModeGlyph(imeEnabled, japaneseMode, capsLockEnabled);
 }
 
 inline std::wstring PunctuationInputModeText(bool punctuationEnabled, bool imeEnabled, bool japaneseMode)

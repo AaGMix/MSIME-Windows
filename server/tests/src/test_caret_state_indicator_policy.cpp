@@ -51,25 +51,49 @@ TEST_CASE(caret_state_indicator_single_glyph_is_square)
 
 TEST_CASE(caret_state_indicator_maps_input_mode_to_one_glyph)
 {
+    using FanyImeUi::EffectiveInputModeGlyph;
     using FanyImeUi::InputModeGlyph;
     REQUIRE_EQ(InputModeGlyph(true, false), L'中');
     REQUIRE_EQ(InputModeGlyph(false, false), L'英');
     REQUIRE_EQ(InputModeGlyph(true, true), L'日');
-    REQUIRE_EQ(FanyImeUi::InputModeEventGlyph(true, false, true), L'英');
-    REQUIRE_EQ(FanyImeUi::InputModeEventGlyph(false, false, true), L'英');
-    REQUIRE_EQ(FanyImeUi::InputModeEventGlyph(true, true, false), L'日');
+    REQUIRE_EQ(EffectiveInputModeGlyph(true, false, true), L'英');
+    REQUIRE_EQ(EffectiveInputModeGlyph(true, false, false), L'中');
+    REQUIRE_EQ(EffectiveInputModeGlyph(true, true, false), L'日');
 }
 
-TEST_CASE(caret_state_indicator_caps_lock_masks_ordinary_ime_switches_only)
+TEST_CASE(caret_state_indicator_uses_effective_mode_for_caps_and_language_actions)
 {
-    using FanyImeUi::ShouldShowInputModeEvent;
-    REQUIRE(ShouldShowInputModeEvent(true, true));
-    REQUIRE(ShouldShowInputModeEvent(true, false));
-    REQUIRE(ShouldShowInputModeEvent(false, false));
-    REQUIRE(!ShouldShowInputModeEvent(false, true));
-    // Punctuation mapping still reflects the authoritative IME mode, even
-    // when Caps Lock changes the handling of fresh alphabetic input.
+    struct ModeCase
+    {
+        bool imeEnabled;
+        bool japaneseMode;
+        wchar_t authoritativeGlyph;
+    };
+    constexpr ModeCase modes[] = {
+        {false, false, L'英'},
+        {true, false, L'中'},
+        {true, true, L'日'},
+    };
+
+    for (const auto &mode : modes)
+    {
+        for (const bool capsEnabled : {false, true})
+        {
+            const bool capsEdgeShouldShow = mode.authoritativeGlyph != L'英';
+            REQUIRE_EQ(FanyImeUi::ShouldShowInputModeEvent(true, capsEnabled, mode.imeEnabled, mode.japaneseMode),
+                       capsEdgeShouldShow);
+            REQUIRE_EQ(FanyImeUi::InputModeEventGlyph(mode.imeEnabled, mode.japaneseMode, capsEnabled),
+                       capsEnabled ? L'英' : mode.authoritativeGlyph);
+
+            REQUIRE_EQ(FanyImeUi::ShouldShowInputModeEvent(false, capsEnabled, mode.imeEnabled, mode.japaneseMode),
+                       !capsEnabled);
+        }
+    }
+
+    // Punctuation remains authoritative even when effective alphabetic input
+    // is English under Caps Lock.
     REQUIRE_EQ(FanyImeUi::PunctuationInputModeText(true, true, false), L"，。  中");
+    REQUIRE_EQ(FanyImeUi::PunctuationInputModeText(true, true, true), L"，。  日");
 }
 
 TEST_CASE(caret_state_indicator_combines_punctuation_and_input_mode)
