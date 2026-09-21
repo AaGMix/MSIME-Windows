@@ -1413,6 +1413,7 @@ bool IsKnownMainPipeEvent(UINT event_type)
     case FanyImePipeEventType::StatusSnapshot:
     case FanyImePipeEventType::ClientSuspended:
     case FanyImePipeEventType::FocusRestored:
+    case FanyImePipeEventType::HideCaretState:
         return true;
     default:
         return false;
@@ -1550,6 +1551,7 @@ enum class TaskType
 {
     ShowCandidate,
     HideCandidate,
+    HideCaretState,
     MoveCandidate,
     ImeKeyEvent,
     LangbarRightClick,
@@ -1859,6 +1861,8 @@ void WorkerThread()
 
         case TaskType::HideCandidate: {
             ::ReadDataFromNamedPipe(0b100000);
+            if (::global_hwnd_caret_state)
+                PostMessage(::global_hwnd_caret_state, WM_HIDE_CARET_STATE, 0, 0);
             const ULONGLONG queue_elapsed_ms = task.enqueued_at_ms == 0 ? 0 : GetTickCount64() - task.enqueued_at_ms;
             CAND_DIAG_LOGF(L"task HideCandidate client={} epoch={} request={} queued_ms={}", task.client_id,
                            task.activation_epoch, task.pipe_data.request_id, queue_elapsed_ms);
@@ -1873,6 +1877,11 @@ void WorkerThread()
             ClearState();
             break;
         }
+
+        case TaskType::HideCaretState:
+            if (::global_hwnd_caret_state)
+                PostMessage(::global_hwnd_caret_state, WM_HIDE_CARET_STATE, 0, 0);
+            break;
 
         case TaskType::MoveCandidate: {
             static int cnt = 0;
@@ -1910,12 +1919,16 @@ void WorkerThread()
         }
 
         case TaskType::IMESwitch: {
-            PostMessage(::global_hwnd, WM_IMESWITCH, task.pipe_data.keycode, 0);
+            const bool capsLockEdge = task.pipe_data.wch == VK_CAPITAL;
             const bool imeEnabled = task.pipe_data.keycode != 0;
-            UpdateCaretLanguagePunctuationState(imeEnabled ? 1 : 0, -1);
-            PostCaretStateText(
-                std::wstring(1, FanyImeUi::InputModeGlyph(imeEnabled, GetConfiguredInputMode() == "japanese")),
-                task.pipe_data.point[0], task.pipe_data.point[1]);
+            if (!capsLockEdge)
+            {
+                PostMessage(::global_hwnd, WM_IMESWITCH, task.pipe_data.keycode, 0);
+                UpdateCaretLanguagePunctuationState(imeEnabled ? 1 : 0, -1);
+            }
+            const wchar_t glyph =
+                FanyImeUi::InputModeEventGlyph(imeEnabled, GetConfiguredInputMode() == "japanese", capsLockEdge);
+            PostCaretStateText(std::wstring(1, glyph), task.pipe_data.point[0], task.pipe_data.point[1]);
             break;
         }
 
@@ -3001,6 +3014,11 @@ void MainPipeClientThread(HANDLE clientPipe, uint64_t handlerId)
 
         case FanyImePipeEventType::HideCandidateWnd: {
             EnqueueTask(TaskType::HideCandidate, pipeData, activation.epoch);
+            break;
+        }
+
+        case FanyImePipeEventType::HideCaretState: {
+            EnqueueTask(TaskType::HideCaretState, pipeData, activation.epoch);
             break;
         }
 

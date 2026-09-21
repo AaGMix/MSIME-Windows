@@ -390,8 +390,8 @@ void CandidatePresenter::ApplySkin()
     }
     const CandidateSkinCatalog::CandidateColors *packageColors =
         package ? &(candLight ? package->light : package->dark) : nullptr;
-    const CandidateSkinPalette palette =
-        ResolveCandidateSkinPalette(skinId, candLight, GetConfiguredCandidateTextColor(), packageColors);
+    const CandidateSkinPalette palette = ResolveCandidateSkinPalette(
+        skinId, candLight, GetConfiguredCandidateTextColor(), packageColors, package ? package->base : std::string{});
     tokens.surface = palette.surface;
     tokens.border = palette.border;
     tokens.text = palette.text;

@@ -2468,6 +2468,11 @@ bool ApplyConfiguredCandidateSkinIfChanged()
     return ApplyConfiguredUiThemes();
 }
 
+uint64_t GetCandidateSkinReloadRevision()
+{
+    return candidateSkinReloadRevision;
+}
+
 bool ForceReloadConfiguredCandidateSkin()
 {
     ++candidateSkinReloadRevision;

@@ -201,7 +201,7 @@ class CCompositionProcessorEngine
     void SyncPunctuationWithImeMode(_In_ ITfThreadMgr *pThreadMgr, TfClientId tfClientId, BOOL isOpen);
     void CommitCompositionOnExternalKeyboardClose();
     void ReleaseConfiguredImeModeDefense();
-    void SendCaretStateSwitchEvent(UINT eventType, BOOL enabled);
+    void SendCaretStateSwitchEvent(UINT eventType, BOOL enabled, bool capsLockEdge = false);
 
   private:
     struct _KEYSTROKE

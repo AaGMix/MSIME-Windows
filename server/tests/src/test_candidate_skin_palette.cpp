@@ -14,6 +14,30 @@ TEST_CASE(candidate_skin_palette_resolves_builtin_theme_and_text_override)
     REQUIRE_EQ(FlattenCandidateColor(light.text, light.surface), RGB(18, 52, 86));
 }
 
+TEST_CASE(candidate_skin_palette_matches_willow_green_light_and_dark_preview)
+{
+    const CandidateSkinPalette dark = ResolveCandidateSkinPalette("willow_green", false, "auto");
+    REQUIRE_EQ(FlattenCandidateColor(dark.surface, dark.surface), RGB(45, 47, 46));
+    REQUIRE_EQ(dark.border.a, 0.0f);
+    REQUIRE_EQ(FlattenCandidateColor(dark.text, dark.surface), RGB(216, 219, 216));
+
+    const CandidateSkinPalette light = ResolveCandidateSkinPalette("willow_green", true, "auto");
+    REQUIRE_EQ(FlattenCandidateColor(light.surface, light.surface), RGB(244, 245, 243));
+    REQUIRE_EQ(light.border.a, 0.0f);
+    REQUIRE_EQ(FlattenCandidateColor(light.text, light.surface), RGB(52, 57, 54));
+}
+
+TEST_CASE(candidate_skin_palette_custom_missing_colors_inherit_package_base)
+{
+    CandidateSkinCatalog::CandidateColors colors;
+    colors.surface = "#102030";
+    const CandidateSkinPalette palette = ResolveCandidateSkinPalette("custom", false, "auto", &colors, "willow_green");
+
+    REQUIRE_EQ(FlattenCandidateColor(palette.surface, palette.surface), RGB(16, 32, 48));
+    REQUIRE_EQ(palette.border.a, 0.0f);
+    REQUIRE_EQ(FlattenCandidateColor(palette.text, palette.surface), RGB(216, 219, 216));
+}
+
 TEST_CASE(candidate_skin_palette_applies_custom_colors_with_builtin_fallbacks)
 {
     CandidateSkinCatalog::CandidateColors colors;
