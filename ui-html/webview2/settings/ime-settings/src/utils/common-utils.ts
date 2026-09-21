@@ -70,6 +70,12 @@ export function showOnlyCurrentModule(moduleName: string): void {
   }
 
   next.style.display = 'block';
+  // 各子页面共用同一个滚动容器 #content-container，切页时需要把滚动位置归零，
+  // 否则新页面会停留在上一个页面的滚动偏移处。
+  const scrollContainer = document.getElementById('content-container');
+  if (scrollContainer) {
+    scrollContainer.scrollTop = 0;
+  }
   activeModuleName = moduleName;
   // 词库 / 实用功能的浮层挂在 body 下（见 hoistOverlay），不随模块容器一起隐藏，切页时收起
   dismissHoistedOverlays();
