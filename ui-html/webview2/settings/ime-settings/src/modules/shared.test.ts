@@ -7,20 +7,32 @@ class MenuElement extends EventTarget {
   textContent = '';
   dataset: Record<string, string> = {};
   attributes = new Map<string, string>();
-  classList = { remove: vi.fn() };
+  classList = { add: vi.fn(), remove: vi.fn(), contains: vi.fn(() => false) };
   label?: MenuElement;
+  children: MenuElement[] = [];
+  tabIndex = 0;
   querySelector() { return this.label; }
+  querySelectorAll() { return this.children; }
   contains() { return true; }
   closest() { return this; }
   getAttribute(name: string) { return this.attributes.get(name) ?? null; }
+  setAttribute(name: string, value: string) { this.attributes.set(name, value); }
+  focus() { (document as unknown as { activeElement: MenuElement }).activeElement = this; }
+  click() {
+    const event = new Event('click');
+    Object.defineProperty(event, 'target', { value: this });
+    this.parent?.dispatchEvent(event);
+  }
+  parent?: MenuElement;
 }
 
+let button: MenuElement;
 let menu: MenuElement;
 let item: MenuElement;
 let label: MenuElement;
 let postMessage: ReturnType<typeof vi.fn>;
 beforeEach(() => {
-  const button = new MenuElement();
+  button = new MenuElement();
   label = new MenuElement();
   label.textContent = '[ / ]';
   button.label = label;
@@ -28,10 +40,13 @@ beforeEach(() => {
   item = new MenuElement();
   item.textContent = '- / =';
   item.dataset.value = 'minus_equal';
+  menu.children = [item];
+  item.parent = menu;
   postMessage = vi.fn();
   vi.stubGlobal('HTMLInputElement', class {});
   vi.stubGlobal('window', { chrome: { webview: { postMessage } } });
   vi.stubGlobal('document', {
+    activeElement: null,
     getElementById: (id: string) => id === 'button' ? button : menu,
     addEventListener: vi.fn()
   });
@@ -44,6 +59,21 @@ function clickItem() {
   Object.defineProperty(event, 'target', { value: item });
   menu.dispatchEvent(event);
 }
+
+it('supports arrow and Enter keyboard selection through the shared dropdown handler', async () => {
+  const arrow = new Event('keydown');
+  Object.defineProperty(arrow, 'key', { value: 'ArrowDown' });
+  button.dispatchEvent(arrow);
+  await Promise.resolve();
+  expect(document.activeElement).toBe(item);
+  expect(item.getAttribute('role')).toBe('option');
+
+  const enter = new Event('keydown');
+  Object.defineProperty(enter, 'key', { value: 'Enter' });
+  menu.dispatchEvent(enter);
+  expect(label.textContent).toBe('- / =');
+  expect(postMessage).toHaveBeenCalledTimes(1);
+});
 
 it('does not select or send a disabled dropdown item', () => {
   item.attributes.set('aria-disabled', 'true');
