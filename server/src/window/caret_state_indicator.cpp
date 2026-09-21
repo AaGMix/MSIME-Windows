@@ -30,7 +30,7 @@ State g_state;
 
 int PixelSize(int dip, UINT dpi)
 {
-    return (std::max)(1, static_cast<int>(std::lround(dip * static_cast<double>(dpi) / 96.0)));
+    return dip == 0 ? 0 : (std::max)(1, static_cast<int>(std::lround(dip * static_cast<double>(dpi) / 96.0)));
 }
 } // namespace
 

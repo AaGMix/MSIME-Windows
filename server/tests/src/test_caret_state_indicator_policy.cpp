@@ -23,14 +23,14 @@ TEST_CASE(caret_state_indicator_upper_positions_clear_the_caret_line)
 TEST_CASE(caret_state_indicator_horizontal_positions_follow_badge_width)
 {
     REQUIRE_EQ(FanyImeUi::kCaretStatePunctuationSlotWidthDip, 64);
-    REQUIRE_EQ(FanyImeUi::kCaretStatePunctuationModeGapDip, 2);
+    REQUIRE_EQ(FanyImeUi::kCaretStatePunctuationModeGapDip, 0);
     REQUIRE_EQ(FanyImeUi::kCaretStatePunctuationModeSlotWidthDip, 30);
-    REQUIRE_EQ(FanyImeUi::kCaretStatePunctuationBadgeWidthDip, 96);
+    REQUIRE_EQ(FanyImeUi::kCaretStatePunctuationBadgeWidthDip, 94);
     constexpr int punctuationBadgeWidth = FanyImeUi::kCaretStatePunctuationBadgeWidthDip;
-    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("top-left", 200, punctuationBadgeWidth, 6), 98);
-    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("top", 200, punctuationBadgeWidth, 6), 152);
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("top-left", 200, punctuationBadgeWidth, 6), 100);
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("top", 200, punctuationBadgeWidth, 6), 153);
     REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("top-right", 200, punctuationBadgeWidth, 6), 206);
-    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("bottom", 200, punctuationBadgeWidth, 6), 98);
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("bottom", 200, punctuationBadgeWidth, 6), 100);
 }
 
 TEST_CASE(caret_state_indicator_single_glyph_is_square)
