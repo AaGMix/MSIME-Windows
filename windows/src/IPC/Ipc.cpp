@@ -479,7 +479,7 @@ bool WritePipeHello(HANDLE hPipeHandle, UINT pipeRole)
         const auto hello =
             FanyImeProtocol::Hello(GetPipeClientId(), NextProtocolId(nextRequestId),
                                    FanyImeProtocol::Capabilities | FanyImeProtocol::CharacterSetShortcut |
-                                       FanyImeProtocol::CompositionRestore);
+                                       FanyImeProtocol::CompositionRestore | FanyImeProtocol::CaretStateLifecycle);
         BOOL ret = WriteFile(hPipeHandle, &hello, sizeof(hello), &bytesWritten, NULL);
         // Never authorize keys from merely writing a hello. An old Server
         // without negotiation times out into the existing raw-input fallback.
@@ -929,6 +929,12 @@ bool SupportsCompositionRestore()
 {
     return hPipe && hPipe != INVALID_HANDLE_VALUE &&
            (negotiatedServerCapabilities & FanyImeProtocol::CompositionRestore) != 0;
+}
+
+bool SupportsCaretStateLifecycle()
+{
+    return hPipe && hPipe != INVALID_HANDLE_VALUE &&
+           (negotiatedServerCapabilities & FanyImeProtocol::CaretStateLifecycle) != 0;
 }
 
 HANDLE GetToTsfWorkerThreadNamedpipe()
@@ -1561,6 +1567,16 @@ int SendHideCandidateWndEventToUIProcessViaNamedPipe()
     return 0;
 }
 
+int SendHideCaretStateEventToUIProcessViaNamedPipe()
+{
+    if (!SupportsCaretStateLifecycle())
+        return 0;
+    namedpipeData = {};
+    namedpipeData.event_type = FanyImePipeEventType::HideCaretState;
+    SendToNamedpipe();
+    return 0;
+}
+
 int SendShowCandidateWndEventToUIProcessViaNamedPipe()
 {
     // CandidateListUIPresenter stages the text/caret payload immediately
@@ -1799,11 +1815,12 @@ int SendIMEDeactivationEventToUIProcessViaNamedPipe()
     return 0;
 }
 
-int SendIMESwitchEventToUIProcessViaNamedPipe(UINT uImeStatus, const int point[2])
+int SendIMESwitchEventToUIProcessViaNamedPipe(UINT uImeStatus, const int point[2], bool capsLockEdge)
 {
     namedpipeData = {};
     namedpipeData.event_type = FanyImePipeEventType::IMESwitch;
     namedpipeData.keycode = uImeStatus;
+    namedpipeData.wch = capsLockEdge ? VK_CAPITAL : 0;
     namedpipeData.point[0] = point[0];
     namedpipeData.point[1] = point[1];
     SendToNamedpipe();

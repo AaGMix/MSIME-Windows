@@ -20,6 +20,9 @@ constexpr std::uint32_t CharacterSetShortcut = 1u << 3;
 // discarding the whole composition. A client must opt in only after it can
 // rebuild its keystroke buffer from that payload.
 constexpr std::uint32_t CompositionRestore = 1u << 4;
+// Optional: focus/context replacement can hide the transient caret badge
+// without clearing candidates or changing authoritative input state.
+constexpr std::uint32_t CaretStateLifecycle = 1u << 5;
 constexpr std::uint32_t Capabilities = RequestIds | FocusEpochs | FramedVoice;
 constexpr std::uint32_t RequiredCapabilities = RequestIds | FocusEpochs;
 

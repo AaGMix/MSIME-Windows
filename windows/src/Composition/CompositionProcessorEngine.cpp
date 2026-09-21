@@ -23,8 +23,9 @@ class CCaretStateSwitchEditSession : public CEditSessionBase
 {
   public:
     CCaretStateSwitchEditSession(CMetasequoiaIME *textService, ITfContext *context, UINT eventType, BOOL enabled,
-                                 uint64_t focusToken)
-        : CEditSessionBase(textService, context), eventType_(eventType), enabled_(enabled), focusToken_(focusToken)
+                                 uint64_t focusToken, bool capsLockEdge)
+        : CEditSessionBase(textService, context), eventType_(eventType), enabled_(enabled), focusToken_(focusToken),
+          capsLockEdge_(capsLockEdge)
     {
     }
 
@@ -50,7 +51,7 @@ class CCaretStateSwitchEditSession : public CEditSessionBase
                 const POINT anchor = GetPhysicalTextAnchor(view, rect);
                 const int point[2] = {anchor.x, anchor.y};
                 if (eventType_ == FanyImePipeEventType::IMESwitch)
-                    SendIMESwitchEventToUIProcessViaNamedPipe(enabled_ ? 1 : 0, point);
+                    SendIMESwitchEventToUIProcessViaNamedPipe(enabled_ ? 1 : 0, point, capsLockEdge_);
                 else if (eventType_ == FanyImePipeEventType::PuncSwitch)
                     SendPuncSwitchEventToUIProcessViaNamedPipe(enabled_, point);
                 else if (eventType_ == FanyImePipeEventType::DoubleSingleByteSwitch)
@@ -66,6 +67,7 @@ class CCaretStateSwitchEditSession : public CEditSessionBase
     UINT eventType_;
     BOOL enabled_;
     uint64_t focusToken_;
+    bool capsLockEdge_;
 };
 } // namespace
 
@@ -1597,7 +1599,7 @@ void CCompositionProcessorEngine::InitializeMetasequoiaIMECompartment(_In_ ITfTh
 
     PrivateCompartmentsUpdated(pThreadMgr);
 }
-void CCompositionProcessorEngine::SendCaretStateSwitchEvent(UINT eventType, BOOL enabled)
+void CCompositionProcessorEngine::SendCaretStateSwitchEvent(UINT eventType, BOOL enabled, bool capsLockEdge)
 {
     if (!_pOwnerThreadMgr || !_pTextService || !Global::g_connected)
         return;
@@ -1610,7 +1612,8 @@ void CCompositionProcessorEngine::SendCaretStateSwitchEvent(UINT eventType, BOOL
         return;
     if (SUCCEEDED(document->GetTop(&context)) && context)
     {
-        auto *session = new CCaretStateSwitchEditSession(_pTextService, context, eventType, enabled, focusToken);
+        auto *session =
+            new CCaretStateSwitchEditSession(_pTextService, context, eventType, enabled, focusToken, capsLockEdge);
         HRESULT sessionResult = E_FAIL;
         context->RequestEditSession(_tfClientId, session, TF_ES_ASYNCDONTCARE | TF_ES_READ, &sessionResult);
         session->Release();
@@ -1769,6 +1772,11 @@ void CCompositionProcessorEngine::ConversionModeCompartmentUpdated(_In_ ITfThrea
         return;
     }
 
+    // Host-owned conversion DWORD synchronization updates our authoritative
+    // private compartments, but it is not a user shortcut. Keep snapshots and
+    // toolbar state updates while suppressing only transient caret badges.
+    const BOOL wasSuppressingCaretStateEvents = _suppressCaretStateEvents;
+    _suppressCaretStateEvents = TRUE;
     BOOL isDouble = FALSE;
     CCompartment CompartmentDoubleSingleByte(pThreadMgr, _tfClientId,
                                              Global::MetasequoiaIMEGuidCompartmentDoubleSingleByte);
@@ -1798,6 +1806,7 @@ void CCompositionProcessorEngine::ConversionModeCompartmentUpdated(_In_ ITfThrea
             CompartmentKeyboardOpen._SetCompartmentBOOL(TRUE);
         }
     }
+    _suppressCaretStateEvents = wasSuppressingCaretStateEvents;
 }
 
 //+---------------------------------------------------------------------------

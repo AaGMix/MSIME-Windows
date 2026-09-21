@@ -100,6 +100,7 @@ constexpr std::uint32_t ClientSuspended = 14;   // temporary focus route reset; 
 // the Server may have re-routed to another client meanwhile; without the
 // ownership claim the Server would discard it as an inactive-client event.
 constexpr std::uint32_t FocusRestored = 15;
+constexpr std::uint32_t HideCaretState = 16; // focus-context boundary; never clears candidate state
 constexpr std::uint32_t IMESwitch = 7;
 constexpr std::uint32_t PuncSwitch = 8;
 constexpr std::uint32_t DoubleSingleByteSwitch = 9;

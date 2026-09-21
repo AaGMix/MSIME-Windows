@@ -36,6 +36,7 @@ bool MarkNamedpipeSessionDirtyForOwner(_In_ const void *owner);
 bool EnsureNamedpipeFocusSessionActivated();
 bool SupportsCharacterSetShortcut();
 bool SupportsCompositionRestore();
+bool SupportsCaretStateLifecycle();
 bool FlushNamedpipeFocusSessionReset();
 bool FlushNamedpipeImeDeactivation(uint64_t focusToken = 0);
 
@@ -69,7 +70,7 @@ int SendClientSuspendedEventToServerViaNamedPipe();
 int SendIMEStatusSnapshotToUIProcessViaNamedPipe(bool kbdIsOpen, bool fullwidthIsOpen, bool puncIsOpen,
                                                  bool assertsFocusOwnership = false);
 int SendIMEStatusEventToUIProcessViaNamedPipe(bool kbdIsOpen, bool fullwidthIsOpen, bool puncIsOpen);
-int SendIMESwitchEventToUIProcessViaNamedPipe(UINT uImeStatus, const int point[2]);
+int SendIMESwitchEventToUIProcessViaNamedPipe(UINT uImeStatus, const int point[2], bool capsLockEdge = false);
 int SendPuncSwitchEventToUIProcessViaNamedPipe(BOOL isPunc, const int point[2]);
 int SendDoubleSingleByteSwitchEventToUIProcessViaNamedPipe(BOOL isDoubleSingleByte, const int point[2]);
 
@@ -89,6 +90,7 @@ int WriteDataToNamedPipe(              //
 );
 KeyEventSendResult SendKeyEventToUIProcessViaNamedPipe(_Out_opt_ uint64_t *requestId = nullptr);
 int SendHideCandidateWndEventToUIProcessViaNamedPipe();
+int SendHideCaretStateEventToUIProcessViaNamedPipe();
 int SendShowCandidateWndEventToUIProcessViaNamedPipe();
 int SendMoveCandidateWndEventToUIProcessViaNamedPipe();
 int SendLangbarRightClickEventToUIProcessViaNamedPipe(const RECT *prcArea);

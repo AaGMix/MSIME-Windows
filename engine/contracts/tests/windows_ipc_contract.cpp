@@ -26,6 +26,10 @@ int main()
     FanyImeNamedpipeData legacy{};
     std::memcpy(&legacy, bytes.data(), bytes.size());
     CHECK(legacy.client_id == 7);
+    CHECK(FanyImePipeEventType::HideCaretState == 16);
+    CHECK(FanyImePipeEventType::HideCaretState != FanyImePipeEventType::HideCandidateWnd);
+    CHECK(!FanyImePipeEventType::IsRouteDeactivation(FanyImePipeEventType::HideCaretState));
+    CHECK(FanyImeProtocol::CaretStateLifecycle == (1u << 5));
     CHECK(FanyImeProtocol::Negotiate(legacy).legacy);
     CHECK(FanyImeProtocol::Negotiate(legacy).accepted);
 
