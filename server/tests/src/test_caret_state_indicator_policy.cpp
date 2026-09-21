@@ -60,6 +60,18 @@ TEST_CASE(caret_state_indicator_maps_input_mode_to_one_glyph)
     REQUIRE_EQ(FanyImeUi::InputModeEventGlyph(true, true, false), L'日');
 }
 
+TEST_CASE(caret_state_indicator_caps_lock_masks_ordinary_ime_switches_only)
+{
+    using FanyImeUi::ShouldShowInputModeEvent;
+    REQUIRE(ShouldShowInputModeEvent(true, true));
+    REQUIRE(ShouldShowInputModeEvent(true, false));
+    REQUIRE(ShouldShowInputModeEvent(false, false));
+    REQUIRE(!ShouldShowInputModeEvent(false, true));
+    // Punctuation mapping still reflects the authoritative IME mode, even
+    // when Caps Lock changes the handling of fresh alphabetic input.
+    REQUIRE_EQ(FanyImeUi::PunctuationInputModeText(true, true, false), L"，。  中");
+}
+
 TEST_CASE(caret_state_indicator_combines_punctuation_and_input_mode)
 {
     using FanyImeUi::PunctuationInputModeText;

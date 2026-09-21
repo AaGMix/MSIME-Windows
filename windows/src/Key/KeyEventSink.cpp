@@ -1685,13 +1685,12 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
         *pIsEaten = FALSE;
         return S_OK;
     }
-    if (wParam == VK_CAPITAL && (lParam & (1LL << 30)) == 0)
+    if (IsFreshCapsLockKeyDown(wParam, lParam))
     {
         const bool capsLockEnabled = (GetKeyState(VK_CAPITAL) & 0x0001) == 0;
-        const bool previousCapsLockEnabled =
-            Global::CapsLockEnabled.exchange(capsLockEnabled, std::memory_order_relaxed);
+        Global::CapsLockEnabled.store(capsLockEnabled, std::memory_order_relaxed);
         _RequestLanguageBarCapsIconRefresh();
-        if (previousCapsLockEnabled != capsLockEnabled && _pCompositionProcessorEngine)
+        if (_pCompositionProcessorEngine)
         {
             _pCompositionProcessorEngine->SendCaretStateSwitchEvent(
                 FanyImePipeEventType::IMESwitch,

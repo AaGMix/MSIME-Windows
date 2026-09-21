@@ -22,6 +22,13 @@ inline bool IsAutoRepeat(LPARAM lParam)
     return (static_cast<ULONG_PTR>(lParam) & 0x40000000u) != 0;
 }
 
+inline bool IsFreshCapsLockKeyDown(WPARAM key, LPARAM lParam)
+{
+    // The Server hook may have already broadcast the new lock state. The
+    // physical non-repeat key press is the edge, regardless of cached state.
+    return key == VK_CAPITAL && !IsAutoRepeat(lParam);
+}
+
 inline bool ShouldSuppressBackspaceRepeat(bool armed, bool compositionActive, bool repeat)
 {
     return armed && repeat && !compositionActive;

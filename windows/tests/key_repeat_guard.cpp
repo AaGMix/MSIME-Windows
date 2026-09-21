@@ -19,6 +19,15 @@ int main()
     if (!IsAutoRepeat(static_cast<LPARAM>(0x001d0001u | 0x40000000u)))
         return 6;
 
+    // The physical key transition remains the edge whether the Server hook's
+    // asynchronous state broadcast arrives before or after this test-key call.
+    if (!IsFreshCapsLockKeyDown(VK_CAPITAL, 0))
+        return 7;
+    if (IsFreshCapsLockKeyDown(VK_CAPITAL, 0x40000000))
+        return 8;
+    if (IsFreshCapsLockKeyDown('A', 0))
+        return 9;
+
     // Exhaustive armed x compositionActive x repeat matrix.
     for (int mask = 0; mask < 8; ++mask)
     {
