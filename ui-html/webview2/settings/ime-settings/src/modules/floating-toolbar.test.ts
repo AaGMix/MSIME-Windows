@@ -37,8 +37,8 @@ it('shows the four runtime samples and preserves fixed punctuation slots', () =>
   expect(preview.match(/class="caret-state-preview-item"[^>]*>\s*<div class="caret-state-badge[^>]*>[\s\S]*?<\/div>\s*<span class="caret-state-preview-caret"><\/span>\s*<\/div>/g)).toHaveLength(4);
   expect(preview).toContain('data-position="top-left"');
   expect(styles).toMatch(/\.caret-state-badge\s*\{[^}]*width:\s*30px;[^}]*height:\s*30px;/);
-  expect(styles).toMatch(/\.caret-state-badge-punctuation\s*\{[^}]*display:\s*block;[^}]*width:\s*96px;/);
-  expect(styles).toMatch(/\.caret-state-badge-punctuation\s*\{\s*--badge-width:\s*96px;/);
+  expect(styles).toMatch(/\.caret-state-badge-punctuation\s*\{[^}]*display:\s*block;[^}]*width:\s*94px;/);
+  expect(styles).toMatch(/\.caret-state-badge-punctuation\s*\{\s*--badge-width:\s*94px;/);
   expect(styles).toMatch(/\.caret-state-punctuation-slot\s*\{[^}]*left:\s*-1px;[^}]*width:\s*64px;/);
   expect(styles).toMatch(/\.caret-state-mode-slot\s*\{[^}]*right:\s*-1px;[^}]*width:\s*30px;/);
   expect(styles).toMatch(/\.caret-state-preview-host\s*\{[^}]*font-size:\s*20px;/);

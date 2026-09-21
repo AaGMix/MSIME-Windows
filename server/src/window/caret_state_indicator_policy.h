@@ -5,7 +5,7 @@
 namespace FanyImeUi
 {
 inline constexpr int kCaretStatePunctuationSlotWidthDip = 64;
-inline constexpr int kCaretStatePunctuationModeGapDip = 2;
+inline constexpr int kCaretStatePunctuationModeGapDip = 0;
 inline constexpr int kCaretStatePunctuationModeSlotWidthDip = 30;
 inline constexpr int kCaretStatePunctuationBadgeWidthDip =
     kCaretStatePunctuationSlotWidthDip + kCaretStatePunctuationModeGapDip + kCaretStatePunctuationModeSlotWidthDip;
