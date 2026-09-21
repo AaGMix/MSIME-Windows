@@ -1,4 +1,5 @@
 # Build and package outputs (collected locally, not part of this repo)
+staging/
 Output/
 server_exe/
 tsf_dll/
