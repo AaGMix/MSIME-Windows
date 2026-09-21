@@ -721,8 +721,13 @@ InputSession::CloudQueryState InputSession::get_cloud_query_state() const
     }
 
     state.should_query = !request().normalized_input.empty();
-    // 全拼敲出来的 nve / lve 同样要换写法；没有音节边界的裸串匹配不上，原样透传。
-    state.query_text = quanpin::to_google_spelling(request().normalized_input);
+    // 云端要按用户看到的分词来查：手动把 qi'e'huan 分成三段，就该带着音节边界发给云接口，
+    // 否则云端自行贪心断句会当成 qie'huan（切换）。normalized_segmentation 保留了用户的手动
+    // 撇号（cut_pinyin_with_corrections 先按撇号切分），既定住了分词，也让 to_google_spelling
+    // 能逐音节把 nve / lve 换成云端认的 nue / lue 写法。分词缺失时退回裸串。
+    const std::string &segmentation =
+        request().normalized_segmentation.empty() ? request().normalized_input : request().normalized_segmentation;
+    state.query_text = quanpin::to_google_spelling(segmentation);
     return state;
 }
 
