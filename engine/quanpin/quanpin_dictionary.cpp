@@ -915,10 +915,10 @@ int QuanpinDictionary::create_word_from_canonical_pinyin(std::string pinyin, std
 
     pinyin = quanpin::join_segments(segments);
     const std::string jp = quanpin::segments_to_jianpin(segments);
-    if (!do_validate(pinyin, jp, word))
-    {
-        return ERROR_CODE;
-    }
+    // 不再走 do_validate：这里的音节边界由调用方（canonical 键）显式给定，上面已按
+    // split_segments 校验过段数、逐段完整性，jp 也是每段一字母、长度必然等于字数。
+    // do_validate 会先 remove_delimiters 再用贪心 correction 重切，把 qi'e'huan 断成
+    // qie'huan（段数 3→2），从而误杀这条合法整句——正是 AI / 云联想选中却入不了库的根因。
     if (check_data(build_sql_for_checking_word(pinyin, word)))
     {
         return OK;
