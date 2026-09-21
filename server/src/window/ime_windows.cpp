@@ -3845,6 +3845,18 @@ LRESULT CALLBACK WndProcSettingsWindow(HWND hwnd, UINT message, WPARAM wParam, L
     return DefWindowProc(hwnd, message, wParam, lParam);
 }
 
+namespace
+{
+void DiscardPendingCaretStateShowRequests(HWND hwnd)
+{
+    MSG pending{};
+    while (PeekMessageW(&pending, hwnd, WM_SHOW_CARET_STATE, WM_SHOW_CARET_STATE, PM_REMOVE))
+    {
+        delete reinterpret_cast<CaretStateIndicator::ShowRequest *>(pending.lParam);
+    }
+}
+} // namespace
+
 LRESULT CALLBACK WndProcCaretStateWindow(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     if (IsSystemLightDarkToggle(message, lParam))
@@ -3893,8 +3905,13 @@ LRESULT CALLBACK WndProcCaretStateWindow(HWND hwnd, UINT message, WPARAM wParam,
     }
     case WM_HIDE_CARET_STATE:
         CaretStateIndicator::Hide(hwnd);
+        DiscardPendingCaretStateShowRequests(hwnd);
         ::is_global_wnd_caret_state_shown = false;
         return 0;
+    case WM_NCDESTROY:
+        ::global_hwnd_caret_state = nullptr;
+        DiscardPendingCaretStateShowRequests(hwnd);
+        return DefWindowProc(hwnd, message, wParam, lParam);
     }
     return DefWindowProc(hwnd, message, wParam, lParam);
 }

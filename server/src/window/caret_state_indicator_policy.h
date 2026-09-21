@@ -39,6 +39,11 @@ inline int CaretStateIndicatorX(const std::string &position, int anchorX, int in
     return anchorX - indicatorWidth - gap;
 }
 
+inline int CaretStateIndicatorTextWidth(int height, int scaledAdditionalCharacterWidth, int extraCharacters)
+{
+    return extraCharacters == 0 ? height : height + scaledAdditionalCharacterWidth * extraCharacters;
+}
+
 inline wchar_t InputModeGlyph(bool imeEnabled, bool japaneseMode)
 {
     return imeEnabled ? (japaneseMode ? L'日' : L'中') : L'英';

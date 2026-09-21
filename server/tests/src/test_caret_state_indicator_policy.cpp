@@ -33,6 +33,13 @@ TEST_CASE(caret_state_indicator_horizontal_positions_follow_badge_width)
     REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("bottom", 200, punctuationBadgeWidth, 6), 98);
 }
 
+TEST_CASE(caret_state_indicator_single_glyph_is_square)
+{
+    constexpr int height = 30;
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorTextWidth(height, 20, 0), height);
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorTextWidth(height, 20, 2), 70);
+}
+
 TEST_CASE(caret_state_indicator_maps_input_mode_to_one_glyph)
 {
     using FanyImeUi::InputModeGlyph;
