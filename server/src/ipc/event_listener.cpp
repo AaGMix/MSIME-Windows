@@ -1926,9 +1926,12 @@ void WorkerThread()
                 PostMessage(::global_hwnd, WM_IMESWITCH, task.pipe_data.keycode, 0);
                 UpdateCaretLanguagePunctuationState(imeEnabled ? 1 : 0, -1);
             }
-            const wchar_t glyph =
-                FanyImeUi::InputModeEventGlyph(imeEnabled, GetConfiguredInputMode() == "japanese", capsLockEdge);
-            PostCaretStateText(std::wstring(1, glyph), task.pipe_data.point[0], task.pipe_data.point[1]);
+            if (FanyImeUi::ShouldShowInputModeEvent(capsLockEdge, GetServerCapsLockState() != 0))
+            {
+                const wchar_t glyph =
+                    FanyImeUi::InputModeEventGlyph(imeEnabled, GetConfiguredInputMode() == "japanese", capsLockEdge);
+                PostCaretStateText(std::wstring(1, glyph), task.pipe_data.point[0], task.pipe_data.point[1]);
+            }
             break;
         }
 
