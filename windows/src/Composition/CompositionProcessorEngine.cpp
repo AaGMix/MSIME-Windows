@@ -23,9 +23,9 @@ class CCaretStateSwitchEditSession : public CEditSessionBase
 {
   public:
     CCaretStateSwitchEditSession(CMetasequoiaIME *textService, ITfContext *context, UINT eventType, BOOL enabled,
-                                 uint64_t focusToken, bool capsLockEdge)
+                                 uint64_t focusToken, bool capsLockEdge, bool capsLockEnabled)
         : CEditSessionBase(textService, context), eventType_(eventType), enabled_(enabled), focusToken_(focusToken),
-          capsLockEdge_(capsLockEdge)
+          capsLockEdge_(capsLockEdge), capsLockEnabled_(capsLockEnabled)
     {
     }
 
@@ -51,7 +51,7 @@ class CCaretStateSwitchEditSession : public CEditSessionBase
                 const POINT anchor = GetPhysicalTextAnchor(view, rect);
                 const int point[2] = {anchor.x, anchor.y};
                 if (eventType_ == FanyImePipeEventType::IMESwitch)
-                    SendIMESwitchEventToUIProcessViaNamedPipe(enabled_ ? 1 : 0, point, capsLockEdge_);
+                    SendIMESwitchEventToUIProcessViaNamedPipe(enabled_ ? 1 : 0, point, capsLockEdge_, capsLockEnabled_);
                 else if (eventType_ == FanyImePipeEventType::PuncSwitch)
                     SendPuncSwitchEventToUIProcessViaNamedPipe(enabled_, point);
                 else if (eventType_ == FanyImePipeEventType::DoubleSingleByteSwitch)
@@ -68,6 +68,7 @@ class CCaretStateSwitchEditSession : public CEditSessionBase
     BOOL enabled_;
     uint64_t focusToken_;
     bool capsLockEdge_;
+    bool capsLockEnabled_;
 };
 } // namespace
 
@@ -1599,7 +1600,8 @@ void CCompositionProcessorEngine::InitializeMetasequoiaIMECompartment(_In_ ITfTh
 
     PrivateCompartmentsUpdated(pThreadMgr);
 }
-void CCompositionProcessorEngine::SendCaretStateSwitchEvent(UINT eventType, BOOL enabled, bool capsLockEdge)
+void CCompositionProcessorEngine::SendCaretStateSwitchEvent(UINT eventType, BOOL enabled, bool capsLockEdge,
+                                                            bool capsLockEnabled)
 {
     if (!_pOwnerThreadMgr || !_pTextService || !Global::g_connected)
         return;
@@ -1612,8 +1614,10 @@ void CCompositionProcessorEngine::SendCaretStateSwitchEvent(UINT eventType, BOOL
         return;
     if (SUCCEEDED(document->GetTop(&context)) && context)
     {
-        auto *session =
-            new CCaretStateSwitchEditSession(_pTextService, context, eventType, enabled, focusToken, capsLockEdge);
+        if (!capsLockEdge)
+            capsLockEnabled = Global::CapsLockEnabled.load(std::memory_order_relaxed);
+        auto *session = new CCaretStateSwitchEditSession(_pTextService, context, eventType, enabled, focusToken,
+                                                         capsLockEdge, capsLockEnabled);
         HRESULT sessionResult = E_FAIL;
         context->RequestEditSession(_tfClientId, session, TF_ES_ASYNCDONTCARE | TF_ES_READ, &sessionResult);
         session->Release();
