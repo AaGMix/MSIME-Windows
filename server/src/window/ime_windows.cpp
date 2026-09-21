@@ -1793,6 +1793,10 @@ void ApplyConfiguredFloatingToolbarVisibility(const wchar_t *reason)
     const HWND foreground = GetForegroundWindow();
     const bool fullscreen = foreground && CheckFullscreen(foreground);
     const bool configured = GetConfiguredFloatingToolbarEnabled();
+    if (configured && ::global_hwnd_caret_state)
+    {
+        PostMessage(::global_hwnd_caret_state, WM_HIDE_CARET_STATE, 0, 0);
+    }
     const bool should_show = FanyImeUi::ShouldShowFloatingToolbar(configured, fullscreen, g_is_ime_active);
     const bool is_visible = IsWindowVisible(::global_hwnd_ftb) != FALSE;
     const bool paint_grace = IsFloatingToolbarPaintGraceActive();
@@ -2769,7 +2773,6 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
             const bool previous_paired_punctuation = GetConfiguredPairedPunctuationEnabled();
             const std::string previous_punctuation_lock = GetConfiguredPunctuationLock();
             const bool previous_tsf_diagnostic_log = GetConfiguredTsfDiagnosticLogEnabled();
-            const bool previous_statistics_enabled = GetConfiguredStatisticsEnabled();
             const std::string previous_tsf_preedit_style = GetConfiguredTsfPreeditStyle();
             const std::string previous_theme_mode = GetConfiguredThemeMode();
             const std::string previous_theme_cand = GetConfiguredThemeCand();
@@ -2915,12 +2918,6 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
                     BroadcastToTsfWorkerThreadViaNamedpipe(
                         Global::DataFromServerMsgTypeToTsfWorkerThread::TsfDiagnosticLogChanged,
                         GetConfiguredTsfDiagnosticLogEnabled() ? L"1" : L"0");
-                }
-                if (previous_statistics_enabled != GetConfiguredStatisticsEnabled())
-                {
-                    BroadcastToTsfWorkerThreadViaNamedpipe(
-                        Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged,
-                        GetConfiguredStatisticsEnabled() ? L"1" : L"0");
                 }
                 const VoiceInputConfig &voice_input = GetConfiguredVoiceInput();
                 if (previous_voice_input.enabled != voice_input.enabled ||
@@ -3503,7 +3500,6 @@ LRESULT CALLBACK WndProcSettingsWindow(HWND hwnd, UINT message, WPARAM wParam, L
             const bool previous_paired_punctuation = GetConfiguredPairedPunctuationEnabled();
             const std::string previous_punctuation_lock = GetConfiguredPunctuationLock();
             const bool previous_tsf_diagnostic_log = GetConfiguredTsfDiagnosticLogEnabled();
-            const bool previous_statistics_enabled = GetConfiguredStatisticsEnabled();
             const std::string previous_tsf_preedit_style = GetConfiguredTsfPreeditStyle();
             const std::string previous_theme_mode = GetConfiguredThemeMode();
             const std::string previous_theme_cand = GetConfiguredThemeCand();
@@ -3638,12 +3634,6 @@ LRESULT CALLBACK WndProcSettingsWindow(HWND hwnd, UINT message, WPARAM wParam, L
                     BroadcastToTsfWorkerThreadViaNamedpipe(
                         Global::DataFromServerMsgTypeToTsfWorkerThread::TsfDiagnosticLogChanged,
                         GetConfiguredTsfDiagnosticLogEnabled() ? L"1" : L"0");
-                }
-                if (previous_statistics_enabled != GetConfiguredStatisticsEnabled())
-                {
-                    BroadcastToTsfWorkerThreadViaNamedpipe(
-                        Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged,
-                        GetConfiguredStatisticsEnabled() ? L"1" : L"0");
                 }
                 PostSettingsConfig();
             }
@@ -3855,6 +3845,18 @@ LRESULT CALLBACK WndProcSettingsWindow(HWND hwnd, UINT message, WPARAM wParam, L
     return DefWindowProc(hwnd, message, wParam, lParam);
 }
 
+namespace
+{
+void DiscardPendingCaretStateShowRequests(HWND hwnd)
+{
+    MSG pending{};
+    while (PeekMessageW(&pending, hwnd, WM_SHOW_CARET_STATE, WM_SHOW_CARET_STATE, PM_REMOVE))
+    {
+        delete reinterpret_cast<CaretStateIndicator::ShowRequest *>(pending.lParam);
+    }
+}
+} // namespace
+
 LRESULT CALLBACK WndProcCaretStateWindow(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     if (IsSystemLightDarkToggle(message, lParam))
@@ -3888,9 +3890,9 @@ LRESULT CALLBACK WndProcCaretStateWindow(HWND hwnd, UINT message, WPARAM wParam,
     case WM_SHOW_CARET_STATE: {
         std::unique_ptr<CaretStateIndicator::ShowRequest> request(
             reinterpret_cast<CaretStateIndicator::ShowRequest *>(lParam));
-        if (!request || !FanyImeUi::ShouldShowCaretStateIndicator(GetConfiguredCaretStateIndicatorEnabled(),
-                                                                  g_is_ime_active, request ? request->caret.x : 0,
-                                                                  request ? request->caret.y : -100000))
+        if (!request || !FanyImeUi::ShouldShowCaretStateIndicator(
+                            GetConfiguredCaretStateIndicatorEnabled(), GetConfiguredFloatingToolbarEnabled(),
+                            g_is_ime_active, request ? request->caret.x : 0, request ? request->caret.y : -100000))
         {
             CaretStateIndicator::Hide(hwnd);
             ::is_global_wnd_caret_state_shown = false;
@@ -3903,8 +3905,13 @@ LRESULT CALLBACK WndProcCaretStateWindow(HWND hwnd, UINT message, WPARAM wParam,
     }
     case WM_HIDE_CARET_STATE:
         CaretStateIndicator::Hide(hwnd);
+        DiscardPendingCaretStateShowRequests(hwnd);
         ::is_global_wnd_caret_state_shown = false;
         return 0;
+    case WM_NCDESTROY:
+        ::global_hwnd_caret_state = nullptr;
+        DiscardPendingCaretStateShowRequests(hwnd);
+        return DefWindowProc(hwnd, message, wParam, lParam);
     }
     return DefWindowProc(hwnd, message, wParam, lParam);
 }

@@ -16,9 +16,11 @@ enum class CaretStateKind
     CharacterSet,
 };
 
-inline bool ShouldShowCaretStateIndicator(bool indicatorEnabled, bool imeActive, int anchorX, int anchorY)
+inline bool ShouldShowCaretStateIndicator(bool indicatorEnabled, bool floatingToolbarEnabled, bool imeActive,
+                                          int anchorX, int anchorY)
 {
-    return indicatorEnabled && imeActive && anchorY > -10000 && (anchorX != 0 || anchorY != 0);
+    return indicatorEnabled && !floatingToolbarEnabled && imeActive && anchorY > -10000 &&
+           (anchorX != 0 || anchorY != 0);
 }
 
 inline int CaretStateIndicatorY(bool belowCaret, int anchorY, int indicatorHeight, int caretLineHeight, int gap)
@@ -35,6 +37,11 @@ inline int CaretStateIndicatorX(const std::string &position, int anchorX, int in
     if (position == "top-right")
         return anchorX + gap;
     return anchorX - indicatorWidth - gap;
+}
+
+inline int CaretStateIndicatorTextWidth(int height, int scaledAdditionalCharacterWidth, int extraCharacters)
+{
+    return extraCharacters == 0 ? height : height + scaledAdditionalCharacterWidth * extraCharacters;
 }
 
 inline wchar_t InputModeGlyph(bool imeEnabled, bool japaneseMode)

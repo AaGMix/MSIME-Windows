@@ -1,14 +1,15 @@
 #include "tests/includes/test_framework.h"
 #include "window/caret_state_indicator_policy.h"
 
-TEST_CASE(caret_state_indicator_visibility_is_independent_of_floating_toolbar)
+TEST_CASE(caret_state_indicator_visibility_is_complementary)
 {
-    REQUIRE(FanyImeUi::ShouldShowCaretStateIndicator(true, true, 50, 100));
-    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(false, true, 50, 100));
-    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, 50, 100));
-    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, true, 0, 0));
-    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, true, 50, -10000));
-    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, true, 50, -100000));
+    REQUIRE(FanyImeUi::ShouldShowCaretStateIndicator(true, false, true, 50, 100));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(false, false, true, 50, 100));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, true, true, 50, 100));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, false, 50, 100));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, true, 0, 0));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, true, 50, -10000));
+    REQUIRE(!FanyImeUi::ShouldShowCaretStateIndicator(true, false, true, 50, -100000));
 }
 
 TEST_CASE(caret_state_indicator_upper_positions_clear_the_caret_line)
@@ -30,6 +31,13 @@ TEST_CASE(caret_state_indicator_horizontal_positions_follow_badge_width)
     REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("top", 200, punctuationBadgeWidth, 6), 152);
     REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("top-right", 200, punctuationBadgeWidth, 6), 206);
     REQUIRE_EQ(FanyImeUi::CaretStateIndicatorX("bottom", 200, punctuationBadgeWidth, 6), 98);
+}
+
+TEST_CASE(caret_state_indicator_single_glyph_is_square)
+{
+    constexpr int height = 30;
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorTextWidth(height, 20, 0), height);
+    REQUIRE_EQ(FanyImeUi::CaretStateIndicatorTextWidth(height, 20, 2), 70);
 }
 
 TEST_CASE(caret_state_indicator_maps_input_mode_to_one_glyph)

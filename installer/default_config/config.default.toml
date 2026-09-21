@@ -17,7 +17,7 @@ candidate_window_diagnostic_log = false
 # 悬浮工具栏
 floating_toolbar = true
 # 在光标附近显示短暂状态提示（默认关闭）
-caret_state_indicator = false
+caret_state_indicator = true
 # 光标状态提示位置：top-left / top / top-right / bottom
 caret_state_indicator_position = "top-left"
 # 悬浮工具栏组件（中英文切换始终显示）

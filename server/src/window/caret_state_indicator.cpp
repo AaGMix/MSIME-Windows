@@ -50,7 +50,8 @@ void Show(HWND hwnd, const std::wstring &text, POINT caret, bool topmost)
                           ? PixelSize(FanyImeUi::kCaretStatePunctuationSlotWidthDip, g_state.dpi) +
                                 PixelSize(FanyImeUi::kCaretStatePunctuationModeGapDip, g_state.dpi) +
                                 PixelSize(FanyImeUi::kCaretStatePunctuationModeSlotWidthDip, g_state.dpi)
-                          : height + PixelSize(kAdditionalCharacterWidthDip * extraCharacters, g_state.dpi);
+                          : FanyImeUi::CaretStateIndicatorTextWidth(
+                                height, PixelSize(kAdditionalCharacterWidthDip, g_state.dpi), extraCharacters);
     const int gap = PixelSize(kCaretGapDip, g_state.dpi);
     const int caretLineHeight = PixelSize(kCaretLineHeightDip, g_state.dpi);
     MONITORINFO info{sizeof(info)};
