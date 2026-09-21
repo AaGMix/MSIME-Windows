@@ -5,6 +5,7 @@
 // so the same ABI assertions can run on every platform and on x86/x64 Windows.
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include "ipc_protocol_limits.h"
@@ -123,11 +124,36 @@ constexpr bool IsTerminalDeactivation(std::uint32_t event_type)
 }
 } // namespace FanyImePipeEventType
 
-// OR'd into modifiers_down on Main-pipe packets. Server strips it before any
-// key-modifier policy runs. Used so UILess hosts (games) never get an HWND.
+// OR'd into modifiers_down on Main-pipe packets. Server strips UiLess before
+// any key-modifier policy runs. IMESwitch packets use the next two high bits
+// as an append-only event-time Caps Lock snapshot; old Servers ignore them.
 namespace FanyImePipeFlags
 {
 constexpr std::uint32_t UiLess = 0x80000000u;
+constexpr std::uint32_t ImeSwitchCapsSnapshotPresent = 0x40000000u;
+constexpr std::uint32_t ImeSwitchCapsSnapshotEnabled = 0x20000000u;
+
+constexpr std::uint32_t EncodeImeSwitchCapsLockSnapshot(bool enabled)
+{
+    return ImeSwitchCapsSnapshotPresent | (enabled ? ImeSwitchCapsSnapshotEnabled : 0u);
+}
+
+constexpr bool HasImeSwitchCapsLockSnapshot(std::uint32_t flags)
+{
+    return (flags & ImeSwitchCapsSnapshotPresent) != 0;
+}
+
+constexpr bool ImeSwitchCapsLockSnapshotEnabled(std::uint32_t flags)
+{
+    return HasImeSwitchCapsLockSnapshot(flags) && (flags & ImeSwitchCapsSnapshotEnabled) != 0;
+}
+
+constexpr std::optional<bool> DecodeImeSwitchCapsLockSnapshot(std::uint32_t flags)
+{
+    if (!HasImeSwitchCapsLockSnapshot(flags))
+        return std::nullopt;
+    return ImeSwitchCapsLockSnapshotEnabled(flags);
+}
 } // namespace FanyImePipeFlags
 
 namespace FanyImePipeRole

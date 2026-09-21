@@ -1815,12 +1815,14 @@ int SendIMEDeactivationEventToUIProcessViaNamedPipe()
     return 0;
 }
 
-int SendIMESwitchEventToUIProcessViaNamedPipe(UINT uImeStatus, const int point[2], bool capsLockEdge)
+int SendIMESwitchEventToUIProcessViaNamedPipe(UINT uImeStatus, const int point[2], bool capsLockEdge,
+                                              bool capsLockEnabled)
 {
     namedpipeData = {};
     namedpipeData.event_type = FanyImePipeEventType::IMESwitch;
     namedpipeData.keycode = uImeStatus;
     namedpipeData.wch = capsLockEdge ? VK_CAPITAL : 0;
+    namedpipeData.modifiers_down = FanyImePipeFlags::EncodeImeSwitchCapsLockSnapshot(capsLockEnabled);
     namedpipeData.point[0] = point[0];
     namedpipeData.point[1] = point[1];
     SendToNamedpipe();

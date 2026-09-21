@@ -1926,7 +1926,10 @@ void WorkerThread()
                 PostMessage(::global_hwnd, WM_IMESWITCH, task.pipe_data.keycode, 0);
                 UpdateCaretLanguagePunctuationState(imeEnabled ? 1 : 0, -1);
             }
-            const bool capsLockEnabled = GetServerCapsLockState() != 0;
+            const auto capsLockSnapshot =
+                FanyImePipeFlags::DecodeImeSwitchCapsLockSnapshot(task.pipe_data.modifiers_down);
+            const bool capsLockEnabled =
+                capsLockSnapshot.has_value() ? *capsLockSnapshot : GetServerCapsLockState() != 0;
             const bool japaneseMode = GetConfiguredInputMode() == "japanese";
             if (FanyImeUi::ShouldShowInputModeEvent(capsLockEdge, capsLockEnabled, imeEnabled, japaneseMode))
             {

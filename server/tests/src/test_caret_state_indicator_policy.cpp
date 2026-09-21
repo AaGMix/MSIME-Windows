@@ -1,4 +1,5 @@
 #include "tests/includes/test_framework.h"
+#include "engine/contracts/windows_ipc.h"
 #include "window/caret_state_indicator_policy.h"
 
 TEST_CASE(caret_state_indicator_visibility_is_complementary)
@@ -94,6 +95,32 @@ TEST_CASE(caret_state_indicator_uses_effective_mode_for_caps_and_language_action
     // is English under Caps Lock.
     REQUIRE_EQ(FanyImeUi::PunctuationInputModeText(true, true, false), L"，。  中");
     REQUIRE_EQ(FanyImeUi::PunctuationInputModeText(true, true, true), L"，。  日");
+}
+
+TEST_CASE(caret_state_indicator_uses_the_ime_switch_packet_caps_snapshot)
+{
+    const auto capsOnPacket = FanyImePipeFlags::EncodeImeSwitchCapsLockSnapshot(true);
+    const auto capsOffPacket = FanyImePipeFlags::EncodeImeSwitchCapsLockSnapshot(false);
+
+    // Later global state has already moved to Caps off, but this ordinary
+    // language event happened while Caps was on and must remain suppressed.
+    const auto ordinaryPacketCapsState = FanyImePipeFlags::DecodeImeSwitchCapsLockSnapshot(capsOnPacket);
+    REQUIRE(ordinaryPacketCapsState.has_value());
+    REQUIRE(!FanyImeUi::ShouldShowInputModeEvent(false, *ordinaryPacketCapsState, true, false));
+
+    // Conversely, a queued Caps-off edge restores the authoritative Chinese
+    // glyph even if a newer keydown has already turned the global state on.
+    const auto capsEdgePacketState = FanyImePipeFlags::DecodeImeSwitchCapsLockSnapshot(capsOffPacket);
+    REQUIRE(capsEdgePacketState.has_value());
+    REQUIRE(FanyImeUi::ShouldShowInputModeEvent(true, *capsEdgePacketState, true, false));
+    REQUIRE_EQ(FanyImeUi::InputModeEventGlyph(true, false, *capsEdgePacketState), L'中');
+
+    // A packet from an old DLL has no snapshot and deliberately retains the
+    // compatibility fallback. Enabled without Present is also treated as an
+    // old/malformed packet rather than as an authoritative snapshot.
+    REQUIRE(!FanyImePipeFlags::DecodeImeSwitchCapsLockSnapshot(0).has_value());
+    REQUIRE(
+        !FanyImePipeFlags::DecodeImeSwitchCapsLockSnapshot(FanyImePipeFlags::ImeSwitchCapsSnapshotEnabled).has_value());
 }
 
 TEST_CASE(caret_state_indicator_combines_punctuation_and_input_mode)

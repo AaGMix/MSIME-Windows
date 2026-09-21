@@ -1766,7 +1766,7 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
         {
             _pCompositionProcessorEngine->SendCaretStateSwitchEvent(
                 FanyImePipeEventType::IMESwitch,
-                _pCompositionProcessorEngine->GetIMEMode(_GetThreadMgr(), _GetClientId()), true);
+                _pCompositionProcessorEngine->GetIMEMode(_GetThreadMgr(), _GetClientId()), true, capsLockEnabled);
         }
     }
     PerfTimer onTestKeyDownTimer;
