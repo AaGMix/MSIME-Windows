@@ -14,6 +14,46 @@
 #include "Ipc.h"
 #include "FanyUtils.h"
 #include "FanyLog.h"
+#include "EditSession.h"
+#include "TfTextLayoutSink.h"
+
+namespace
+{
+class CCaretStateSwitchEditSession : public CEditSessionBase
+{
+  public:
+    CCaretStateSwitchEditSession(CMetasequoiaIME *textService, ITfContext *context, UINT eventType, BOOL enabled,
+                                 uint64_t focusToken, bool capsLockEdge, bool capsLockEnabled)
+        : CEditSessionBase(textService, context), eventType_(eventType), enabled_(enabled), focusToken_(focusToken),
+          capsLockEdge_(capsLockEdge), capsLockEnabled_(capsLockEnabled)
+    {
+    }
+
+    STDMETHODIMP DoEditSession(TfEditCookie ec) override
+    {
+        if (!_pTextService->_IsFocusSessionCurrent(focusToken_, _pContext))
+            return S_OK;
+        POINT anchor{};
+        if (!ResolveCollapsedSelectionAnchor(_pContext, ec, &anchor))
+            return S_OK;
+        const int point[2] = {anchor.x, anchor.y};
+        if (eventType_ == FanyImePipeEventType::IMESwitch)
+            SendIMESwitchEventToUIProcessViaNamedPipe(enabled_ ? 1 : 0, point, capsLockEdge_, capsLockEnabled_);
+        else if (eventType_ == FanyImePipeEventType::PuncSwitch)
+            SendPuncSwitchEventToUIProcessViaNamedPipe(enabled_, point);
+        else if (eventType_ == FanyImePipeEventType::DoubleSingleByteSwitch)
+            SendDoubleSingleByteSwitchEventToUIProcessViaNamedPipe(enabled_, point);
+        return S_OK;
+    }
+
+  private:
+    UINT eventType_;
+    BOOL enabled_;
+    uint64_t focusToken_;
+    bool capsLockEdge_;
+    bool capsLockEnabled_;
+};
+} // namespace
 
 //////////////////////////////////////////////////////////////////////
 //
@@ -1250,6 +1290,9 @@ void CCompositionProcessorEngine::ReleaseConfiguredImeModeDefense()
 void CCompositionProcessorEngine::SyncPunctuationWithImeMode(_In_ ITfThreadMgr *pThreadMgr, TfClientId tfClientId,
                                                              BOOL isOpen)
 {
+    FanyUtils::RefreshPunctuationLockFromConfig();
+    _lastPunctuation = Global::ResolvePunctuationOpen(isOpen);
+    _punctuationKnown = TRUE;
     SetPunctuationMode(pThreadMgr, tfClientId, isOpen);
 }
 
@@ -1519,8 +1562,9 @@ void CCompositionProcessorEngine::InitializeMetasequoiaIMECompartment(_In_ ITfTh
     const BOOL openChinese = FanyUtils::ReadConfiguredDefaultImeModeChinese();
     Global::JapaneseInputModeEnabled.store(FanyUtils::ReadConfiguredJapaneseInputMode() != FALSE,
                                            std::memory_order_relaxed);
-    // Use the suppressing writer so the OPENCLOSE sink does not treat this as
-    // a user choice and drop the defense we are about to arm.
+    // Initialization synchronizes state; compartment callbacks from these
+    // writes must not be presented as user-triggered mode changes.
+    _suppressCaretStateEvents = TRUE;
     SetKeyboardOpenCompartment(pThreadMgr, tfClientId, openChinese);
     _keyboardOpen = openChinese;
     _keyboardOpenKnown = TRUE;
@@ -1529,11 +1573,42 @@ void CCompositionProcessorEngine::InitializeMetasequoiaIMECompartment(_In_ ITfTh
     CCompartment CompartmentDoubleSingleByte(pThreadMgr, tfClientId,
                                              Global::MetasequoiaIMEGuidCompartmentDoubleSingleByte);
     CompartmentDoubleSingleByte._SetCompartmentBOOL(FALSE);
+    _lastDoubleSingleByte = FALSE;
+    _doubleSingleByteKnown = TRUE;
 
     SetPunctuationMode(pThreadMgr, tfClientId, openChinese);
+    _lastPunctuation = GetPunctuationMode(pThreadMgr, tfClientId);
+    _punctuationKnown = TRUE;
+    _suppressCaretStateEvents = FALSE;
 
     PrivateCompartmentsUpdated(pThreadMgr);
 }
+void CCompositionProcessorEngine::SendCaretStateSwitchEvent(UINT eventType, BOOL enabled, bool capsLockEdge,
+                                                            bool capsLockEnabled)
+{
+    if (!_pOwnerThreadMgr || !_pTextService || !Global::g_connected)
+        return;
+    const uint64_t focusToken = _pTextService->_CaptureFocusSessionToken();
+    if (focusToken == 0)
+        return;
+    ITfDocumentMgr *document = nullptr;
+    ITfContext *context = nullptr;
+    if (FAILED(_pOwnerThreadMgr->GetFocus(&document)) || !document)
+        return;
+    if (SUCCEEDED(document->GetTop(&context)) && context)
+    {
+        if (!capsLockEdge)
+            capsLockEnabled = Global::CapsLockEnabled.load(std::memory_order_relaxed);
+        auto *session = new CCaretStateSwitchEditSession(_pTextService, context, eventType, enabled, focusToken,
+                                                         capsLockEdge, capsLockEnabled);
+        HRESULT sessionResult = E_FAIL;
+        context->RequestEditSession(_tfClientId, session, TF_ES_ASYNCDONTCARE | TF_ES_READ, &sessionResult);
+        session->Release();
+        context->Release();
+    }
+    document->Release();
+}
+
 //+---------------------------------------------------------------------------
 //
 // CompartmentCallback
@@ -1563,8 +1638,12 @@ HRESULT CCompositionProcessorEngine::CompartmentCallback(_In_ void *pv, REFGUID 
         CCompartment CompartmentDoubleSingleByte(pThreadMgr, fakeThis->_tfClientId,
                                                  Global::MetasequoiaIMEGuidCompartmentDoubleSingleByte);
         CompartmentDoubleSingleByte._GetCompartmentBOOL(isDoubleSingleByte);
-        // 0: halfwidth, 1: fullwidth
-        // SendDoubleSingleByteSwitchEventToUIProcessViaNamedPipe(isDoubleSingleByte ? 1 : 0);
+        // 0: halfwidth, 1: fullwidth. Initialization writes are silent.
+        const BOOL changed = fakeThis->_doubleSingleByteKnown && fakeThis->_lastDoubleSingleByte != isDoubleSingleByte;
+        fakeThis->_doubleSingleByteKnown = TRUE;
+        fakeThis->_lastDoubleSingleByte = isDoubleSingleByte;
+        if (changed && !fakeThis->_suppressCaretStateEvents)
+            fakeThis->SendCaretStateSwitchEvent(FanyImePipeEventType::DoubleSingleByteSwitch, isDoubleSingleByte);
         if (ownerWindow && IsWindow(ownerWindow))
         {
             PostMessage(ownerWindow, WM_UpdateDoubleSingleByte, (WPARAM)(isDoubleSingleByte ? 1 : 0), 0);
@@ -1577,7 +1656,11 @@ HRESULT CCompositionProcessorEngine::CompartmentCallback(_In_ void *pv, REFGUID 
         CCompartment CompartmentPunctuation(pThreadMgr, fakeThis->_tfClientId,
                                             Global::MetasequoiaIMEGuidCompartmentPunctuation);
         CompartmentPunctuation._GetCompartmentBOOL(isPunctuation);
-        // SendPuncSwitchEventToUIProcessViaNamedPipe(isPunctuation ? 1 : 0);
+        const BOOL changed = fakeThis->_punctuationKnown && fakeThis->_lastPunctuation != isPunctuation;
+        fakeThis->_punctuationKnown = TRUE;
+        fakeThis->_lastPunctuation = isPunctuation;
+        if (changed && !fakeThis->_suppressCaretStateEvents)
+            fakeThis->SendCaretStateSwitchEvent(FanyImePipeEventType::PuncSwitch, isPunctuation);
         if (ownerWindow && IsWindow(ownerWindow))
         {
             PostMessage(ownerWindow, WM_UpdatePuncMode, (WPARAM)(isPunctuation ? 1 : 0), 0);
@@ -1621,10 +1704,13 @@ HRESULT CCompositionProcessorEngine::CompartmentCallback(_In_ void *pv, REFGUID 
         const BOOL desiredPunctuation = Global::ResolvePunctuationOpen(isOpen);
         if (desiredPunctuation != isPunctuation)
         {
+            fakeThis->_lastPunctuation = desiredPunctuation;
+            fakeThis->_punctuationKnown = TRUE;
             CompartmentPunctuation._SetCompartmentBOOL(desiredPunctuation);
         }
 
-        // SendIMESwitchEventToUIProcessViaNamedPipe(isOpen ? 1 : 0);
+        if (keyboardStateChanged && !fakeThis->_suppressCaretStateEvents)
+            fakeThis->SendCaretStateSwitchEvent(FanyImePipeEventType::IMESwitch, isOpen);
         if (ownerWindow && IsWindow(ownerWindow))
         {
             PostMessage(ownerWindow, WM_UpdateIMEStatus, (WPARAM)(isOpen ? 1 : 0), 0);
@@ -1673,6 +1759,11 @@ void CCompositionProcessorEngine::ConversionModeCompartmentUpdated(_In_ ITfThrea
         return;
     }
 
+    // Host-owned conversion DWORD synchronization updates our authoritative
+    // private compartments, but it is not a user shortcut. Keep snapshots and
+    // toolbar state updates while suppressing only transient caret badges.
+    const BOOL wasSuppressingCaretStateEvents = _suppressCaretStateEvents;
+    _suppressCaretStateEvents = TRUE;
     BOOL isDouble = FALSE;
     CCompartment CompartmentDoubleSingleByte(pThreadMgr, _tfClientId,
                                              Global::MetasequoiaIMEGuidCompartmentDoubleSingleByte);
@@ -1702,6 +1793,7 @@ void CCompositionProcessorEngine::ConversionModeCompartmentUpdated(_In_ ITfThrea
             CompartmentKeyboardOpen._SetCompartmentBOOL(TRUE);
         }
     }
+    _suppressCaretStateEvents = wasSuppressingCaretStateEvents;
 }
 
 //+---------------------------------------------------------------------------

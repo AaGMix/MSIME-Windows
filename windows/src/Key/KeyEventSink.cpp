@@ -4,9 +4,11 @@
 #include "CandidateListUIPresenter.h"
 #include "CompositionProcessorEngine.h"
 #include "KeyHandlerEditSession.h"
+#include "KeyFocusRecovery.h"
 #include "KeyRepeatGuard.h"
 #include "stats_collector.h"
 #include "stats_passthrough.h"
+#include "CaretAnchorPolicy.h"
 #include "Compartment.h"
 #include "MetasequoiaIMEBaseStructure.h"
 #include <debugapi.h>
@@ -16,6 +18,8 @@
 #include "FanyUtils.h"
 #include "FanyDefines.h"
 #include "FanyLog.h"
+#include "EditSession.h"
+#include "TfTextLayoutSink.h"
 #include "../Utils/PerfTimer.h"
 #include <chrono>
 #include "../../../engine/contracts/ipc_negotiation.h"
@@ -27,6 +31,46 @@
 namespace
 {
 constexpr UINT kMaxDeferredKeyReplayAttempts = 8;
+
+class CKeyCaretAnchorEditSession : public CEditSessionBase
+{
+  public:
+    CKeyCaretAnchorEditSession(CMetasequoiaIME *textService, ITfContext *context, int point[2], bool *resolved)
+        : CEditSessionBase(textService, context), point_(point), resolved_(resolved)
+    {
+    }
+
+    STDMETHODIMP DoEditSession(TfEditCookie ec) override
+    {
+        POINT anchor{};
+        if (ResolveCollapsedSelectionAnchor(_pContext, ec, &anchor))
+        {
+            point_[0] = anchor.x;
+            point_[1] = anchor.y;
+            *resolved_ = true;
+        }
+        return S_OK;
+    }
+
+  private:
+    int *point_;
+    bool *resolved_;
+};
+
+bool ResolveKeyCaretAnchor(CMetasequoiaIME *textService, ITfContext *context, TfClientId clientId, int point[2])
+{
+    point[0] = 0;
+    point[1] = Global::INVALID_Y;
+    bool resolved = false;
+    auto *session = new (std::nothrow) CKeyCaretAnchorEditSession(textService, context, point, &resolved);
+    if (!session)
+        return false;
+    HRESULT sessionResult = E_FAIL;
+    const HRESULT requestResult =
+        context->RequestEditSession(clientId, session, TF_ES_SYNC | TF_ES_READ, &sessionResult);
+    session->Release();
+    return SUCCEEDED(requestResult) && SUCCEEDED(sessionResult) && resolved;
+}
 
 // A recovery checkpoint may need one INPUT for every raw pinyin character and
 // one MOVE_LEFT for every character to the right of the caret.  Keep enough
@@ -739,6 +783,18 @@ bool CMetasequoiaIME::_ApplyBackspaceHoldGuard(WPARAM wParam, LPARAM lParam)
     return ShouldSuppressBackspaceRepeat(_backspaceHoldArmed, _IsCompositionActiveForKeyGuard(), true);
 }
 
+void CMetasequoiaIME::_ApplyCapsLockKeyDownSideEffects(bool capsLockEnabled)
+{
+    Global::CapsLockEnabled.store(capsLockEnabled, std::memory_order_relaxed);
+    _RequestLanguageBarCapsIconRefresh();
+    if (_pCompositionProcessorEngine)
+    {
+        _pCompositionProcessorEngine->SendCaretStateSwitchEvent(
+            FanyImePipeEventType::IMESwitch, _pCompositionProcessorEngine->GetIMEMode(_GetThreadMgr(), _GetClientId()),
+            true, capsLockEnabled);
+    }
+}
+
 //+---------------------------------------------------------------------------
 //
 // _IsKeyEaten
@@ -1085,7 +1141,15 @@ Exit:
 
 STDAPI CMetasequoiaIME::OnSetFocus(BOOL fForeground)
 {
-    fForeground;
+    // Activation can precede keystroke focus (Notepad TIP reload). TSF need
+    // not send another document-focus callback before delivering keys.
+    if (ShouldRecoverNamedpipeOnKeyFocus(fForeground != FALSE, Global::g_connected, IsNamedpipeFocusStateOwner(this)))
+    {
+        Global::g_connected = true;
+        _workerCommitReady.store(false, std::memory_order_release);
+        RequireNamedpipeFocusActivation();
+        PostOwnerMessageWithSyncFallback(_msgWndHandle, WM_ConnectNamedpipe);
+    }
 
     // A hold must never carry its guard into another input context.
     _backspaceHoldArmed = false;
@@ -1694,13 +1758,18 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
     }
     if (IsSelfGeneratedSendInputExtraInfo(static_cast<ULONG_PTR>(GetMessageExtraInfo())))
     {
+        _capsLockTestKeyDownPending = false;
         *pIsEaten = FALSE;
         return S_OK;
     }
-    if (wParam == VK_CAPITAL)
+    _capsLockTestKeyDownPending = false;
+    if (IsFreshCapsLockKeyDown(wParam, lParam))
     {
-        Global::CapsLockEnabled.store((GetKeyState(VK_CAPITAL) & 0x0001) == 0, std::memory_order_relaxed);
-        _RequestLanguageBarCapsIconRefresh();
+        // TestKeyDown observes the toggle before Windows applies this press.
+        const bool capsLockEnabled = ResultingCapsLockState(false, (GetKeyState(VK_CAPITAL) & 0x0001) != 0);
+        _ApplyCapsLockKeyDownSideEffects(capsLockEnabled);
+        _capsLockTestKeyDownMessageTime = static_cast<DWORD>(GetMessageTime());
+        _capsLockTestKeyDownPending = true;
     }
     PerfTimer onTestKeyDownTimer;
     Global::UpdateModifiers(wParam, lParam);
@@ -2303,8 +2372,18 @@ STDAPI CMetasequoiaIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lP
     }
     if (IsSelfGeneratedSendInputExtraInfo(static_cast<ULONG_PTR>(GetMessageExtraInfo())))
     {
+        _capsLockTestKeyDownPending = false;
         *pIsEaten = FALSE;
         return S_OK;
+    }
+    const bool matchingTestKeyDownHandled =
+        _capsLockTestKeyDownPending && _capsLockTestKeyDownMessageTime == static_cast<DWORD>(GetMessageTime());
+    _capsLockTestKeyDownPending = false;
+    if (ShouldApplyCapsLockActualKeyDownSideEffects(matchingTestKeyDownHandled, wParam, lParam))
+    {
+        // Unlike TestKeyDown, the actual callback observes the resulting toggle state.
+        const bool capsLockEnabled = ResultingCapsLockState(true, (GetKeyState(VK_CAPITAL) & 0x0001) != 0);
+        _ApplyCapsLockKeyDownSideEffects(capsLockEnabled);
     }
     PerfTimer onKeyDownTimer;
     const uint64_t focusGeneration = _deferredKeyFocusGeneration;
@@ -2599,8 +2678,14 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
         Global::wch = wch;
         Global::ModifiersDown = capturedModifiers;
 
+        int keyPoint[2] = {0, Global::INVALID_Y};
+        const bool includeCaretAnchor = KeystrokeState.Function == FUNCTION_TOGGLE_CHARACTER_SET;
+        const bool caretAnchorResolved =
+            includeCaretAnchor && ResolveKeyCaretAnchor(this, pContext, _tfClientId, keyPoint);
+
         PerfTimer writeShmTimer;
-        WriteDataToSharedMemory(Global::Keycode, wch, Global::ModifiersDown, nullptr, 0, L"", 0b000111);
+        WriteDataToSharedMemory(Global::Keycode, wch, Global::ModifiersDown, caretAnchorResolved ? keyPoint : nullptr,
+                                0, L"", KeyEventPayloadWriteMask(includeCaretAnchor, caretAnchorResolved));
 
         PerfTimer sendKeyEventTimer;
         const KeyEventSendResult sendResult = SendKeyEventToUIProcess(&requestId);

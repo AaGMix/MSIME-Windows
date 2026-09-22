@@ -5,6 +5,7 @@
 // so the same ABI assertions can run on every platform and on x86/x64 Windows.
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include "ipc_protocol_limits.h"
@@ -109,6 +110,7 @@ constexpr std::uint32_t ClientSuspended = 14;   // temporary focus route reset; 
 // the Server may have re-routed to another client meanwhile; without the
 // ownership claim the Server would discard it as an inactive-client event.
 constexpr std::uint32_t FocusRestored = 15;
+constexpr std::uint32_t HideCaretState = 16; // focus-context boundary; never clears candidate state
 constexpr std::uint32_t IMESwitch = 7;
 constexpr std::uint32_t PuncSwitch = 8;
 constexpr std::uint32_t DoubleSingleByteSwitch = 9;
@@ -122,11 +124,36 @@ constexpr bool IsTerminalDeactivation(std::uint32_t event_type)
 }
 } // namespace FanyImePipeEventType
 
-// OR'd into modifiers_down on Main-pipe packets. Server strips it before any
-// key-modifier policy runs. Used so UILess hosts (games) never get an HWND.
+// OR'd into modifiers_down on Main-pipe packets. Server strips UiLess before
+// any key-modifier policy runs. IMESwitch packets use the next two high bits
+// as an append-only event-time Caps Lock snapshot; old Servers ignore them.
 namespace FanyImePipeFlags
 {
 constexpr std::uint32_t UiLess = 0x80000000u;
+constexpr std::uint32_t ImeSwitchCapsSnapshotPresent = 0x40000000u;
+constexpr std::uint32_t ImeSwitchCapsSnapshotEnabled = 0x20000000u;
+
+constexpr std::uint32_t EncodeImeSwitchCapsLockSnapshot(bool enabled)
+{
+    return ImeSwitchCapsSnapshotPresent | (enabled ? ImeSwitchCapsSnapshotEnabled : 0u);
+}
+
+constexpr bool HasImeSwitchCapsLockSnapshot(std::uint32_t flags)
+{
+    return (flags & ImeSwitchCapsSnapshotPresent) != 0;
+}
+
+constexpr bool ImeSwitchCapsLockSnapshotEnabled(std::uint32_t flags)
+{
+    return HasImeSwitchCapsLockSnapshot(flags) && (flags & ImeSwitchCapsSnapshotEnabled) != 0;
+}
+
+constexpr std::optional<bool> DecodeImeSwitchCapsLockSnapshot(std::uint32_t flags)
+{
+    if (!HasImeSwitchCapsLockSnapshot(flags))
+        return std::nullopt;
+    return ImeSwitchCapsLockSnapshotEnabled(flags);
+}
 } // namespace FanyImePipeFlags
 
 namespace FanyImePipeRole
