@@ -1734,6 +1734,13 @@ std::pair<std::string, std::string> RankingKeysForCandidate(const WordItem &item
 std::queue<Task> taskQueue;
 std::mutex queueMutex;
 
+// 顶字推送后的 HideCandidate 抑制标记：CommitCandidateAndContinue 会让 DLL 提交文本并
+// 结束旧组合，TSF 随之发来 HideCandidateWnd；若 HideCandidate 处理器照常 ClearState，
+// 会把服务端刚重建好的余码组合（如「数据」顶字后剩下的 x）抹掉，用户后续按键从空组合
+// 开始组词——这正是「顶字后 x 没进组词」的根因。两个值都只在 worker 线程读写。
+uint64_t g_topCommitRemainderClient = 0;
+uint64_t g_topCommitRemainderEpoch = 0;
+
 void PrepareCandidateList(uint64_t client_id, uint64_t activation_epoch);
 void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t request_id);
 void ClearState();
@@ -1786,6 +1793,11 @@ void WorkerThread()
         {
             // Every task carrying an owner is rejected after a focus/session
             // transition, including UI-originated candidate actions.
+            // 这条丢弃无其他日志；排查丢键时先看这里（2026-09 曾疑似顶字丢键，探针证实
+            // 该路径并未触发，日志留作以后定位任务消失的入口）。
+            CAND_DIAG_LOGF(L"task stale-dropped type={} client={} task_epoch={} current_epoch={}",
+                           static_cast<int>(task.type), task.client_id, task.activation_epoch,
+                           GetActivePipeClient().epoch);
             continue;
         }
 
@@ -1829,6 +1841,20 @@ void WorkerThread()
             const ULONGLONG queue_elapsed_ms = task.enqueued_at_ms == 0 ? 0 : GetTickCount64() - task.enqueued_at_ms;
             CAND_DIAG_LOGF(L"task HideCandidate client={} epoch={} request={} queued_ms={}", task.client_id,
                            task.activation_epoch, task.pipe_data.request_id, queue_elapsed_ms);
+            // 顶字推送引发的 TSF HideCandidateWnd：余码组合还活着，绝不能 ClearState，
+            // 否则用户刚敲下的那个字母就从服务端组合里消失了。
+            const bool top_commit_remainder_alive = task.client_id == g_topCommitRemainderClient &&
+                                                    task.activation_epoch == g_topCommitRemainderEpoch &&
+                                                    !g_inputSession->get_pinyin_sequence().empty();
+            g_topCommitRemainderClient = 0;
+            g_topCommitRemainderEpoch = 0;
+            if (top_commit_remainder_alive)
+            {
+                CAND_DIAG_LOGF(L"task HideCandidate suppressed (top-commit remainder alive) client={} epoch={}",
+                               task.client_id, task.activation_epoch);
+                RequestShowCandidateWindow();
+                break;
+            }
             // Only a hide this thread delivered late can belong to a keystroke the
             // user has already typed past — that is the one worth holding briefly,
             // because a show for a later keystroke is right behind it. A hide
@@ -1866,6 +1892,11 @@ void WorkerThread()
                 DIAG_LOGF(L"[key-latency] side=server stage=queue request={} client={} epoch={} elapsed_ms={}",
                           task.pipe_data.request_id, task.client_id, task.activation_epoch, queue_elapsed_ms);
             }
+            // 顶字后第 4 码丢失的定位探针：DLL 侧 keydown-sent 已确认发出，若这里没打出来，
+            // 说明任务根本没进队列（reader 未收到/未入队）；打出来了但组合没变，才是 HandleImeKey 内部问题。
+            CAND_DIAG_LOGF(L"task ImeKeyEvent dispatch request={} keycode=0x{:X} wch=U+{:04X} epoch={}",
+                           task.pipe_data.request_id, task.pipe_data.keycode, static_cast<unsigned>(task.pipe_data.wch),
+                           task.activation_epoch);
             HandleImeKey(task.client_id, task.activation_epoch, task.pipe_data.request_id);
             break;
         }
@@ -2943,6 +2974,11 @@ void MainPipeClientThread(HANDLE clientPipe, uint64_t handlerId)
         switch (pipeData.event_type)
         {
         case FanyImePipeEventType::KeyEvent: {
+            // 与 worker 侧的 dispatch 探针配对：reader 收到键包即记，两边对照可把丢键
+            // 精确到「reader 未收到」还是「worker 未派发」。request_id 是 DLL 侧分配的，
+            // 可直接与 [msime][issue47] 的 keydown-sent request 对齐。
+            CAND_DIAG_LOGF(L"main-pipe KeyEvent received request={} keycode=0x{:X} wch=U+{:04X}", pipeData.request_id,
+                           pipeData.keycode, static_cast<unsigned>(pipeData.wch));
             EnqueueTask(TaskType::ImeKeyEvent, pipeData, activation.epoch);
             break;
         }
@@ -4105,6 +4141,10 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     /* 先清理一下状态 */
     Global::MsgTypeToTsf = Global::DataFromServerMsgType::Normal;
     ::ReadDataFromNamedPipe(0b000111);
+    // 新按键到来即撤销顶字余码的 HideCandidate 抑制：若推送失败导致 TSF 不会发来
+    // 对应的 HideCandidateWnd，标记不能滞留到压制住下一次真正的提交/失焦清理。
+    g_topCommitRemainderClient = 0;
+    g_topCommitRemainderEpoch = 0;
 
     // TSF classifies VK_NUMPAD0..9 as candidate digit keys. Keep the IPC
     // contract symmetric before any selection/composition predicates run.
@@ -4428,6 +4468,9 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         GlobalIme::composition.segmented_pinyin = g_inputSession->get_pinyin_segmentation_with_cases();
         GlobalIme::composition.caret_position = GlobalIme::composition.raw_input_with_cases.size();
         PrepareCandidateList(client_id, activation_epoch);
+        // 组合被提交时 TSF 会送 HideCandidateWnd 把候选窗藏起来；顶字重建的新组合必须
+        // 显式把窗口再请出来，否则后续整词的候选（xyyf 的统计）用户永远看不到。
+        RequestShowCandidateWindow();
 
         // 推送与用户下一个按键是两条独立路径：TSF 裁的是它自己那一刻的缓冲，所以「服务端说
         // 消费 4 个、TSF 手里已经有 5 个」时，第 5 个自然留下来继续组词。服务端的组合也正好
@@ -4435,6 +4478,10 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         // 组合正是下一次按键要用的状态。
         if (Global::MsgTypeToTsf == Global::DataFromServerMsgType::Normal)
         {
+            // 推送会让 DLL 结束旧组合，TSF 随之发来 HideCandidateWnd；标记本客户端的余码
+            // 组合仍然存活，HideCandidate 处理器据此跳过 ClearState。
+            g_topCommitRemainderClient = client_id;
+            g_topCommitRemainderEpoch = activation_epoch;
             (void)SendToTsfWorkerThreadClientViaNamedpipe(
                 client_id, activation_epoch, Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidateAndContinue,
                 BuildWubiCommitAndContinuePayload(committed_text));
