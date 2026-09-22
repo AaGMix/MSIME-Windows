@@ -20,12 +20,6 @@
 
 namespace
 {
-void LogCapsCaretStage(const std::wstring &message)
-{
-    if (Global::TsfDiagnosticLogEnabled.load(std::memory_order_relaxed))
-        QueueTsfDiagnosticLog(L"[caret-caps] " + message);
-}
-
 class CCaretStateSwitchEditSession : public CEditSessionBase
 {
   public:
@@ -39,59 +33,32 @@ class CCaretStateSwitchEditSession : public CEditSessionBase
     STDMETHODIMP DoEditSession(TfEditCookie ec) override
     {
         if (!_pTextService->_IsFocusSessionCurrent(focusToken_, _pContext))
-        {
-            if (capsLockEdge_)
-                LogCapsCaretStage(L"edit-session rejected stale focus");
             return S_OK;
-        }
         TF_SELECTION selection{};
         ULONG fetched = 0;
-        const HRESULT selectionResult = _pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
-        if (FAILED(selectionResult) || fetched != 1 || !selection.range)
-        {
-            if (capsLockEdge_)
-                LogCapsCaretStage(fmt::format(L"selection failed hr={:#x} fetched={} range={}",
-                                              static_cast<unsigned>(selectionResult), fetched,
-                                              selection.range != nullptr));
+        if (FAILED(_pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) || fetched != 1 ||
+            !selection.range)
             return S_OK;
-        }
         const TfAnchor caretAnchor = selection.style.ase == TF_AE_START ? TF_ANCHOR_START : TF_ANCHOR_END;
         selection.range->Collapse(ec, caretAnchor);
         ITfContextView *view = nullptr;
         RECT rect{};
         BOOL clipped = TRUE;
-        const HRESULT viewResult = _pContext->GetActiveView(&view);
-        if (SUCCEEDED(viewResult) && view)
+        if (SUCCEEDED(_pContext->GetActiveView(&view)) && view)
         {
-            const HRESULT extentResult = view->GetTextExt(ec, selection.range, &rect, &clipped);
-            const bool usable = SUCCEEDED(extentResult) &&
-                                IsUsableCaretExtent(clipped != FALSE, rect.left, rect.top, rect.right, rect.bottom);
-            if (capsLockEdge_)
-                LogCapsCaretStage(fmt::format(L"extent hr={:#x} clipped={} rect=({},{},{},{}) usable={}",
-                                              static_cast<unsigned>(extentResult), clipped != FALSE, rect.left,
-                                              rect.top, rect.right, rect.bottom, usable));
-            if (usable)
+            if (SUCCEEDED(view->GetTextExt(ec, selection.range, &rect, &clipped)) &&
+                IsUsableCaretExtent(clipped != FALSE, rect.left, rect.top, rect.right, rect.bottom))
             {
                 const POINT anchor = GetPhysicalTextAnchor(view, rect);
                 const int point[2] = {anchor.x, anchor.y};
                 if (eventType_ == FanyImePipeEventType::IMESwitch)
-                {
                     SendIMESwitchEventToUIProcessViaNamedPipe(enabled_ ? 1 : 0, point, capsLockEdge_, capsLockEnabled_);
-                    if (capsLockEdge_)
-                        LogCapsCaretStage(fmt::format(L"sent ime={} caps={} anchor=({},{})", enabled_ != FALSE,
-                                                      capsLockEnabled_, anchor.x, anchor.y));
-                }
                 else if (eventType_ == FanyImePipeEventType::PuncSwitch)
                     SendPuncSwitchEventToUIProcessViaNamedPipe(enabled_, point);
                 else if (eventType_ == FanyImePipeEventType::DoubleSingleByteSwitch)
                     SendDoubleSingleByteSwitchEventToUIProcessViaNamedPipe(enabled_, point);
             }
             view->Release();
-        }
-        else if (capsLockEdge_)
-        {
-            LogCapsCaretStage(fmt::format(L"active-view failed hr={:#x} view={}", static_cast<unsigned>(viewResult),
-                                          view != nullptr));
         }
         selection.range->Release();
         return S_OK;
@@ -1638,50 +1605,24 @@ void CCompositionProcessorEngine::SendCaretStateSwitchEvent(UINT eventType, BOOL
                                                             bool capsLockEnabled)
 {
     if (!_pOwnerThreadMgr || !_pTextService || !Global::g_connected)
-    {
-        if (capsLockEdge)
-            LogCapsCaretStage(fmt::format(L"request rejected manager={} service={} connected={}",
-                                          _pOwnerThreadMgr != nullptr, _pTextService != nullptr, Global::g_connected));
         return;
-    }
     const uint64_t focusToken = _pTextService->_CaptureFocusSessionToken();
     if (focusToken == 0)
-    {
-        if (capsLockEdge)
-            LogCapsCaretStage(L"request rejected missing focus token");
         return;
-    }
     ITfDocumentMgr *document = nullptr;
     ITfContext *context = nullptr;
-    const HRESULT focusResult = _pOwnerThreadMgr->GetFocus(&document);
-    if (FAILED(focusResult) || !document)
-    {
-        if (capsLockEdge)
-            LogCapsCaretStage(fmt::format(L"get-focus failed hr={:#x} document={}", static_cast<unsigned>(focusResult),
-                                          document != nullptr));
+    if (FAILED(_pOwnerThreadMgr->GetFocus(&document)) || !document)
         return;
-    }
-    const HRESULT topResult = document->GetTop(&context);
-    if (SUCCEEDED(topResult) && context)
+    if (SUCCEEDED(document->GetTop(&context)) && context)
     {
         if (!capsLockEdge)
             capsLockEnabled = Global::CapsLockEnabled.load(std::memory_order_relaxed);
         auto *session = new CCaretStateSwitchEditSession(_pTextService, context, eventType, enabled, focusToken,
                                                          capsLockEdge, capsLockEnabled);
         HRESULT sessionResult = E_FAIL;
-        const HRESULT requestResult =
-            context->RequestEditSession(_tfClientId, session, TF_ES_ASYNCDONTCARE | TF_ES_READ, &sessionResult);
-        if (capsLockEdge)
-            LogCapsCaretStage(fmt::format(L"session requested hr={:#x} session_hr={:#x} ime={} caps={} token={}",
-                                          static_cast<unsigned>(requestResult), static_cast<unsigned>(sessionResult),
-                                          enabled != FALSE, capsLockEnabled, focusToken));
+        context->RequestEditSession(_tfClientId, session, TF_ES_ASYNCDONTCARE | TF_ES_READ, &sessionResult);
         session->Release();
         context->Release();
-    }
-    else if (capsLockEdge)
-    {
-        LogCapsCaretStage(
-            fmt::format(L"get-top failed hr={:#x} context={}", static_cast<unsigned>(topResult), context != nullptr));
     }
     document->Release();
 }

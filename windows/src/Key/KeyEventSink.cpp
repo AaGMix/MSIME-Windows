@@ -12,7 +12,6 @@
 #include <debugapi.h>
 #include <cwctype>
 #include <string>
-#include <fmt/xchar.h>
 #include "Ipc.h"
 #include "FanyUtils.h"
 #include "FanyDefines.h"
@@ -1694,13 +1693,6 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
     {
         *pIsEaten = FALSE;
         return S_OK;
-    }
-    if (wParam == VK_CAPITAL && Global::TsfDiagnosticLogEnabled.load(std::memory_order_relaxed))
-    {
-        QueueTsfDiagnosticLog(fmt::format(L"[caret-caps] test-keydown lparam={:#x} repeat={} key_state={} cached={}",
-                                          static_cast<ULONG_PTR>(lParam), IsAutoRepeat(lParam),
-                                          (GetKeyState(VK_CAPITAL) & 0x0001) != 0,
-                                          Global::CapsLockEnabled.load(std::memory_order_relaxed)));
     }
     if (IsFreshCapsLockKeyDown(wParam, lParam))
     {

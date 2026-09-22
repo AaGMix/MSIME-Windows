@@ -1793,10 +1793,6 @@ void ApplyConfiguredFloatingToolbarVisibility(const wchar_t *reason)
     const HWND foreground = GetForegroundWindow();
     const bool fullscreen = foreground && CheckFullscreen(foreground);
     const bool configured = GetConfiguredFloatingToolbarEnabled();
-    if (configured && ::global_hwnd_caret_state)
-    {
-        PostMessage(::global_hwnd_caret_state, WM_HIDE_CARET_STATE, 0, 0);
-    }
     const bool should_show = FanyImeUi::ShouldShowFloatingToolbar(configured, fullscreen, g_is_ime_active);
     const bool is_visible = IsWindowVisible(::global_hwnd_ftb) != FALSE;
     const bool paint_grace = IsFloatingToolbarPaintGraceActive();
@@ -3890,9 +3886,9 @@ LRESULT CALLBACK WndProcCaretStateWindow(HWND hwnd, UINT message, WPARAM wParam,
     case WM_SHOW_CARET_STATE: {
         std::unique_ptr<CaretStateIndicator::ShowRequest> request(
             reinterpret_cast<CaretStateIndicator::ShowRequest *>(lParam));
-        if (!request || !FanyImeUi::ShouldShowCaretStateIndicator(
-                            GetConfiguredCaretStateIndicatorEnabled(), GetConfiguredFloatingToolbarEnabled(),
-                            g_is_ime_active, request ? request->caret.x : 0, request ? request->caret.y : -100000))
+        if (!request || !FanyImeUi::ShouldShowCaretStateIndicator(GetConfiguredCaretStateIndicatorEnabled(),
+                                                                  g_is_ime_active, request ? request->caret.x : 0,
+                                                                  request ? request->caret.y : -100000))
         {
             CaretStateIndicator::Hide(hwnd);
             ::is_global_wnd_caret_state_shown = false;

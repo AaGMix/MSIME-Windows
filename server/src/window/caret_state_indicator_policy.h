@@ -17,11 +17,9 @@ enum class CaretStateKind
     CharacterSet,
 };
 
-inline bool ShouldShowCaretStateIndicator(bool indicatorEnabled, bool floatingToolbarEnabled, bool imeActive,
-                                          int anchorX, int anchorY)
+inline bool ShouldShowCaretStateIndicator(bool indicatorEnabled, bool imeActive, int anchorX, int anchorY)
 {
-    return indicatorEnabled && !floatingToolbarEnabled && imeActive && anchorY > -10000 &&
-           (anchorX != 0 || anchorY != 0);
+    return indicatorEnabled && imeActive && anchorY > -10000 && (anchorX != 0 || anchorY != 0);
 }
 
 inline int CaretStateIndicatorY(bool belowCaret, int anchorY, int indicatorHeight, int caretLineHeight, int gap)
