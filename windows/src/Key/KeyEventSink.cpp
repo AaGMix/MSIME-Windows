@@ -800,6 +800,18 @@ bool CMetasequoiaIME::_ApplyBackspaceHoldGuard(WPARAM wParam, LPARAM lParam)
     return ShouldSuppressBackspaceRepeat(_backspaceHoldArmed, _IsCompositionActiveForKeyGuard(), true);
 }
 
+void CMetasequoiaIME::_ApplyCapsLockKeyDownSideEffects(bool capsLockEnabled)
+{
+    Global::CapsLockEnabled.store(capsLockEnabled, std::memory_order_relaxed);
+    _RequestLanguageBarCapsIconRefresh();
+    if (_pCompositionProcessorEngine)
+    {
+        _pCompositionProcessorEngine->SendCaretStateSwitchEvent(
+            FanyImePipeEventType::IMESwitch, _pCompositionProcessorEngine->GetIMEMode(_GetThreadMgr(), _GetClientId()),
+            true, capsLockEnabled);
+    }
+}
+
 //+---------------------------------------------------------------------------
 //
 // _IsKeyEaten
@@ -1763,20 +1775,18 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
     }
     if (IsSelfGeneratedSendInputExtraInfo(static_cast<ULONG_PTR>(GetMessageExtraInfo())))
     {
+        _capsLockTestKeyDownPending = false;
         *pIsEaten = FALSE;
         return S_OK;
     }
+    _capsLockTestKeyDownPending = false;
     if (IsFreshCapsLockKeyDown(wParam, lParam))
     {
-        const bool capsLockEnabled = (GetKeyState(VK_CAPITAL) & 0x0001) == 0;
-        Global::CapsLockEnabled.store(capsLockEnabled, std::memory_order_relaxed);
-        _RequestLanguageBarCapsIconRefresh();
-        if (_pCompositionProcessorEngine)
-        {
-            _pCompositionProcessorEngine->SendCaretStateSwitchEvent(
-                FanyImePipeEventType::IMESwitch,
-                _pCompositionProcessorEngine->GetIMEMode(_GetThreadMgr(), _GetClientId()), true, capsLockEnabled);
-        }
+        // TestKeyDown observes the toggle before Windows applies this press.
+        const bool capsLockEnabled = ResultingCapsLockState(false, (GetKeyState(VK_CAPITAL) & 0x0001) != 0);
+        _ApplyCapsLockKeyDownSideEffects(capsLockEnabled);
+        _capsLockTestKeyDownMessageTime = static_cast<DWORD>(GetMessageTime());
+        _capsLockTestKeyDownPending = true;
     }
     PerfTimer onTestKeyDownTimer;
     Global::UpdateModifiers(wParam, lParam);
@@ -2379,8 +2389,18 @@ STDAPI CMetasequoiaIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lP
     }
     if (IsSelfGeneratedSendInputExtraInfo(static_cast<ULONG_PTR>(GetMessageExtraInfo())))
     {
+        _capsLockTestKeyDownPending = false;
         *pIsEaten = FALSE;
         return S_OK;
+    }
+    const bool matchingTestKeyDownHandled =
+        _capsLockTestKeyDownPending && _capsLockTestKeyDownMessageTime == static_cast<DWORD>(GetMessageTime());
+    _capsLockTestKeyDownPending = false;
+    if (ShouldApplyCapsLockActualKeyDownSideEffects(matchingTestKeyDownHandled, wParam, lParam))
+    {
+        // Unlike TestKeyDown, the actual callback observes the resulting toggle state.
+        const bool capsLockEnabled = ResultingCapsLockState(true, (GetKeyState(VK_CAPITAL) & 0x0001) != 0);
+        _ApplyCapsLockKeyDownSideEffects(capsLockEnabled);
     }
     PerfTimer onKeyDownTimer;
     const uint64_t focusGeneration = _deferredKeyFocusGeneration;
