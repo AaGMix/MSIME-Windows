@@ -82,6 +82,38 @@ export function setupDropdownMenu(
     return;
   }
 
+  const focusMenuItem = (offset: number): void => {
+    const items = Array.from(menu.querySelectorAll<HTMLElement>('.dropdown-item:not([aria-disabled="true"])'));
+    if (items.length === 0) return;
+    items.forEach((item) => {
+      item.tabIndex = -1;
+      item.setAttribute('role', 'option');
+    });
+    const focused = document.activeElement as HTMLElement | null;
+    const current = items.indexOf(focused ?? items[0]);
+    items[(current + offset + items.length) % items.length]?.focus();
+  };
+
+  btn.addEventListener('keydown', (event: KeyboardEvent) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    void openDropdownMenu(menu, menuId).then(() => focusMenuItem(event.key === 'ArrowDown' ? 0 : -1));
+  }, { signal });
+
+  menu.addEventListener('keydown', (event: KeyboardEvent) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      focusMenuItem(event.key === 'ArrowDown' ? 1 : -1);
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      (document.activeElement as HTMLElement | null)?.click();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      menu.classList.remove('open');
+      btn.focus();
+    }
+  }, { signal });
+
   btn.addEventListener('click', (e: Event) => {
     if (useStopPropagation) {
       e.stopPropagation();
