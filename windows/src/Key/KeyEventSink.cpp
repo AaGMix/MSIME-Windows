@@ -54,7 +54,7 @@ class CKeyCaretAnchorEditSession : public CEditSessionBase
         if (SUCCEEDED(_pContext->GetActiveView(&view)) && view)
         {
             if (SUCCEEDED(view->GetTextExt(ec, selection.range, &rect, &clipped)) &&
-                (!clipped || (rect.right > rect.left && rect.bottom > rect.top)))
+                IsUsableCaretExtent(clipped != FALSE, rect.left, rect.top, rect.right, rect.bottom))
             {
                 const POINT anchor = GetPhysicalTextAnchor(view, rect);
                 point_[0] = anchor.x;
