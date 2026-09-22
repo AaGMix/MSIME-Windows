@@ -245,3 +245,31 @@ TEST_CASE(temporary_r_mode_japanese_session_is_not_replaced_by_config_sync)
     REQUIRE(!FanyImeIpc::InputSessionMatchesConfig(false, false, true));
     REQUIRE(!FanyImeIpc::InputSessionMatchesConfig(false, true, false));
 }
+
+TEST_CASE(caret_resegmentation_requires_negotiated_non_uiless_pinyin_composition)
+{
+    using FanyImeIpc::ShouldResegmentCompositionByCaret;
+    // R10/AC8：协商过 CompositionRestore 的非 UILess 客户端才启用前缀重算。
+    REQUIRE(ShouldResegmentCompositionByCaret(true, false, false, false));
+    // 未协商（旧 DLL 组合）：一切照旧。
+    REQUIRE(!ShouldResegmentCompositionByCaret(false, false, false, false));
+    // UILess 宿主：候选窗由宿主自绘，回退路径不得变坏。
+    REQUIRE(!ShouldResegmentCompositionByCaret(true, true, false, false));
+    // 专用英文模式：光标仍是显示层插入点。
+    REQUIRE(!ShouldResegmentCompositionByCaret(true, false, true, false));
+    // K/U/T/E/M/J/Y 等特殊模式组合：无单元模型语义，不重算。
+    REQUIRE(!ShouldResegmentCompositionByCaret(true, false, false, true));
+}
+
+TEST_CASE(caret_prefix_empty_requires_non_empty_raw_and_zero_prefix)
+{
+    using FanyImeIpc::IsCaretPrefixEmpty;
+    // R4：光标在串首（量化后前缀为空）：无候选，候选窗隐藏。
+    REQUIRE(IsCaretPrefixEmpty(0, 14));
+    // 前缀非空：不算空。
+    REQUIRE(!IsCaretPrefixEmpty(2, 14));
+    // 整串解码（caret 未设置）：prefix_end == 串长，永不判空。
+    REQUIRE(!IsCaretPrefixEmpty(14, 14));
+    // raw 为空的组合：不属于 R4（避免把空组合误判成「前缀为空」）。
+    REQUIRE(!IsCaretPrefixEmpty(0, 0));
+}

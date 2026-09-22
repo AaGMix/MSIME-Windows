@@ -49,6 +49,16 @@ class IInputSession
     virtual void set_pinyin_sequence(const std::string &pinyin_sequence) = 0;
     virtual void set_pinyin_sequence_with_cases(const std::string &pinyin_sequence) = 0;
 
+    // R2 光标前缀重算：把组合态光标喂给会话，nullopt = 串尾（整串解码，默认）。
+    // 语义与 engine/core/input_session.h 的同名方法一致；只更新状态，候选在下一次
+    // recompute_candidates() 时按新边界重解。
+    virtual void set_caret(std::optional<std::size_t> caret) = 0;
+    // 当前解码消费的 raw 长度：光标 floor 到最后一个完整单元边界；未设光标或方案无
+    // 单元模型时等于 raw 长度（整串解码）。
+    virtual std::size_t prefix_end() const = 0;
+    // raw[prefix_end, size)：本次解码未消费的原始后缀，前缀覆盖整串时为空。
+    virtual std::string pending_suffix() const = 0;
+
     virtual int store_user_phrase(std::string pinyin, std::string word) = 0;
     virtual int store_user_phrase_from_canonical_pinyin(std::string pinyin, std::string word) = 0;
     virtual int pin_candidate(std::string pinyin, std::string word) = 0;

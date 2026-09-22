@@ -297,3 +297,103 @@ TEST_CASE(CaretPrefixFloorsInsideShuangpinGreedyUnits)
 
     std::filesystem::remove_all(directory);
 }
+
+// R5 前缀选词结算序列（Server ProcessSelectionKey 对会话的确切调用序）：advance 消
+// 耗的正是前缀本身、剩余 raw 就是后缀；结算把光标复位为 nullopt 后，后缀按全新整串
+// 解码（AC2）。同时钉住「选中候选短于前缀」的部分消费：剩余 raw 从被消费的那段之后
+// 开始，而不是从旧边界之后开始。
+TEST_CASE(PrefixSelectionSettlementLeavesFreshFullStringSuffix)
+{
+    const auto directory = CreateCaretPrefixFixture();
+    const auto paths = FixturePaths(directory);
+
+    {
+        const std::string sentence = "ni'hao'shi'jie";
+        metasequoia::InputSession session(SchemeType::Quanpin, 0, true, true, false, paths);
+        TypeText(session, sentence);
+
+        // 光标在 ni'hao 之后：候选等于前缀 ni'hao 的候选，选中「你好」。
+        session.set_caret(7);
+        session.recompute_candidates();
+        REQUIRE_EQ(session.prefix_end(), std::size_t{7});
+        const std::size_t you_hao = CandidateWordIndex(session, "你好");
+        REQUIRE(you_hao < session.candidates().size());
+        const WordItem selected = session.candidates()[you_hao];
+
+        const auto transition =
+            session.advance_composition_after_selection(selected.pinyin, selected.word, selected.canonical_pinyin);
+        REQUIRE(transition.continues_composition);
+        REQUIRE_EQ(transition.consumed_raw_input_with_cases, std::string("ni'hao"));
+        REQUIRE_EQ(session.get_pinyin_sequence_with_cases(), std::string("shi'jie"));
+
+        // 结算收尾（Server 侧的确切序列）：复位会话光标后，后缀按整串解码，
+        // 与独立键入 shi'jie 的候选一致。
+        session.set_caret(std::nullopt);
+        session.recompute_candidates();
+        REQUIRE(session.has_composition());
+        REQUIRE(session.pending_suffix().empty());
+        REQUIRE(SameCandidateWords(session, QuanpinCandidateWordsFor("shi'jie", paths)));
+    }
+
+    {
+        // 部分消费：光标在 ni 之后（floor 到边界 2），选中的「你」只消耗 ni，
+        // 剩余 raw 从 hao 重新开始；hao 此时不完整，属于新的待转后缀。
+        metasequoia::InputSession session(SchemeType::Quanpin, 0, true, true, false, paths);
+        TypeText(session, "ni'hao'shi'jie");
+        session.set_caret(4);
+        session.recompute_candidates();
+        REQUIRE_EQ(session.prefix_end(), std::size_t{3});
+        const std::size_t ni_index = CandidateWordIndex(session, "你");
+        REQUIRE(ni_index < session.candidates().size());
+        const WordItem selected = session.candidates()[ni_index];
+
+        const auto transition =
+            session.advance_composition_after_selection(selected.pinyin, selected.word, selected.canonical_pinyin);
+        REQUIRE(transition.continues_composition);
+        REQUIRE_EQ(transition.consumed_raw_input_with_cases, std::string("ni"));
+        REQUIRE_EQ(session.get_pinyin_sequence_with_cases(), std::string("hao'shi'jie"));
+
+        session.set_caret(std::nullopt);
+        session.recompute_candidates();
+        REQUIRE(SameCandidateWords(session, QuanpinCandidateWordsFor("hao'shi'jie", paths)));
+    }
+
+    std::filesystem::remove_all(directory);
+}
+
+// R7 回归（Stage 2 质检）：前缀激活后光标移回串尾，会话必须完全回到整串态，
+// 否则空格结算会错误走前缀选词路径。ApplyCompositionEditKey 的 resegment_by_caret
+// 在串尾执行的就是 set_caret(nullopt) + recompute_candidates()；接线本身依赖
+// GlobalIme/管道全局态，event_listener.cpp 不参与测试链接，CI 只能在这层钉住
+// 同一调用序的契约：从激活的内点 caret_ 直接喂 nullopt 后，prefix_end 与候选
+// 和全新整串会话零差异，空格结算据 prefix_end == raw.size() 走整串路径。
+TEST_CASE(CaretReturnToTailAfterPrefixActivationRestoresFreshFullStringDecode)
+{
+    const auto directory = CreateCaretPrefixFixture();
+    const auto paths = FixturePaths(directory);
+
+    {
+        const std::string sentence = "ni'hao'shi'jie";
+        metasequoia::InputSession session(SchemeType::Quanpin, 0, true, true, false, paths);
+        TypeText(session, sentence);
+        const auto full_words = CandidateWords(session);
+
+        // 光标移到中间：前缀激活，引擎 caret_ 停在内点（修复前串尾不喂时残留的状态）。
+        session.set_caret(7);
+        session.recompute_candidates();
+        REQUIRE_EQ(session.prefix_end(), std::size_t{7});
+        REQUIRE_EQ(session.pending_suffix(), std::string("shi'jie"));
+        REQUIRE(SameCandidateWords(session, QuanpinCandidateWordsFor("ni'hao", paths)));
+
+        // 光标移回串尾：与 Server 侧修复后相同的确切调用序，结果必须与全新整串零差异。
+        session.set_caret(std::nullopt);
+        session.recompute_candidates();
+        REQUIRE_EQ(session.caret_position(), sentence.size());
+        REQUIRE_EQ(session.prefix_end(), sentence.size());
+        REQUIRE(session.pending_suffix().empty());
+        REQUIRE(SameCandidateWords(session, full_words));
+        REQUIRE(SameCandidateWords(session, QuanpinCandidateWordsFor(sentence, paths)));
+    }
+
+    std::filesystem::remove_all(directory);
+}
