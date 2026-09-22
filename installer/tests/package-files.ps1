@@ -48,7 +48,29 @@ try {
     $english = Join-Path $fixture 'MetasequoiaImeDict/out/english.db'
     python -c "import sqlite3,sys; sqlite3.connect(sys.argv[1]).execute('CREATE TABLE english_words(word TEXT,display TEXT,weight INTEGER,PRIMARY KEY(word,display))')" $english
     if ($LASTEXITCODE -ne 0) { throw 'Failed to create packaging fixture' }
-    & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -TargetVersion '2026.9.1' -IncludeSymbols
+    $versionFile = Join-Path $fixture 'version.txt'
+    $stagingSentinel = Join-Path $installer 'app_data/staging-sentinel.txt'
+    Write-Fixture 'installer/app_data/staging-sentinel.txt'
+    $rejected = $false
+    try { & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture } catch { $rejected = $_.Exception.Message -match 'version\.txt' }
+    if (-not $rejected) { throw 'Missing version.txt was accepted' }
+    if (-not (Test-Path $stagingSentinel)) { throw 'Missing version.txt mutated package staging' }
+    [IO.File]::WriteAllText($versionFile, 'invalid')
+    $rejected = $false
+    try { & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture } catch { $rejected = $_.Exception.Message -match 'MAJOR\.MINOR\.PATCH' }
+    if (-not $rejected) { throw 'Invalid version.txt was accepted' }
+    if (-not (Test-Path $stagingSentinel)) { throw 'Invalid version.txt mutated package staging' }
+    foreach ($invalidVersion in @('', $null)) {
+        $rejected = $false
+        try { & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -TargetVersion $invalidVersion } catch { $rejected = $_.Exception.Message -match 'MAJOR\.MINOR\.PATCH' }
+        if (-not $rejected) { throw 'Empty explicit package version was accepted' }
+        if (-not (Test-Path $stagingSentinel)) { throw 'Empty explicit package version mutated package staging' }
+    }
+    [IO.File]::WriteAllText($versionFile, '2030.4.5')
+    & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -IncludeSymbols
+    if ([IO.File]::ReadAllText((Join-Path $installer 'msime_setup.iss')) -notmatch '(?m)^#define MyAppVersion\s+"2030\.4\.5"$') {
+        throw 'Default package version was not derived from version.txt'
+    }
     foreach ($file in @('app_data/html/webview2/shared/runtime.js', 'app_data/dictionary-manifest.json',
                          'app_data/sc.lm', 'app_data/libime-lm-NOTICE.md', 'app_data/dict_pinyin.dat',
                          'tsf_dll/32/MetasequoiaImeTsf.dll', 'tsf_dll/32/MetasequoiaImeTsf.pdb',
@@ -70,7 +92,12 @@ try {
         if (Test-Path (Join-Path $installer $testFile)) { throw "Packaged a test file: $testFile" }
     }
     # 默认不带符号：PDB 是安装包体积和打包耗时的大头，只有显式 -IncludeSymbols 才进包。
+    [IO.File]::WriteAllText($versionFile, 'ignored-invalid-version')
     & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -TargetVersion '2026.9.1'
+    if ([IO.File]::ReadAllText((Join-Path $installer 'msime_setup.iss')) -notmatch '(?m)^#define MyAppVersion\s+"2026\.9\.1"$') {
+        throw 'Explicit package version did not override version.txt'
+    }
+    [IO.File]::WriteAllText($versionFile, '2030.4.5')
     foreach ($file in @('app_data/html/webview2/shared/runtime.js',
                          'tsf_dll/32/MetasequoiaImeTsf.dll', 'tsf_dll/64/MetasequoiaImeTsf.dll',
                          'server_exe/MetasequoiaImeServer.exe')) {

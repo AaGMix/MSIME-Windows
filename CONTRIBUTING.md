@@ -75,6 +75,8 @@ Set-Location ..\installer
 .\Compile-Installer.ps1
 ```
 
+省略 `-TargetVersion` 时，打包脚本使用仓库根目录 `version.txt` 中的版本；发布 CI 可显式传入 `-TargetVersion` 覆盖它。
+
 `Sign-PackageBinaries-Local.ps1` 用的是本机测试证书，只用于内部安装验证；不要把本机证书指纹或私钥提交进仓库。
 
 ## 改动前要知道的几条边界

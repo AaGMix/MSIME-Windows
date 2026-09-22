@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$TargetVersion = '0.0.1',
+    [string]$TargetVersion,
     [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
     # Component paths are relative to RepoRoot and default to the consolidated layout.
     # Historical or custom layouts remain available through explicit overrides.
@@ -53,6 +53,16 @@ function Reset-Directory {
     New-Item -ItemType Directory -Path $LiteralPath -Force | Out-Null
 }
 
+Assert-PathExists -LiteralPath $RepoRoot -Description '源码仓库根目录'
+if (-not $PSBoundParameters.ContainsKey('TargetVersion')) {
+    $versionFile = Join-Path $RepoRoot 'version.txt'
+    Assert-PathExists -LiteralPath $versionFile -Description '版本文件 version.txt'
+    $TargetVersion = ([string](Get-Content -LiteralPath $versionFile -Raw)).Trim()
+}
+if ($TargetVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+    throw "版本必须是 MAJOR.MINOR.PATCH 格式的 SemVer：$TargetVersion"
+}
+
 $serverRelease = Join-Path $RepoRoot (Join-Path $ServerDirectory 'build-release\bin\Release')
 $dictionaryReplayRelease = Join-Path $serverRelease 'MetasequoiaImeDictionaryReplay.exe'
 $tsf32Release = Join-Path $RepoRoot (Join-Path $TsfDirectory 'build32-release\Release\MetasequoiaImeTsf.dll')
@@ -77,7 +87,6 @@ $othersDb = Join-Path $RepoRoot (Join-Path $DictionaryDirectory 'out\others.db')
 $languageModel = Join-Path $RepoRoot (Join-Path $LanguageModelDirectory 'sc.lm')
 $languageModelNotice = Join-Path $RepoRoot (Join-Path $LanguageModelDirectory 'NOTICE.md')
 
-Assert-PathExists -LiteralPath $RepoRoot -Description '源码仓库根目录'
 Assert-PathExists -LiteralPath $serverRelease -Description 'Server Release 输出目录'
 Assert-PathExists -LiteralPath $dictionaryReplayRelease -Description '用户词库回放程序 Release EXE'
 Assert-PathExists -LiteralPath $tsf32Release -Description '32 位 TSF Release DLL'

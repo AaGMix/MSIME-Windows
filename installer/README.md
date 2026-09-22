@@ -5,7 +5,7 @@
 - **正式发布**：由 `MSIME-Windows` 的 release workflow 驱动，用真实证书签名包内全部 EXE/DLL 和最终安装包；产物是挂在 Release 上的 `MetasequoiaIME_Setup_v<版本>.exe`，并携带与 Release 二进制匹配的 PDB 符号文件。见下面「CI 契约」
 - **本地测试**：手工跑，用本机自签名证书，用来在自己机器上验证安装流程。本文其余部分讲的是这条
 
-版本号不是固定的，由 `Prepare-PackageFiles.ps1` 的 `-TargetVersion` 决定，默认 `0.0.1`；正式发布时 CI 传入真实版本。
+版本号不是固定的：`Prepare-PackageFiles.ps1` 默认读取仓库根目录的 `version.txt`，也可用 `-TargetVersion` 显式覆盖；正式发布时 CI 显式传入发布版本。
 
 本仓库 **不包含** 正式代码签名证书、私钥、指纹，也不包含编译好的 EXE/DLL、词库或安装包。
 
@@ -77,9 +77,9 @@ pwsh -File .\test.ps1
 `test.ps1` 会按顺序做这些事：
 
 1. 编译本仓 TSF、Server，并构建设置页；缺少组件入口则失败
-2. `Prepare-PackageFiles.ps1` — 收集 `server_exe\`、`tsf_dll\`、`app_data\`，并把 `msime_setup.iss` 的版本写成 `0.0.1`
+2. `Prepare-PackageFiles.ps1` — 收集 `server_exe\`、`tsf_dll\`、`app_data\`，并把 `msime_setup.iss` 的版本写成仓库根目录 `version.txt` 中的版本
 3. `Sign-PackageBinaries-Local.ps1` — 本机自签名包内 EXE/DLL
-4. `Compile-Installer.ps1` — 编译出 `Output\MetasequoiaIME_Setup_v0.0.1.exe`
+4. `Compile-Installer.ps1` — 编译出 `Output\MetasequoiaIME_Setup_v<version.txt 中的版本>.exe`
 5. `Sign-Installer-Local.ps1` — 本机自签名安装包
 6. `Install.ps1` — 启动安装程序
 
