@@ -799,9 +799,9 @@ bool SharedMemoryAvailable()
 
 bool NegotiateMainPipeClient(const FanyImeNamedpipeData &hello, uint64_t registration_id)
 {
-    const auto protocol =
-        FanyImeProtocol::Negotiate(hello, FanyImeProtocol::Capabilities | FanyImeProtocol::CharacterSetShortcut |
-                                              FanyImeProtocol::CompositionRestore);
+    const auto protocol = FanyImeProtocol::Negotiate(
+        hello, FanyImeProtocol::Capabilities | FanyImeProtocol::CharacterSetShortcut |
+                   FanyImeProtocol::CompositionRestore | FanyImeProtocol::CaretStateLifecycle);
     std::lock_guard lock(g_pipe_clients_mutex);
     auto it = g_pipe_clients.find(hello.client_id);
     if (it == g_pipe_clients.end() || registration_id == 0 || it->second.main_registration_id != registration_id)

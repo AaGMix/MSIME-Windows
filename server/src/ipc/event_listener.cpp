@@ -39,6 +39,8 @@
 #include "engine/quanpin/quanpin_query.h"
 #include "engine/user_dictionary/user_dictionary_journal.h"
 #include "ipc/event_listener.h"
+#include "window/caret_state_indicator.h"
+#include "window/caret_state_indicator_policy.h"
 #include "utils/ime_utils.h"
 #include "cloud/cloud_ime.h"
 #include "cloud/cloud_translation.h"
@@ -567,6 +569,46 @@ int EnsureAuthoritativeCnMode()
         g_authoritative_cn_mode = GetConfiguredDefaultImeMode() == "english" ? 0 : 1;
     }
     return g_authoritative_cn_mode;
+}
+
+struct CaretLanguagePunctuationState
+{
+    bool imeEnabled;
+    bool punctuationEnabled;
+};
+
+CaretLanguagePunctuationState UpdateCaretLanguagePunctuationState(int imeState, int punctuationState)
+{
+    std::lock_guard lock(g_status_snapshot_mutex);
+    if (g_latest_status_snapshot < 0)
+    {
+        const bool fallbackIme = imeState >= 0 ? imeState != 0 : g_authoritative_cn_mode != 0;
+        const bool fallbackPunctuation = punctuationState >= 0 ? punctuationState != 0 : fallbackIme;
+        g_latest_status_snapshot = (fallbackIme ? 0b0100 : 0) | (fallbackPunctuation ? 0b0001 : 0);
+    }
+    if (imeState >= 0)
+        g_latest_status_snapshot = (g_latest_status_snapshot & ~0b0100) | (imeState != 0 ? 0b0100 : 0);
+    if (punctuationState >= 0)
+        g_latest_status_snapshot = (g_latest_status_snapshot & ~0b0001) | (punctuationState != 0 ? 0b0001 : 0);
+    return {(g_latest_status_snapshot & 0b0100) != 0, (g_latest_status_snapshot & 0b0001) != 0};
+}
+
+void PostCaretStateText(std::wstring text, int x, int y)
+{
+    if (!::global_hwnd_caret_state)
+        return;
+    auto *request = new CaretStateIndicator::ShowRequest{std::move(text), POINT{x, y}};
+    if (!PostMessage(::global_hwnd_caret_state, WM_SHOW_CARET_STATE, 0, reinterpret_cast<LPARAM>(request)))
+        delete request;
+}
+
+void PostCaretStatePosition(int x, int y)
+{
+    if (!::global_hwnd_caret_state)
+        return;
+    auto *caret = new POINT{x, y};
+    if (!PostMessage(::global_hwnd_caret_state, WM_MOVE_CARET_STATE, 0, reinterpret_cast<LPARAM>(caret)))
+        delete caret;
 }
 
 void UpdateCloudInput(const std::string &input, uint64_t client_id = 0, uint64_t activation_epoch = 0)
@@ -1380,6 +1422,7 @@ bool IsKnownMainPipeEvent(UINT event_type)
     case FanyImePipeEventType::StatusSnapshot:
     case FanyImePipeEventType::ClientSuspended:
     case FanyImePipeEventType::FocusRestored:
+    case FanyImePipeEventType::HideCaretState:
         return true;
     default:
         return false;
@@ -1517,6 +1560,7 @@ enum class TaskType
 {
     ShowCandidate,
     HideCandidate,
+    HideCaretState,
     MoveCandidate,
     ImeKeyEvent,
     LangbarRightClick,
@@ -1841,11 +1885,17 @@ void WorkerThread()
             break;
         }
 
+        case TaskType::HideCaretState:
+            if (::global_hwnd_caret_state)
+                PostMessage(::global_hwnd_caret_state, WM_HIDE_CARET_STATE, 0, 0);
+            break;
+
         case TaskType::MoveCandidate: {
             static int cnt = 0;
             ::ReadDataFromNamedPipe(0b001000);
             CAND_DIAG_LOGF(L"task MoveCandidate client={} epoch={} caret=({},{})", task.client_id,
                            task.activation_epoch, Global::Point[0], Global::Point[1]);
+            PostCaretStatePosition(Global::Point[0], Global::Point[1]);
             bool expected = false;
             if (!g_candidate_move_msg_pending.compare_exchange_strong(expected, true))
             {
@@ -1877,17 +1927,41 @@ void WorkerThread()
         }
 
         case TaskType::IMESwitch: {
-            PostMessage(::global_hwnd, WM_IMESWITCH, task.pipe_data.keycode, 0);
+            const bool capsLockEdge = task.pipe_data.wch == VK_CAPITAL;
+            const bool imeEnabled = task.pipe_data.keycode != 0;
+            if (!capsLockEdge)
+            {
+                PostMessage(::global_hwnd, WM_IMESWITCH, task.pipe_data.keycode, 0);
+                UpdateCaretLanguagePunctuationState(imeEnabled ? 1 : 0, -1);
+            }
+            const auto capsLockSnapshot =
+                FanyImePipeFlags::DecodeImeSwitchCapsLockSnapshot(task.pipe_data.modifiers_down);
+            const bool capsLockEnabled =
+                capsLockSnapshot.has_value() ? *capsLockSnapshot : GetServerCapsLockState() != 0;
+            const bool japaneseMode = GetConfiguredInputMode() == "japanese";
+            if (FanyImeUi::ShouldShowInputModeEvent(capsLockEdge, capsLockEnabled, imeEnabled, japaneseMode))
+            {
+                const wchar_t glyph = FanyImeUi::InputModeEventGlyph(imeEnabled, japaneseMode, capsLockEnabled);
+                PostCaretStateText(std::wstring(1, glyph), task.pipe_data.point[0], task.pipe_data.point[1]);
+            }
             break;
         }
 
         case TaskType::PuncSwitch: {
             PostMessage(::global_hwnd, WM_PUNCSWITCH, task.pipe_data.keycode, 0);
+            const bool punctuationEnabled = task.pipe_data.keycode != 0;
+            const auto state = UpdateCaretLanguagePunctuationState(-1, punctuationEnabled ? 1 : 0);
+            PostCaretStateText(FanyImeUi::PunctuationInputModeText(punctuationEnabled, state.imeEnabled,
+                                                                   GetConfiguredInputMode() == "japanese"),
+                               task.pipe_data.point[0], task.pipe_data.point[1]);
             break;
         }
 
         case TaskType::DoubleSingleByteSwitch: {
             PostMessage(::global_hwnd, WM_DOUBLESINGLEBYTESWITCH, task.pipe_data.keycode, 0);
+            PostCaretStateText(std::wstring(1, FanyImeUi::CaretStateGlyph(FanyImeUi::CaretStateKind::Width,
+                                                                          task.pipe_data.keycode != 0)),
+                               task.pipe_data.point[0], task.pipe_data.point[1]);
             break;
         }
 
@@ -1954,6 +2028,8 @@ void WorkerThread()
             CAND_DIAG_LOGF(L"client activated client={} epoch={} hwnd_present={}", task.client_id,
                            task.activation_epoch, ::global_hwnd != nullptr);
             VoiceInput::SetImeActive(true);
+            if (::global_hwnd_caret_state)
+                PostMessage(::global_hwnd_caret_state, WM_HIDE_CARET_STATE, 0, 0);
             // Activation replaces all composition/candidate state from the
             // previous focus session. A terminal TIP activation also makes
             // the configured floating toolbar visible. Re-activation after a
@@ -1992,6 +2068,8 @@ void WorkerThread()
         case TaskType::ClientDeactivated: {
             CAND_DIAG_LOGF(L"client deactivated client={} epoch={}", task.client_id, task.activation_epoch);
             VoiceInput::SetImeActive(false);
+            if (::global_hwnd_caret_state)
+                PostMessage(::global_hwnd_caret_state, WM_HIDE_CARET_STATE, 0, 0);
             // Unlike a route-only suspension, terminal TIP deactivation means
             // the user switched to another input method. Forget the previous
             // global authority so switching back starts from default_ime_mode
@@ -2014,6 +2092,8 @@ void WorkerThread()
 
         case TaskType::ClientSuspended: {
             CAND_DIAG_LOGF(L"client suspended client={} epoch={}", task.client_id, task.activation_epoch);
+            if (::global_hwnd_caret_state)
+                PostMessage(::global_hwnd_caret_state, WM_HIDE_CARET_STATE, 0, 0);
             // A suspension rotates the IPC focus session while the TIP may
             // still own thread focus. It clears candidates just like terminal
             // deactivation, but never changes floating-toolbar visibility.
@@ -2949,6 +3029,11 @@ void MainPipeClientThread(HANDLE clientPipe, uint64_t handlerId)
 
         case FanyImePipeEventType::HideCandidateWnd: {
             EnqueueTask(TaskType::HideCandidate, pipeData, activation.epoch);
+            break;
+        }
+
+        case FanyImePipeEventType::HideCaretState: {
+            EnqueueTask(TaskType::HideCaretState, pipeData, activation.epoch);
             break;
         }
 
@@ -4103,8 +4188,23 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
 
     if (FanyImeProtocol::IsCharacterSetShortcut(Global::Keycode, Global::ModifiersDown))
     {
+        // Character-set shortcuts carry a freshly resolved physical caret
+        // anchor in the existing key packet. Read it only for this key so
+        // ordinary key packets cannot replace Global::Point with zeroes.
+        ::ReadDataFromNamedPipe(0b001000);
         if (g_authoritative_cn_mode != 0 && GetConfiguredCharacterSetShortcutEnabled())
-            SetConfiguredCharacterSet(GetConfiguredCharacterSet() == "traditional" ? "simplified" : "traditional");
+        {
+            const std::string previous = GetConfiguredCharacterSet();
+            const std::string next = previous == "traditional" ? "simplified" : "traditional";
+            if (SetConfiguredCharacterSet(next) && GetConfiguredCharacterSet() != previous &&
+                Global::Point[1] > -10000 && ::global_hwnd_caret_state)
+            {
+                PostCaretStateText(
+                    std::wstring(1, FanyImeUi::CaretStateGlyph(FanyImeUi::CaretStateKind::CharacterSet,
+                                                               GetConfiguredCharacterSet() == "traditional")),
+                    Global::Point[0], Global::Point[1]);
+            }
+        }
         return;
     }
 
