@@ -11,6 +11,7 @@
 #include <fmt/xchar.h>
 #include "FanyUtils.h"
 #include "Ipc.h"
+#include "CommitCandidateAndContinuePayload.h"
 #include "FanyDefines.h"
 
 namespace
@@ -276,6 +277,84 @@ HRESULT CMetasequoiaIME::_HandleInsertText(TfEditCookie ec, _In_ ITfContext *pCo
         return hr;
     }
     return _HandleCompleteCommitFirst(ec, pContext);
+}
+
+HRESULT CMetasequoiaIME::_HandleCommitCandidateAndContinue(TfEditCookie ec, _In_ ITfContext *pContext,
+                                                           const std::wstring &payload)
+{
+    std::size_t consumed = 0;
+    std::wstring commitText;
+    if (!ParseCommitCandidateAndContinuePayload(payload, consumed, commitText))
+    {
+        return E_INVALIDARG;
+    }
+
+    CCompositionProcessorEngine *pCompositionProcessorEngine = _pCompositionProcessorEngine;
+    const std::wstring buffer =
+        pCompositionProcessorEngine ? pCompositionProcessorEngine->GetKeystrokeBuffer().ToWString() : std::wstring{};
+
+    // No composition (UILess host, or the user already cancelled it): there is nothing to trim or
+    // finalize, so the delivery degrades to the direct no-composition write that _AddCharAndFinalize
+    // already owns (which also counts the text in the statistics). An existing composition with an
+    // empty buffer still goes through the commit path below (consume clamps to 0).
+    if (_pComposition == nullptr)
+    {
+        if (commitText.empty())
+        {
+            return S_OK;
+        }
+        CStringRange commitRange;
+        commitRange.Set(commitText.c_str(), commitText.length());
+        return _AddCharAndFinalize(ec, pContext, &commitRange);
+    }
+
+    // Trim with the count from the Server, clamped to what this process actually holds. The Server
+    // may have seen four letters while the user has already typed a fifth; the count lets this side
+    // keep that fifth letter rather than applying a remainder the Server computed from a stale view.
+    const std::size_t consume = (std::min)(consumed, buffer.size());
+    const std::wstring remainder = buffer.substr(consume);
+
+    if (!commitText.empty())
+    {
+        CStringRange commitRange;
+        commitRange.Set(commitText.c_str(), commitText.length());
+        HRESULT hr = _InsertTextToComposition(ec, pContext, &commitRange);
+        if (FAILED(hr))
+        {
+            hr = _AddComposingAndChar(ec, pContext, &commitRange);
+        }
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+    }
+
+    _HandleCompleteCommitFirst(ec, pContext);
+
+    if (remainder.empty() || pCompositionProcessorEngine == nullptr)
+    {
+        return S_OK;
+    }
+
+    // Rebuild the composition from the letters the user typed past the committed code. The Server
+    // already holds this same composition, so the replay must not send another request
+    // (FANY_IME_NO_REQUEST_ID): it only re-renders the local preedit and candidate list. Purge the
+    // engine's buffer first so the committed code does not survive into the new preedit.
+    _StartComposition(pContext);
+    if (_pComposition == nullptr)
+    {
+        // The host refused the nested composition start: keep the letters as direct text rather
+        // than dropping input the user typed.
+        CStringRange remainderRange;
+        remainderRange.Set(remainder.c_str(), remainder.length());
+        return _AddCharAndFinalize(ec, pContext, &remainderRange);
+    }
+    pCompositionProcessorEngine->PurgeVirtualKey();
+    for (const wchar_t ch : remainder)
+    {
+        pCompositionProcessorEngine->AddVirtualKey(ch);
+    }
+    return _HandleCompositionInputWorker(pCompositionProcessorEngine, ec, pContext, FANY_IME_NO_REQUEST_ID);
 }
 
 HRESULT CMetasequoiaIME::_HandleUpdateVoiceComposition(TfEditCookie ec, _In_ ITfContext *pContext,

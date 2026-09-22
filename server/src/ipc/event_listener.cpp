@@ -4084,6 +4084,15 @@ void HandleTranslationCommitKey(uint64_t client_id, uint64_t activation_epoch, u
     SendCurrentDataToClient(client_id, activation_epoch, request_id);
 }
 
+// 真顶字与自动上屏的推送负载："<消费字符数>\t<上屏文本>"。TSF 拿这个数字裁自己的
+// 组合缓冲，所以服务端看到的是四码、用户已抢敲第五个字母时，第五个字母不会被旧快照覆盖。
+// 消费数就是五笔完整码的字母数（engine/schemes/wubi_scheme.h 的 kMaxCodeLength）。
+constexpr std::size_t kWubiCompleteCodeLength = 4;
+std::wstring BuildWubiCommitAndContinuePayload(const std::wstring &text)
+{
+    return std::to_wstring(kWubiCompleteCodeLength) + L"\t" + text;
+}
+
 /**
  * @brief
  *
@@ -4144,6 +4153,12 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
 
     const std::string input_before_key =
         g_inputSession ? g_inputSession->get_pinyin_sequence_with_cases() : std::string{};
+    // 顶字要的是「插入之前」的原始串长度与光标位置：ApplyCompositionEditKey 会把第五个字母插进
+    // 本地 raw 并把光标推到 5，之后再问就分不清「用户又敲了一个字母」和「本来就停在别处」。引擎
+    // 随后会把 raw 裁回四码，这个快照是唯一能区分两者的地方（raw_length_before_key == 4 且光标
+    // 在末尾 = 用户正在往后打，不是回来改码）。
+    const std::size_t raw_length_before_key = input_before_key.size();
+    const std::size_t caret_before_key = GlobalIme::composition.caret_position;
     const bool shift_only = (Global::ModifiersDown & 0b00000111u) == 0b00000001u;
     const bool chinese_scheme = g_inputSession && (g_inputSession->current_scheme_type() == SchemeType::Quanpin ||
                                                    g_inputSession->current_scheme_type() == SchemeType::Shuangpin);
@@ -4341,7 +4356,8 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     // 用户不必再按一次空格。判定只发生在字母键插入之后（上面的 ApplyCompositionEditKey）：
     // 退格、方向键、composition_restored 等路径都不会到这里，所以「打满第四键就上屏」只有
     // 这一个入口。这是无条件行为，不读配置。
-    if (!g_english_input_mode && Global::Keycode >= 'A' && Global::Keycode <= 'Z' &&
+    const bool letter_key = Global::Keycode >= 'A' && Global::Keycode <= 'Z';
+    if (!g_english_input_mode && letter_key &&
         FanyImeIpc::ShouldAutoCommitCompleteWubiCode(g_inputSession->wubi_unique_four_code(),
                                                      GlobalIme::composition.creating_word.active))
     {
@@ -4356,12 +4372,12 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         {
             // 真上屏只能靠 worker 管道推送：字母键在默认 raw 预编辑样式下不读请求-回复管道，
             // 回一帧 Normal 既不会上屏，还会被 TSF 当成「不属于本次请求」的帧缓存起来，
-            // 而本函数返回前 Server 已经清掉组合，两边就此分叉。TSF 收到推送后用本地
-            // focusToken / compositionEpoch 盖章，再走 FINALIZE_CANDIDATELIST 真提交，
-            // 与鼠标点击上屏是同一条通道（见 TaskType::UiCommitCandidate）。
-            if (SendToTsfWorkerThreadClientViaNamedpipe(client_id, activation_epoch,
-                                                        Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidate,
-                                                        Global::candidate_ui.selected_text))
+            // 而本函数返回前 Server 已经清掉组合，两边就此分叉。推送携带消费的 4 个字符，
+            // TSF 裁自己的缓冲；快打时用户已多敲的字母因此不会被旧快照覆盖。
+            if (SendToTsfWorkerThreadClientViaNamedpipe(
+                    client_id, activation_epoch,
+                    Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidateAndContinue,
+                    BuildWubiCommitAndContinuePayload(Global::candidate_ui.selected_text)))
             {
                 ClearState();
             }
@@ -4370,6 +4386,69 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         // raw 样式不读回复，塞一帧反而变成死帧。
         if (IsUiLessMode() || GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
         {
+            SendCurrentDataToClient(client_id, activation_epoch, request_id);
+        }
+        return;
+    }
+
+    // 真顶字：完整四码（不论是否唯一）之后再敲一个字母时，先上屏该码的首选候选，再把这个字母
+    // 留作下一次组合的开头——用户已经在打下一个字，字母绝不能丢。它不看自动上屏开关：开关
+    // 只决定「唯一码要不要多敲一键才上屏」，不决定丢不丢输入。判定复用同一份引擎事实，
+    // 但不要求唯一；上屏取候选 0（首选），不进入 30ms 渲染等待。
+    if (!g_english_input_mode && letter_key && raw_length_before_key == kWubiCompleteCodeLength &&
+        caret_before_key == raw_length_before_key &&
+        FanyImeIpc::ShouldCommitCompleteWubiCodeOnNextKey(g_inputSession->wubi_four_code_is_complete(),
+                                                          /*key_is_letter=*/true, /*caret_at_end=*/true,
+                                                          GlobalIme::composition.creating_word.active))
+    {
+        PrepareCandidateList(client_id, activation_epoch);
+        Global::candidate_ui.select_first_on_page();
+        ProcessSelectionKey(VK_SPACE, client_id, activation_epoch, /*forced_index_in_page=*/0);
+        const std::wstring committed_text = Global::candidate_ui.selected_text;
+
+        // 用刚敲下的这个字母重建服务端组合。ProcessSelectionKey 已经把引擎与组合清空，这里
+        // 把字母写回去；引擎此刻的 raw 仍是被裁回的四码，所以必须显式设置而不是继续追加。
+        // 大小写照 ApplyCompositionEditKey 的同一套规则取，保持 preedit 与用户敲键一致。
+        char next_char = static_cast<char>(Global::Keycode + ('a' - 'A'));
+        if (Global::Wch >= L'A' && Global::Wch <= L'Z')
+        {
+            next_char = static_cast<char>(Global::Wch);
+        }
+        else if (Global::Wch >= L'a' && Global::Wch <= L'z')
+        {
+            next_char = static_cast<char>(Global::Wch);
+        }
+        const std::string next_raw(1, next_char);
+        GlobalIme::composition.clear_creating_word();
+        GlobalIme::composition.selection_history.clear();
+        g_inputSession->set_pinyin_sequence(next_raw);
+        g_inputSession->set_pinyin_sequence_with_cases(next_raw);
+        g_inputSession->recompute_candidates();
+        GlobalIme::composition.raw_input_with_cases = g_inputSession->get_pinyin_sequence_with_cases();
+        GlobalIme::composition.segmented_pinyin = g_inputSession->get_pinyin_segmentation_with_cases();
+        GlobalIme::composition.caret_position = GlobalIme::composition.raw_input_with_cases.size();
+        PrepareCandidateList(client_id, activation_epoch);
+
+        // 推送与用户下一个按键是两条独立路径：TSF 裁的是它自己那一刻的缓冲，所以「服务端说
+        // 消费 4 个、TSF 手里已经有 5 个」时，第 5 个自然留下来继续组词。服务端的组合也正好
+        // 是同一批多出来的字母，两边都从同一条按键流派生，不会错位。不要 ClearState：重建的
+        // 组合正是下一次按键要用的状态。
+        if (Global::MsgTypeToTsf == Global::DataFromServerMsgType::Normal)
+        {
+            (void)SendToTsfWorkerThreadClientViaNamedpipe(
+                client_id, activation_epoch, Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidateAndContinue,
+                BuildWubiCommitAndContinuePayload(committed_text));
+        }
+        // UILess 与 pinyin 预编辑样式会为字母键等一帧回复（上限 50ms）。这里绝不能回 Normal
+        // （SendCurrentDataToClient 会 ClearState，把刚重建的组合再清掉），只能回渲染帧。
+        if (IsUiLessMode())
+        {
+            SendUiLessCompositionToClient(client_id, activation_epoch, request_id);
+        }
+        else if (GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
+        {
+            Global::MsgTypeToTsf = Global::DataFromServerMsgType::Preedit;
+            Global::candidate_ui.selected_text = GetPreedit();
             SendCurrentDataToClient(client_id, activation_epoch, request_id);
         }
         return;

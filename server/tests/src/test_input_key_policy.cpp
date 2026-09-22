@@ -256,3 +256,17 @@ TEST_CASE(wubi_unique_four_code_commit_is_unconditional_and_guards_its_precondit
     // A word is being created: the raw is a prefix, so the composition stays open.
     REQUIRE(!ShouldAutoCommitCompleteWubiCode(true, true));
 }
+
+TEST_CASE(wubi_top_word_commit_ignores_the_setting_and_guards_its_preconditions)
+{
+    using FanyImeIpc::ShouldCommitCompleteWubiCodeOnNextKey;
+    REQUIRE(ShouldCommitCompleteWubiCodeOnNextKey(true, true, true, false));
+    // Not a complete table-answered code: nothing to commit, the key belongs to the composition.
+    REQUIRE(!ShouldCommitCompleteWubiCodeOnNextKey(false, true, true, false));
+    // Not a letter key (Backspace, arrows, space): those edit or commit the code in place.
+    REQUIRE(!ShouldCommitCompleteWubiCodeOnNextKey(true, false, true, false));
+    // The caret is inside the code, so the user is editing it, not typing past it.
+    REQUIRE(!ShouldCommitCompleteWubiCodeOnNextKey(true, true, false, false));
+    // A word being created owns the raw as a prefix; committing it would end the word early.
+    REQUIRE(!ShouldCommitCompleteWubiCodeOnNextKey(true, true, true, true));
+}

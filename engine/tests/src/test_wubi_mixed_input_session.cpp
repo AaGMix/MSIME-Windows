@@ -140,16 +140,23 @@ int main()
             const auto unique_candidates = type(unique, "wqaa");
             require(unique_candidates.size() == 1, "The fixture did not answer wqaa with one candidate.");
             require(unique.wubi_unique_four_code(), "A unique four-letter wubi code was not reported as one.");
+            require(unique.wubi_four_code_is_complete(), "A complete wubi code was not reported as complete.");
 
             InputSession recoded(SchemeType::Wubi, GetXiaoheShuangpinProfile(), paths_for(resources, root, next()));
             recoded.set_wubi_input_options(WubiInputOptions{false});
             require(type(recoded, "wqab").size() == 2, "The fixture did not recode wqab.");
             require(!recoded.wubi_unique_four_code(), "A recoded four-letter wubi code was called unique.");
+            // Completeness is deliberately not uniqueness: the recoded code still commits its first
+            // candidate when the user types past the fourth letter instead of losing that letter.
+            require(recoded.wubi_four_code_is_complete(),
+                    "A recoded four-letter wubi code was not reported as complete.");
 
             InputSession short_code(SchemeType::Wubi, GetXiaoheShuangpinProfile(), paths_for(resources, root, next()));
             short_code.set_wubi_input_options(WubiInputOptions{false});
             type(short_code, "wq");
             require(!short_code.wubi_unique_four_code(), "A two-letter code was called a complete wubi code.");
+            require(!short_code.wubi_four_code_is_complete(),
+                    "A two-letter code was reported as a complete wubi code.");
 
             // The fixture gives xiao exactly one quanpin candidate, so candidate count alone would
             // call it unique: the pinyin-fallback guard has to reject it on its own.
@@ -159,12 +166,25 @@ int main()
             require(fallback_candidates.size() == 1, "The fixture did not answer xiao with one candidate.");
             require(fallback.answered_by_pinyin_fallback(), "xiao was not answered by the pinyin fallback.");
             require(!fallback.wubi_unique_four_code(), "A pinyin-fallback answer was called a unique wubi code.");
+            require(!fallback.wubi_four_code_is_complete(),
+                    "A pinyin-fallback answer was reported as a complete wubi code.");
 
             InputSession long_spelling(SchemeType::Wubi, GetXiaoheShuangpinProfile(),
                                        paths_for(resources, root, next()));
             long_spelling.set_wubi_input_options(WubiInputOptions{true});
             type(long_spelling, "nihao");
             require(!long_spelling.wubi_unique_four_code(), "A mixed-input spelling was called a complete code.");
+            require(!long_spelling.wubi_four_code_is_complete(),
+                    "A mixed-input spelling was reported as a complete code.");
+
+            // Four letters no table row matched: the table did not answer, so there is no candidate
+            // to commit and the code is not complete in the "answered by the table" sense.
+            InputSession unknown_code(SchemeType::Wubi, GetXiaoheShuangpinProfile(),
+                                      paths_for(resources, root, next()));
+            unknown_code.set_wubi_input_options(WubiInputOptions{false});
+            type(unknown_code, "wqac");
+            require(!unknown_code.wubi_four_code_is_complete(),
+                    "A four-letter code with no table candidate was reported as complete.");
         }
 
         // z is not a wubi letter. Dropping it does not refuse a spelling, it silently becomes a

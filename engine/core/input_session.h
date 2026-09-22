@@ -167,6 +167,11 @@ class InputSession
     // is not a unique wubi code, and committing it would take away the fifth letter mixed input
     // exists to allow.
     bool wubi_unique_four_code() const;
+    // The current composition is a complete four-letter wubi code the wubi table answered (not a
+    // pinyin fallback), regardless of how many candidates it has. Hosts use it to commit the first
+    // candidate when the user types past the fourth letter: a complete code that keeps growing must
+    // not silently swallow the extra letters. See wubi_unique_four_code for the uniqueness part.
+    bool wubi_four_code_is_complete() const;
     bool has_active_helpcode() const;
 
     void set_pinyin_sequence(const std::string &pinyin_sequence);

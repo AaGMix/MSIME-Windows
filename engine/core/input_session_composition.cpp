@@ -469,6 +469,19 @@ bool InputSession::wubi_unique_four_code() const
     return candidates().size() == 1;
 }
 
+bool InputSession::wubi_four_code_is_complete() const
+{
+    // Same guards as wubi_unique_four_code minus the candidate count: hosts commit the first
+    // candidate on the next key whether or not the code has one candidate or many. The candidate
+    // list must not be empty: a four-letter spelling no table row matched was not answered by the
+    // table at all, and committing the raw fallback as text would be worse than leaving it.
+    if (dedicated_english_mode_ || local_input_mode_ != LocalInputMode::None)
+    {
+        return false;
+    }
+    return wubi_candidates_are_native() && engine_.wubi_code_is_complete() && !candidates().empty();
+}
+
 bool InputSession::has_active_helpcode() const
 {
     if (is_wubi() || is_japanese())
