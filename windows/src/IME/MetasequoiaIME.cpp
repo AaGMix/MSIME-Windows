@@ -507,6 +507,8 @@ CMetasequoiaIME::CMetasequoiaIME()
     _deferredKeyDrainPosted = false;
     _serverUnavailableFallbackActive = false;
     _backspaceHoldArmed = false;
+    _capsLockTestKeyDownMessageTime = 0;
+    _capsLockTestKeyDownPending = false;
     _shiftHotkeyArmed = false;
     _ctrlHotkeyArmed = false;
     _modifierHotkeyExpire = {};

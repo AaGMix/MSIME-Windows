@@ -29,6 +29,16 @@ inline bool IsFreshCapsLockKeyDown(WPARAM key, LPARAM lParam)
     return key == VK_CAPITAL && !IsAutoRepeat(lParam);
 }
 
+inline bool ShouldApplyCapsLockActualKeyDownSideEffects(bool matchingTestKeyDownHandled, WPARAM key, LPARAM lParam)
+{
+    return !matchingTestKeyDownHandled && IsFreshCapsLockKeyDown(key, lParam);
+}
+
+inline bool ResultingCapsLockState(bool actualKeyDown, bool observedCapsLockState)
+{
+    return actualKeyDown ? observedCapsLockState : !observedCapsLockState;
+}
+
 inline bool ShouldSuppressBackspaceRepeat(bool armed, bool compositionActive, bool repeat)
 {
     return armed && repeat && !compositionActive;

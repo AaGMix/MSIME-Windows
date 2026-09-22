@@ -596,6 +596,7 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
 
     bool _IsCompositionActiveForKeyGuard();
     bool _ApplyBackspaceHoldGuard(WPARAM wParam, LPARAM lParam);
+    void _ApplyCapsLockKeyDownSideEffects(bool capsLockEnabled);
 
     BOOL _IsRangeCovered(TfEditCookie ec, _In_ ITfRange *pRangeTest, _In_ ITfRange *pRangeCover);
     VOID _DeleteCandidateList(BOOL fForce, _In_opt_ ITfContext *pContext);
@@ -781,6 +782,8 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     // ITfThreadMgrEventSink::OnSetFocus: Chromium swaps its document manager on
     // almost every edit, which would disarm the guard mid-hold.
     bool _backspaceHoldArmed;
+    DWORD _capsLockTestKeyDownMessageTime;
+    bool _capsLockTestKeyDownPending;
 
     // Bare Shift/Ctrl toggle arming (Weasel-style: release within timeout).
     bool _shiftHotkeyArmed;
