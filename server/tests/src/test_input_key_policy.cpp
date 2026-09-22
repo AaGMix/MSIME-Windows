@@ -274,6 +274,25 @@ TEST_CASE(caret_prefix_empty_requires_non_empty_raw_and_zero_prefix)
     REQUIRE(!IsCaretPrefixEmpty(0, 0));
 }
 
+TEST_CASE(caret_arrow_candidate_publish_rebuilds_from_engine_at_both_prefix_and_tail)
+{
+    using FanyImeIpc::CaretArrowCandidatePublish;
+    using FanyImeIpc::ResolveCaretArrowCandidatePublish;
+    // R4：前缀为空（raw 非空）——收起候选窗，与门控无关。
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(true, 0, 14), CaretArrowCandidatePublish::Hide);
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(false, 0, 14), CaretArrowCandidatePublish::Hide);
+    // 门控开 × 前缀中间：按前缀候选重建页面。
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(true, 2, 14), CaretArrowCandidatePublish::RebuildFromEngine);
+    // 门控开 × 回到串尾：引擎已按整串重算，页面必须从引擎重读重建（真机回归修复点）。
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(true, 14, 14), CaretArrowCandidatePublish::RebuildFromEngine);
+    // 门控关（未协商/UILess/专用英文/特殊模式）：光标从不进会话，维持只刷新页面（AC8）。
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(false, 2, 14), CaretArrowCandidatePublish::RefreshPageOnly);
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(false, 14, 14), CaretArrowCandidatePublish::RefreshPageOnly);
+    // 门控开但 raw 为空（仅剩已选汉字的中间态）：没有候选内容可重建，保持只刷新。
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(true, 0, 0), CaretArrowCandidatePublish::RefreshPageOnly);
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(false, 0, 0), CaretArrowCandidatePublish::RefreshPageOnly);
+}
+
 TEST_CASE(create_word_frame_carries_caret_only_for_negotiated_mid_string_caret)
 {
     using FanyImeIpc::ShouldCreateWordFrameCarryCaret;

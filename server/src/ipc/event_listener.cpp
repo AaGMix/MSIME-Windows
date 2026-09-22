@@ -4535,22 +4535,29 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         else
         {
             // R2/R4：前缀重算生效时光标移动会改变候选内容——前缀为空则收起候选窗，
-            // 前缀非空则按前缀候选重建页面；整串解码（串尾光标或未启用）维持只刷新
-            // 页面的现状（R7 零差异）。
+            // 其余（含移回串尾）一律从引擎重读重建页面。移回串尾时引擎已按整串重算，
+            // 但页面 items 还是旧前缀候选，只刷新页面会让那批旧候选参与结算（真机回归：
+            // ni'hao'ya 右移回串尾后空格只上屏「你好」+「ya」）。整串解码（未启用或未协商）
+            // 维持只刷新页面的现状（R7/AC8 零差异）。
             const std::string caret_raw = g_inputSession->get_pinyin_sequence_with_cases();
             const std::size_t prefix_end = g_inputSession->prefix_end();
-            if (FanyImeIpc::IsCaretPrefixEmpty(prefix_end, caret_raw.size()))
+            const bool caret_resegmentation = FanyImeIpc::ShouldResegmentCompositionByCaret(
+                client_supports_restore, IsUiLessMode(), g_english_input_mode,
+                IsSpecialModeCompositionActive(caret_raw));
+            switch (FanyImeIpc::ResolveCaretArrowCandidatePublish(caret_resegmentation, prefix_end, caret_raw.size()))
             {
+            case FanyImeIpc::CaretArrowCandidatePublish::Hide:
                 HideCandidateWindowAndDropItems();
-            }
-            else if (prefix_end < caret_raw.size())
-            {
+                break;
+            case FanyImeIpc::CaretArrowCandidatePublish::RebuildFromEngine:
+                // 窗口可能因之前的前缀为空状态被收起（单音节后缀从 caret=0 右移两次），
+                // 必须显式请求显示；PrepareCandidateList 末尾自带 RefreshCandidatePageUi(false)。
                 PrepareCandidateList(client_id, activation_epoch);
                 RequestShowCandidateWindow();
-            }
-            else
-            {
+                break;
+            case FanyImeIpc::CaretArrowCandidatePublish::RefreshPageOnly:
                 RefreshCandidatePageUi(true);
+                break;
             }
         }
     }
