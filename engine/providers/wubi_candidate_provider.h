@@ -1,13 +1,17 @@
 #pragma once
 
 #include "candidate_provider.h"
+#include "../core/runtime_paths.h"
 #include <sqlite3.h>
 #include <string>
 
 class WubiCandidateProvider : public ICandidateProvider
 {
   public:
-    explicit WubiCandidateProvider(std::string db_path = {});
+    // paths 供调频/删词写 user journal 用；db_path 是测试注入口，生产路径由 ProviderRegistry
+    // 按 paths 解析后传入，两者指向同一份主库。
+    explicit WubiCandidateProvider(std::string db_path = {},
+                                   metasequoia::RuntimePaths paths = metasequoia::RuntimePaths::legacy());
     ~WubiCandidateProvider() override;
 
     WubiCandidateProvider(const WubiCandidateProvider &) = delete;
@@ -30,8 +34,10 @@ class WubiCandidateProvider : public ICandidateProvider
   private:
     bool ensure_query_statement();
     void close_database();
+    std::string journal_db_path() const;
 
     std::string db_path_;
+    metasequoia::RuntimePaths paths_;
     sqlite3 *db_ = nullptr;
     sqlite3_stmt *query_statement_ = nullptr;
 };
