@@ -133,6 +133,19 @@ class InputSession
 
     void handle_engine_key(ImeKeyCode vk, ImeModifierMask modifiers_down, ImeCharacter wch);
     void recompute_candidates();
+    // Moves the caret without editing the raw string. nullopt = end of string (full-string
+    // decoding, the default). The value is clamped to [0, editing_text().size()]. Setting it
+    // only updates state; candidates re-decode by the new boundary on the next
+    // recompute_candidates() or key handling.
+    void set_caret(std::optional<std::size_t> caret);
+    // Raw length consumed by the current decode: the caret moved onto the last complete
+    // syllable-unit boundary at or before it (floor). The caret being unset, or a scheme
+    // without the unit model (segment_raw_boundaries() empty), decodes the whole string and
+    // this equals the raw length.
+    std::size_t prefix_end() const;
+    // raw[prefix_end, size) with its original casing: the pending input this decode did not
+    // consume. Empty unless the caret prefix is strictly shorter than the raw string.
+    std::string pending_suffix() const;
     SchemeType current_scheme_type() const;
 
     void reset_state();
@@ -219,6 +232,18 @@ class InputSession
     KeyResult edit_at_caret(Command command);
     KeyResult replace_editing_text(std::string text, std::size_t caret);
     std::optional<std::size_t> caret_;
+    // Last complete unit boundary at or before the caret; only consumes segment_raw_boundaries()
+    // (segmentation contract #187). caret unset or no unit model yields the full raw length.
+    std::size_t quantized_prefix_end() const;
+    // Decodes the quantized caret prefix into prefix_candidates_ when it is strictly shorter
+    // than the raw string, caching by prefix so unchanged keystrokes skip the extra query.
+    void refresh_prefix_candidates();
+    std::vector<WordItem> prefix_candidates_;
+    // Lowercased prefix the cache was built from; also feeds mixed-candidate association so
+    // English/emoji suggestions follow the string being converted.
+    std::string prefix_query_input_;
+    // True while candidates()/mixed assembly must read prefix_candidates_ instead of engine_.
+    bool prefix_candidates_active_ = false;
     std::optional<std::string> update_local_candidates();
     void update_mixed_candidates();
     void apply_candidate_positions(std::vector<WordItem> &items);

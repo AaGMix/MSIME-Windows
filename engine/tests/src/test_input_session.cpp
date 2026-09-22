@@ -5,6 +5,7 @@
 #include "../../contracts/dictionary/format.h"
 #include "../../quanpin/quanpin_query.h"
 #include "../../quanpin/quanpin_utils.h"
+#include "../../shuangpin/shuangpin_profile.h"
 
 #include <sqlite3.h>
 
@@ -327,6 +328,214 @@ void run_umlaut_alias_session_tests(const std::filesystem::path &data_directory)
                 "Selecting 虐 from 'nue' must update the canonical 'nve' row.");
         require(database.query_integer("SELECT COUNT(*) FROM tbl_1_n WHERE key='nue'") == 0,
                 "No user data may accumulate under the alias key 'nue'.");
+    }
+
+    std::filesystem::remove_all(directory);
+}
+
+// 光标驱动的前缀解码（PRD R2–R7，Stage 1）：候选与量化边界按「光标之前的完整音节
+// 单元前缀」重算。自建隔离词库，不与主 fixture 互相污染；Server（Stage 2）将以
+// set_caret + recompute_candidates 的同一方式消费这些入口。
+void run_caret_prefix_session_tests(const std::filesystem::path &data_directory)
+{
+    const std::filesystem::path directory = data_directory / "caret-prefix";
+    std::filesystem::create_directories(directory);
+    {
+        Database database(directory / "msime.db");
+        database.execute("CREATE TABLE tbl_1_n(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                         "INSERT INTO tbl_1_n VALUES('ni','n','你',100);"
+                         "INSERT INTO tbl_1_n VALUES('ni','n','拟',90);");
+        database.execute("CREATE TABLE tbl_2_n(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                         "INSERT INTO tbl_2_n VALUES('ni''hao','nh','你好',200);"
+                         "INSERT INTO tbl_2_n VALUES('ni''hao','nh','拟好',100);");
+        database.execute("CREATE TABLE tbl_1_s(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                         "INSERT INTO tbl_1_s VALUES('shi','sh','是',100);");
+        database.execute("CREATE TABLE tbl_1_j(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+                         "INSERT INTO tbl_1_j VALUES('jie','j','接',100);");
+        database.execute("CREATE TABLE wubi86(key TEXT,value TEXT,weight INTEGER);"
+                         "INSERT INTO wubi86 VALUES('aaaa','工',100);"
+                         "INSERT INTO wubi86 VALUES('aaaa','或',50);");
+    }
+
+    metasequoia::RuntimePaths paths;
+    paths.resources = directory;
+    paths.user_data = directory;
+    paths.cache = directory;
+    paths.dictionaries = directory;
+
+    const auto words_of = [](const metasequoia::InputSession &session) {
+        std::vector<std::string> words;
+        words.reserve(session.candidates().size());
+        for (const WordItem &item : session.candidates())
+        {
+            words.push_back(item.word);
+        }
+        return words;
+    };
+    const auto same_word_list = [](const metasequoia::InputSession &session, const std::vector<std::string> &expected) {
+        if (session.candidates().size() != expected.size())
+        {
+            return false;
+        }
+        return std::equal(session.candidates().begin(), session.candidates().end(), expected.begin(),
+                          [](const WordItem &left, const std::string &right) { return left.word == right; });
+    };
+
+    // R2/R3/R7：音节内 caret 向下取整到最后一个完整单元边界，候选等于前缀的候选；
+    // caret 未设置或落在末尾时与现状整串解码零差异。
+    const std::string sentence = "ni'hao'shi'jie";
+    const auto quanpin_words = [&](const std::string &typed) {
+        metasequoia::InputSession other(SchemeType::Quanpin, 0, true, true, false, paths);
+        type(other, typed);
+        return words_of(other);
+    };
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, 0, true, true, false, paths);
+        type(session, sentence);
+        require(session.has_composition() && session.prefix_end() == sentence.size() &&
+                    session.pending_suffix().empty(),
+                "An unset caret must decode the whole string");
+        const auto full_words = words_of(session);
+        require(same_word_list(session, full_words),
+                "The unset-caret baseline diverged from a plain typed composition");
+
+        for (const std::size_t caret : {std::size_t(5), std::size_t(6)})
+        {
+            session.set_caret(caret);
+            session.recompute_candidates();
+            require(session.prefix_end() == 3, "An intra-syllable caret must floor to the last complete unit boundary");
+            require(session.pending_suffix() == "hao'shi'jie",
+                    "The pending suffix must keep the raw spelling the decode did not consume");
+            require(candidate_index(session, "你") < session.candidates().size(),
+                    "The 'ni' prefix lost its dictionary candidates");
+            require(same_word_list(session, quanpin_words("ni")),
+                    "The floored prefix must decode exactly like the typed prefix spelling");
+        }
+
+        session.set_caret(7);
+        session.recompute_candidates();
+        require(session.prefix_end() == 7 && session.pending_suffix() == "shi'jie",
+                "A caret on the hao boundary must consume ni'hao");
+        require(candidate_index(session, "你好") < session.candidates().size(),
+                "The ni'hao prefix lost its phrase candidates");
+        require(same_word_list(session, quanpin_words("ni'hao")),
+                "The ni'hao prefix must decode exactly like a typed ni'hao");
+        const auto at_hao = words_of(session);
+        session.set_caret(9);
+        session.recompute_candidates();
+        require(session.prefix_end() == 7 && same_word_list(session, at_hao),
+                "A caret inside 'shi' must floor back to the hao boundary");
+
+        session.set_caret(13);
+        session.recompute_candidates();
+        require(session.prefix_end() == 11 && session.pending_suffix() == "jie",
+                "A caret inside 'jie' must floor to the shi boundary");
+        require(!session.candidates().empty() && same_word_list(session, quanpin_words("ni'hao'shi")),
+                "The ni'hao'shi prefix must decode exactly like the typed spelling");
+
+        // R4：量化后前缀为空 → 无候选，raw/preedit/caret 原样。
+        session.set_caret(0);
+        session.recompute_candidates();
+        require(session.candidates().empty(), "A caret before the first unit must offer no candidate");
+        require(session.prefix_end() == 0 && session.pending_suffix() == sentence,
+                "An empty prefix must leave the whole string pending");
+        require(session.editing_text() == sentence && session.caret_position() == 0 && session.preedit() == sentence,
+                "An empty prefix must not disturb the composition or the preedit");
+
+        // 越界 caret 被夹到串尾 → 退化为整串解码（R7）。
+        session.set_caret(sentence.size() + 10);
+        session.recompute_candidates();
+        require(session.caret_position() == sentence.size() && session.prefix_end() == sentence.size(),
+                "An out-of-range caret must clamp to the end");
+        require(same_word_list(session, full_words), "A caret clamped to the end must restore the full-string decode");
+        session.set_caret(std::nullopt);
+        session.recompute_candidates();
+        require(same_word_list(session, full_words), "Unsetting the caret must restore the full-string decode");
+    }
+
+    // pending_suffix 保留原始大小写：大写字母从光标处插入后原样留在后缀里。
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, 0, true, true, false, paths);
+        type(session, "ni'hao");
+        session.handle_command(metasequoia::Command::MoveHome);
+        require(session.handle_character('H').handled, "The uppercase insert at the caret was rejected");
+        require(session.editing_text() == "Hni'hao" && session.caret_position() == 1,
+                "The uppercase insert lost its case or position");
+        session.set_caret(0);
+        session.recompute_candidates();
+        require(session.prefix_end() == 0 && session.pending_suffix() == "Hni'hao",
+                "The pending suffix must preserve the typed casing");
+        session.set_caret(std::nullopt);
+        session.recompute_candidates();
+        require(session.editing_text() == "Hni'hao", "Restoring the end caret altered the raw text");
+    }
+
+    // 无单元模型（五笔）：segment_raw_boundaries 为空 → caret 移动不量化，候选零变化。
+    {
+        metasequoia::InputSession session(SchemeType::Wubi, 0, true, true, false, paths);
+        type(session, "aaaa");
+        require(session.has_composition() && candidate_index(session, "工") < session.candidates().size(),
+                "The wubi fixture lost its candidates");
+        const auto native = words_of(session);
+        for (const std::size_t caret : {std::size_t(0), std::size_t(2)})
+        {
+            session.set_caret(caret);
+            session.recompute_candidates();
+            require(same_word_list(session, native), "A scheme without the unit model must not re-decode by caret");
+            require(session.prefix_end() == 4 && session.pending_suffix().empty(),
+                    "Without a unit model the caret never shortens the decode");
+        }
+    }
+
+    // 双拼贪心配对（engine spec #187）：nihkb; → {0,2,4,6}、nihcb; → {0,2,3,5,6}，
+    // caret 落在段中间时同样 floor 到完整段边界。
+    const auto shuangpin_words = [&](const std::string &typed) {
+        metasequoia::InputSession other(SchemeType::Shuangpin, GetMicrosoftShuangpinProfile(), paths);
+        type(other, typed);
+        return words_of(other);
+    };
+    {
+        metasequoia::InputSession session(SchemeType::Shuangpin, GetMicrosoftShuangpinProfile(), paths);
+        type(session, "nihkb;");
+        require(candidate_index(session, "你好") < session.candidates().size(),
+                "The shuangpin baseline lost its phrase candidates");
+        require(session.prefix_end() == 6 && session.pending_suffix().empty(),
+                "The unset shuangpin caret must decode the whole string");
+
+        session.set_caret(1);
+        session.recompute_candidates();
+        require(session.candidates().empty() && session.prefix_end() == 0 && session.pending_suffix() == "nihkb;",
+                "A caret inside the first shuangpin unit must quantize to an empty prefix");
+
+        session.set_caret(3);
+        session.recompute_candidates();
+        require(session.prefix_end() == 2 && session.pending_suffix() == "hkb;",
+                "A caret inside the hk unit must floor to the ni boundary");
+        require(same_word_list(session, shuangpin_words("ni")),
+                "The shuangpin 'ni' prefix must decode exactly like the typed spelling");
+
+        session.set_caret(5);
+        session.recompute_candidates();
+        require(session.prefix_end() == 4 && session.pending_suffix() == "b;",
+                "A caret inside the b; unit must floor to the hk boundary");
+        require(candidate_index(session, "你好") < session.candidates().size(),
+                "The shuangpin nihk prefix lost its phrase candidates");
+        require(same_word_list(session, shuangpin_words("nihk")),
+                "The shuangpin nihk prefix must decode exactly like the typed spelling");
+
+        session.set_caret(6);
+        session.recompute_candidates();
+        require(session.prefix_end() == 6 && !session.candidates().empty(),
+                "A caret on the final shuangpin boundary must restore the full decode");
+
+        session.handle_command(metasequoia::Command::Cancel);
+        type(session, "nihcb;");
+        session.set_caret(4);
+        session.recompute_candidates();
+        require(session.prefix_end() == 3 && session.pending_suffix() == "cb;",
+                "The greedy pairing boundary must floor the caret to where cb starts");
+        require(same_word_list(session, shuangpin_words("nih")),
+                "The shuangpin nih prefix must decode exactly like the typed spelling");
     }
 
     std::filesystem::remove_all(directory);
@@ -870,6 +1079,7 @@ int run_test()
     }
 
     run_umlaut_alias_session_tests(data_directory);
+    run_caret_prefix_session_tests(data_directory);
 #endif
 
 #ifndef METASEQUOIA_SKIP_FREQUENCY_TESTS

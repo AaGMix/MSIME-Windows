@@ -155,6 +155,13 @@ KeyResult InputSession::edit_at_caret(Command command)
         return {};
     }
     caret_ = caret;
+    // Pure moves mutate the caret too, so they must re-evaluate the prefix boundary exactly
+    // like an insert/delete does; otherwise candidates() would keep serving the previous
+    // boundary's list until the next edit key (PRD R2: the boundary follows the caret).
+    if (!dedicated_english_mode_ && local_input_mode_ == LocalInputMode::None)
+    {
+        update_mixed_candidates();
+    }
     return {true, std::nullopt, std::nullopt};
 }
 
@@ -240,6 +247,13 @@ KeyResult InputSession::replace_editing_text(std::string text, std::size_t caret
     caret_ = caret;
     online_requests_.invalidate();
     discard_abandoned_phrase_progress();
+    // apply_pending_sequence() already refreshed candidates while the caret was cleared; now
+    // that it is back in place, re-evaluate the caret prefix boundary (a caret at the end of
+    // the text deactivates the prefix decode, mid-text re-decodes it).
+    if (!dedicated_english_mode_ && local_input_mode_ == LocalInputMode::None)
+    {
+        update_mixed_candidates();
+    }
     return {true, std::nullopt, std::move(diagnostic)};
 }
 } // namespace metasequoia
