@@ -15,6 +15,7 @@
 #include "FanyUtils.h"
 #include "FanyLog.h"
 #include "EditSession.h"
+#include "CaretAnchorPolicy.h"
 #include "TfTextLayoutSink.h"
 
 namespace
@@ -46,7 +47,7 @@ class CCaretStateSwitchEditSession : public CEditSessionBase
         if (SUCCEEDED(_pContext->GetActiveView(&view)) && view)
         {
             if (SUCCEEDED(view->GetTextExt(ec, selection.range, &rect, &clipped)) &&
-                (!clipped || (rect.right > rect.left && rect.bottom > rect.top)))
+                IsUsableCaretExtent(clipped != FALSE, rect.left, rect.top, rect.right, rect.bottom))
             {
                 const POINT anchor = GetPhysicalTextAnchor(view, rect);
                 const int point[2] = {anchor.x, anchor.y};
