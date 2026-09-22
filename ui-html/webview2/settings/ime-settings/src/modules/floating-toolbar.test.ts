@@ -20,6 +20,9 @@ it('keeps toolbar and caret controls in separate cards with separate previews', 
   expect(toolbarCard).toContain('id="ftbPreviewHost"');
   expect(toolbarCard).not.toContain('caretStateIndicator');
   expect(caretCard).toContain('id="caretStateIndicatorToggleBtn"');
+  expect(caretCard).toContain('aria-label="显示光标状态提示"');
+  expect(caretCard).toContain('可与悬浮工具栏同时开启');
+  expect(caretCard).not.toContain('关闭悬浮工具栏后');
   expect(caretCard).toContain('id="caretStateIndicatorPositionBtn"');
   expect(caretCard).toContain('id="caretStatePreviewHost"');
   expect(caretCard).not.toContain('id="ftbPreviewHost"');
