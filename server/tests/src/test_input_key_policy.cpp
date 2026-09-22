@@ -245,3 +245,14 @@ TEST_CASE(temporary_r_mode_japanese_session_is_not_replaced_by_config_sync)
     REQUIRE(!FanyImeIpc::InputSessionMatchesConfig(false, false, true));
     REQUIRE(!FanyImeIpc::InputSessionMatchesConfig(false, true, false));
 }
+
+TEST_CASE(wubi_unique_four_code_commit_is_unconditional_and_guards_its_preconditions)
+{
+    using FanyImeIpc::ShouldAutoCommitCompleteWubiCode;
+    // A unique complete four-letter code commits on the fourth key without any setting.
+    REQUIRE(ShouldAutoCommitCompleteWubiCode(true, false));
+    // The engine did not report a complete unique four-letter code.
+    REQUIRE(!ShouldAutoCommitCompleteWubiCode(false, false));
+    // A word is being created: the raw is a prefix, so the composition stays open.
+    REQUIRE(!ShouldAutoCommitCompleteWubiCode(true, true));
+}

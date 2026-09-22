@@ -62,6 +62,17 @@ constexpr bool ShouldResetCompositionForImeMode(bool chinese_mode)
     return !chinese_mode;
 }
 
+// A complete four-letter wubi code the table answered with exactly one candidate is committed as
+// soon as the fourth letter lands, so the user never has to press space. This is unconditional:
+// there is no user setting for it (industry wubi IMEs default this on). The wubi engine's own
+// report that the code is complete, table-answered and unique is the only gate. A word being
+// created keeps the composition open: the raw belongs to the prefix the user is still assembling,
+// and committing it would end that word early.
+constexpr bool ShouldAutoCommitCompleteWubiCode(bool unique_four_code, bool creating_word_active)
+{
+    return unique_four_code && !creating_word_active;
+}
+
 // Enter commits the raw composition instead of choosing a special-mode
 // candidate. Therefore a Shift+letter wake key must not by itself prevent an
 // otherwise non-pinyin English word (for example "Metasequoia") from being

@@ -4336,6 +4336,45 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         // Keep preedit identical to the typed Y-prefixed English.
         GlobalIme::composition.segmented_pinyin = GlobalIme::composition.raw_input_with_cases;
     }
+
+    // 五笔四码唯一自动上屏：敲满四码且码表只给一个候选时，直接走与空格完全相同的提交路径，
+    // 用户不必再按一次空格。判定只发生在字母键插入之后（上面的 ApplyCompositionEditKey）：
+    // 退格、方向键、composition_restored 等路径都不会到这里，所以「打满第四键就上屏」只有
+    // 这一个入口。这是无条件行为，不读配置。
+    if (!g_english_input_mode && Global::Keycode >= 'A' && Global::Keycode <= 'Z' &&
+        FanyImeIpc::ShouldAutoCommitCompleteWubiCode(g_inputSession->wubi_unique_four_code(),
+                                                     GlobalIme::composition.creating_word.active))
+    {
+        // 候选页是异步发布的：此刻 ui.items / ui.page_words 可能还停在第 3 码那一拍，而提交
+        // 路径读的正是这两份数据。先按当前组合同步重建一次，否则会把上一拍的候选上屏。
+        // forced_index_in_page = 0 让结算不进入渲染等待（与鼠标点击同类），自动上屏的语义
+        // 是「这个码只有一个候选」，必须显式取 0 而不是跟随页内选择。
+        PrepareCandidateList(client_id, activation_epoch);
+        Global::candidate_ui.select_first_on_page();
+        ProcessSelectionKey(VK_SPACE, client_id, activation_epoch, /*forced_index_in_page=*/0);
+        if (Global::MsgTypeToTsf == Global::DataFromServerMsgType::Normal)
+        {
+            // 真上屏只能靠 worker 管道推送：字母键在默认 raw 预编辑样式下不读请求-回复管道，
+            // 回一帧 Normal 既不会上屏，还会被 TSF 当成「不属于本次请求」的帧缓存起来，
+            // 而本函数返回前 Server 已经清掉组合，两边就此分叉。TSF 收到推送后用本地
+            // focusToken / compositionEpoch 盖章，再走 FINALIZE_CANDIDATELIST 真提交，
+            // 与鼠标点击上屏是同一条通道（见 TaskType::UiCommitCandidate）。
+            if (SendToTsfWorkerThreadClientViaNamedpipe(client_id, activation_epoch,
+                                                        Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidate,
+                                                        Global::candidate_ui.selected_text))
+            {
+                ClearState();
+            }
+        }
+        // UILess 与 pinyin 预编辑样式会为字母键等一帧回复（上限 50ms）：给它们一帧免得空等；
+        // raw 样式不读回复，塞一帧反而变成死帧。
+        if (IsUiLessMode() || GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
+        {
+            SendCurrentDataToClient(client_id, activation_epoch, request_id);
+        }
+        return;
+    }
+
     //
     // 先判断要不要触发云联想
     // 判断依据：
