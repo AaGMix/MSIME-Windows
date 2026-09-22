@@ -129,6 +129,17 @@ constexpr bool IsCaretPrefixEmpty(std::size_t prefix_end, std::size_t raw_length
     return prefix_end == 0 && raw_length > 0;
 }
 
+// NeedToCreateWord 帧是否携带可选的第 4 字段（caret，contracts/windows_ipc.h）。该字段
+// 的解析器是 #35 之后 DLL 才有的：旧 DLL 把第 2 个 '\t' 之后的整个尾部当
+// display_preedit，未协商时追加 caret 会把 inline preedit 污染成形如「好ni'hao\t4」的
+// 串（AC8：未协商组合必须收到与旧 Server 字节一致的 3 字段帧）。协商侧也只在光标
+// 不在剩余 raw 末尾时携带——串尾造词流光标恒在末尾，省略字段即现状字节。
+constexpr bool ShouldCreateWordFrameCarryCaret(bool client_supports_restore, std::size_t caret_position,
+                                               std::size_t remaining_raw_size) noexcept
+{
+    return client_supports_restore && caret_position < remaining_raw_size;
+}
+
 // Ctrl+Left / Ctrl+Right move the caret by the same segmentation unit that
 // Ctrl+Backspace deletes. They mirror IsSegmentBackspaceKey: only the bare Ctrl
 // chord is the IME's, so Shift, Alt and the Windows keys keep their host

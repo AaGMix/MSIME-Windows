@@ -731,15 +731,18 @@ std::wstring BuildCreateWordPipePayload(const std::string &remaining_raw_input_w
     return remaining + L'\t' + word + L'\t' + preedit;
 }
 
-// NeedToCreateWord 帧带光标变体：光标不在剩余 raw 末尾时追加契约的可选第 4 字段
-// （offset into remaining_raw）。前缀选词结算后光标归后缀首（0），必须显式携带，
-// 否则 DLL 按省略语义把光标镜到末尾。串尾造词流 caret 恒在末尾，不带字段，与现状
-// 字节一致。
-std::wstring BuildCreateWordPipePayloadWithCaret(const std::string &remaining_raw_input_with_cases,
+// NeedToCreateWord 带光标变体。可选第 4 字段（offset into remaining_raw）必须以
+// CompositionRestore 协商为前提：旧 DLL 的解析器把第 2 个 '\t' 之后的尾部整个当
+// display_preedit，未协商时追加会污染 inline preedit（AC8），此时帧与旧 Server 的
+// plain builder 字节一致。协商侧前缀选词结算后光标归后缀首（0），必须显式携带，
+// 否则 DLL 按省略语义把光标镜到末尾。串尾造词流 caret 恒在末尾，不带字段。
+std::wstring BuildCreateWordPipePayloadWithCaret(bool client_supports_restore,
+                                                 const std::string &remaining_raw_input_with_cases,
                                                  const std::string &current_word)
 {
     std::wstring payload = BuildCreateWordPipePayload(remaining_raw_input_with_cases, current_word);
-    if (GlobalIme::composition.caret_position < remaining_raw_input_with_cases.size())
+    if (FanyImeIpc::ShouldCreateWordFrameCarryCaret(client_supports_restore, GlobalIme::composition.caret_position,
+                                                    remaining_raw_input_with_cases.size()))
     {
         payload += L'\t' + std::to_wstring(GlobalIme::composition.caret_position);
     }
@@ -4982,7 +4985,8 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
             GlobalIme::composition.creating_word.preedit = creating_word_progress.preedit;
             /* 更新一下中间态的造词时 tsf 端所需的数据 */
             Global::candidate_ui.selected_text = BuildCreateWordPipePayloadWithCaret(
-                g_inputSession->get_pinyin_sequence_with_cases(), GlobalIme::composition.creating_word.word);
+                ClientNegotiatedCompositionRestore(client_id), g_inputSession->get_pinyin_sequence_with_cases(),
+                GlobalIme::composition.creating_word.word);
             if (creating_word_progress.completed)
             { /* 最终的造词 */
 #ifdef FANY_DEBUG

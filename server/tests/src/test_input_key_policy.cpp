@@ -273,3 +273,21 @@ TEST_CASE(caret_prefix_empty_requires_non_empty_raw_and_zero_prefix)
     // raw 为空的组合：不属于 R4（避免把空组合误判成「前缀为空」）。
     REQUIRE(!IsCaretPrefixEmpty(0, 0));
 }
+
+TEST_CASE(create_word_frame_carries_caret_only_for_negotiated_mid_string_caret)
+{
+    using FanyImeIpc::ShouldCreateWordFrameCarryCaret;
+    // R5/AC2：协商侧前缀选词结算后光标归后缀首（0），必须携带让 DLL 镜到后缀首。
+    REQUIRE(ShouldCreateWordFrameCarryCaret(true, 0, 14));
+    // 协商侧光标在剩余 raw 中间：同样携带。
+    REQUIRE(ShouldCreateWordFrameCarryCaret(true, 3, 14));
+    // 协商侧串尾造词流：光标恒在末尾，省略字段与现状字节一致。
+    REQUIRE(!ShouldCreateWordFrameCarryCaret(true, 14, 14));
+    // 空 raw：无位置可表达，也不带。
+    REQUIRE(!ShouldCreateWordFrameCarryCaret(true, 0, 0));
+    // AC8 回归锚：未协商（旧 DLL）时无条件回 plain 3 字段帧——改动前这里光标
+    // 在中间会误追加第 4 字段，旧解析器把尾部当 display_preedit。
+    REQUIRE(!ShouldCreateWordFrameCarryCaret(false, 0, 14));
+    REQUIRE(!ShouldCreateWordFrameCarryCaret(false, 3, 14));
+    REQUIRE(!ShouldCreateWordFrameCarryCaret(false, 14, 14));
+}
