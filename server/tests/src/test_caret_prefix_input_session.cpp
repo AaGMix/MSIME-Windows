@@ -10,6 +10,7 @@
 #include "engine/shuangpin/shuangpin_profile.h"
 
 #include <sqlite3.h>
+#include <windows.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -23,7 +24,10 @@ namespace
 // 机器上的全局 msime.db。表内容与 engine 侧同名夹具逐字一致，权重决定候选顺序。
 std::filesystem::path CreateCaretPrefixFixture()
 {
-    const auto directory = std::filesystem::temp_directory_path() / "msime-caret-prefix-input-session-test";
+    // PID 后缀：目录开场会被 remove_all，固定名在并行 ctest 或多工作树同时跑时会删掉
+    // 另一个进程正在用的夹具。
+    const auto directory = std::filesystem::temp_directory_path() /
+                           ("msime-caret-prefix-input-session-test-" + std::to_string(GetCurrentProcessId()));
     std::error_code ec;
     std::filesystem::remove_all(directory, ec);
     std::filesystem::create_directories(directory);
@@ -68,6 +72,29 @@ metasequoia::RuntimePaths FixturePaths(const std::filesystem::path &directory)
     paths.cache = directory;
     paths.dictionaries = directory;
     return paths;
+}
+
+// 把夹具里「拟」的权重抬到「你」之上，模拟组合进行中的词库重排：用户词典调频、
+// 配置热更新都会触发 reset_cache，前缀候选必须随之刷新。
+void RaiseNiCandidateWeight(const std::filesystem::path &directory)
+{
+    sqlite3 *database = nullptr;
+    if (sqlite3_open(test::Utf8(directory / "msime.db").c_str(), &database) != SQLITE_OK)
+    {
+        throw std::runtime_error("Failed to open the caret-prefix fixture dictionary.");
+    }
+    // 会话的连接同时开着，写入可能短暂拿不到锁；等它释放而不是直接失败。
+    sqlite3_busy_timeout(database, 5000);
+    char *error = nullptr;
+    if (sqlite3_exec(database, "UPDATE tbl_1_n SET weight=150 WHERE key='ni' AND value='拟';", nullptr, nullptr,
+                     &error) != SQLITE_OK)
+    {
+        const std::string message = error == nullptr ? "SQLite weight update failed." : error;
+        sqlite3_free(error);
+        sqlite3_close(database);
+        throw std::runtime_error(message);
+    }
+    sqlite3_close(database);
 }
 
 void TypeText(metasequoia::InputSession &session, const std::string &text)
@@ -189,6 +216,36 @@ TEST_CASE(CaretPrefixDecodesQuanpinByCompleteSyllablePrefix)
         session.set_caret(std::nullopt);
         session.recompute_candidates();
         REQUIRE(SameCandidateWords(session, full_words));
+    }
+
+    std::filesystem::remove_all(directory);
+}
+
+// 回归：前缀候选按前缀文本缓存，修复前只有文本变化才重查——caret 停在内点时
+// 外部重排词库（用户词典调频、配置热更新都走 reset_cache），重算后候选仍停在
+// 旧权重上。reset_cache 必须连带失效前缀缓存，caret 与后缀不受影响。
+TEST_CASE(PrefixCandidatesRefreshAfterResetCache)
+{
+    const auto directory = CreateCaretPrefixFixture();
+    const auto paths = FixturePaths(directory);
+
+    {
+        metasequoia::InputSession session(SchemeType::Quanpin, 0, true, true, false, paths);
+        TypeText(session, "ni'hao");
+        session.set_caret(4);
+        session.recompute_candidates();
+        REQUIRE_EQ(session.prefix_end(), std::size_t{3});
+        REQUIRE_EQ(session.pending_suffix(), std::string("hao"));
+        REQUIRE(CandidateWordIndex(session, "你") < CandidateWordIndex(session, "拟"));
+
+        RaiseNiCandidateWeight(directory);
+
+        session.reset_cache();
+        session.recompute_candidates();
+        // caret 不动、后缀不变，只有前缀候选按新权重重查。
+        REQUIRE_EQ(session.prefix_end(), std::size_t{3});
+        REQUIRE_EQ(session.pending_suffix(), std::string("hao"));
+        REQUIRE(CandidateWordIndex(session, "拟") < CandidateWordIndex(session, "你"));
     }
 
     std::filesystem::remove_all(directory);
