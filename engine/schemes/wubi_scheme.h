@@ -23,6 +23,14 @@ class WubiScheme : public IInputScheme
     // into a different one -- zhongguo would arrive as hongguo and zi as i. Unlike the length, this
     // follows the setting rather than the last query, since the letter can open a composition.
     void set_mixed_pinyin_allowed(bool allowed);
+    // A complete wubi code is the four letters the table is indexed by. Mixed input only lifts the
+    // length limit after the table has already failed the code in hand, so "complete" stays the
+    // fixed four letters rather than max_code_length() (32 while extended input is on): a longer
+    // spelling is a pinyin fallback and is never a complete wubi code.
+    bool has_complete_code() const
+    {
+        return raw_input_.size() == kMaxCodeLength;
+    }
 
   private:
     static constexpr size_t kMaxCodeLength = 4;

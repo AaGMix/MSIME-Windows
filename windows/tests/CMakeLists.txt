@@ -16,6 +16,11 @@ target_include_directories(test_key_repeat_guard PRIVATE ../src)
 target_compile_features(test_key_repeat_guard PRIVATE cxx_std_17)
 add_test(NAME key_repeat_guard COMMAND test_key_repeat_guard)
 
+add_executable(test_commit_candidate_and_continue_payload commit_candidate_and_continue_payload.cpp)
+target_include_directories(test_commit_candidate_and_continue_payload PRIVATE ../src)
+target_compile_features(test_commit_candidate_and_continue_payload PRIVATE cxx_std_17)
+add_test(NAME commit_candidate_and_continue_payload COMMAND test_commit_candidate_and_continue_payload)
+
 # The classifier and the event queue are compiled into this target directly:
 # they must stay free of TSF and DLL lifecycle dependencies.
 add_executable(test_statistics statistics.cpp ../src/Statistics/char_classify.cpp)

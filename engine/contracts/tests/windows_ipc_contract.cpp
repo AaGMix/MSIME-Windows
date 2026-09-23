@@ -103,6 +103,8 @@ int main()
 
     CHECK(FanyImeWorkerReplyType::SwitchToEn == FanyImeWorkerReplyType::SwitchToEnglish);
     CHECK(FanyImeWorkerReplyType::CommitCandidate == FanyImeWorkerReplyType::CommitCurCandidate);
+    CHECK(FanyImeWorkerReplyType::CommitCandidateAndContinue == 27);
+    CHECK(FanyImeWorkerReplyType::MaxKnown == FanyImeWorkerReplyType::CommitCandidateAndContinue);
     const std::wstring voice(1000, L'x');
     const auto frames = FanyImeVoiceCompositionPipe::EncodeSnapshot(voice, 7);
     CHECK(FanyImeVoiceCompositionPipe::AssembleFrames(frames) == voice);

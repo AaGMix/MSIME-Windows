@@ -45,6 +45,7 @@ const DWORD WM_UpdateVoiceComposition = WM_USER + 24;
 const DWORD WM_CommitVoiceComposition = WM_USER + 25;
 const DWORD WM_CancelVoiceComposition = WM_USER + 26;
 const DWORD WM_ApplyPunctuationLock = WM_USER + 27;
+const DWORD WM_CommitCandidateAndContinue = WM_USER + 28;
 constexpr ULONG_PTR SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO = 0x4D535050u;
 constexpr ULONG_PTR PAIRED_PUNCTUATION_SENDINPUT_EXTRA_INFO = 0x4D535051u;
 // Synthetic input that this tip generates carries a marker meaning "this tip
@@ -256,6 +257,7 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     HRESULT _HandleCancel(TfEditCookie ec, _In_ ITfContext *pContext);
     HRESULT _HandleToogleIMEMode(TfEditCookie ec, _In_ ITfContext *pContext);
     HRESULT _HandleInsertText(TfEditCookie ec, _In_ ITfContext *pContext, const std::wstring &text);
+    HRESULT _HandleCommitCandidateAndContinue(TfEditCookie ec, _In_ ITfContext *pContext, const std::wstring &payload);
     HRESULT _HandleUpdateVoiceComposition(TfEditCookie ec, _In_ ITfContext *pContext, const std::wstring &text);
     HRESULT _HandleCommitVoiceComposition(TfEditCookie ec, _In_ ITfContext *pContext, const std::wstring &text);
     HRESULT _HandleCancelVoiceComposition(TfEditCookie ec, _In_ ITfContext *pContext);
@@ -456,6 +458,7 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
         uint64_t compositionEpoch = 0;
     };
     bool _PostServerCandidateCommit(_In_z_ const WCHAR *candidateText);
+    bool _PostServerCandidateCommitAndContinue(_In_z_ const WCHAR *payload);
     bool _PostServerInsertText(_In_z_ const WCHAR *text);
     bool _PostServerTextDelivery(UINT windowMessage, _In_z_ const WCHAR *text);
     bool _TakeServerCandidateCommit(UINT token, _Out_ WorkerCandidateCommit &request);

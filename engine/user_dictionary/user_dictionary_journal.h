@@ -32,6 +32,12 @@ bool ensure_user_database(const std::string &user_db_path);
 bool record_pinyin_upsert_from_database(const std::string &main_db_path, const std::string &key,
                                         const std::string &value,
                                         const std::string &user_db_path = default_user_db_path());
+// Raise the selected wubi candidate to the top of its own code group (max weight + 1, same
+// semantics as the quanpin side) and persist the new weight plus a journal upsert in one
+// attached-database transaction. Existing rows only: a missing (key,value) pair returns false
+// without inserting. Row-missing behaviour matches update_wubi_weight.
+bool bump_wubi_weight(const std::string &main_db_path, const std::string &user_db_path, const std::string &key,
+                      const std::string &value);
 
 struct ReplayResult
 {

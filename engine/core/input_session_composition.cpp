@@ -449,6 +449,39 @@ bool InputSession::is_all_complete_pure_pinyin() const
     return !segmentation.empty() && quanpin::is_complete_pinyin_input(segmentation);
 }
 
+bool InputSession::wubi_unique_four_code() const
+{
+    // Both modes spell words rather than codes. No host sets either one on a wubi session today, so
+    // this pair is here for a future host that does, the same shape as the guard in
+    // create_position_context's neighbourhood (input_session.cpp:471).
+    if (dedicated_english_mode_ || local_input_mode_ != LocalInputMode::None)
+    {
+        return false;
+    }
+    // wubi_candidates_are_native() already covers "this is a wubi session", and
+    // engine_.wubi_code_is_complete() is false for every other scheme.
+    if (!wubi_candidates_are_native() || !engine_.wubi_code_is_complete())
+    {
+        return false;
+    }
+    // candidates() is the wubi table rows for this code plus any joined user dictionary entries, so
+    // size one is a genuinely unique code.
+    return candidates().size() == 1;
+}
+
+bool InputSession::wubi_four_code_is_complete() const
+{
+    // Same guards as wubi_unique_four_code minus the candidate count: hosts commit the first
+    // candidate on the next key whether or not the code has one candidate or many. The candidate
+    // list must not be empty: a four-letter spelling no table row matched was not answered by the
+    // table at all, and committing the raw fallback as text would be worse than leaving it.
+    if (dedicated_english_mode_ || local_input_mode_ != LocalInputMode::None)
+    {
+        return false;
+    }
+    return wubi_candidates_are_native() && engine_.wubi_code_is_complete() && !candidates().empty();
+}
+
 bool InputSession::has_active_helpcode() const
 {
     if (is_wubi() || is_japanese())

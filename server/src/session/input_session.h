@@ -44,6 +44,13 @@ class IInputSession
     virtual std::vector<std::size_t> segment_raw_boundaries() const = 0;
     virtual std::string get_quanpin() const = 0;
     virtual bool is_all_complete_pure_pinyin() const = 0;
+    // Engine fact for wubi auto-commit: the composition is a complete four-letter wubi code the
+    // table answered with exactly one candidate. The Server decides whether the setting makes that
+    // commit immediately; the engine only reports it.
+    virtual bool wubi_unique_four_code() const = 0;
+    // Engine fact for wubi top-word commit: a complete four-letter code the table answered, no
+    // uniqueness required. The Server commits the first candidate when the user types past it.
+    virtual bool wubi_four_code_is_complete() const = 0;
     virtual bool has_active_helpcode() const = 0;
 
     virtual void set_pinyin_sequence(const std::string &pinyin_sequence) = 0;
