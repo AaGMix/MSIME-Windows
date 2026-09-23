@@ -4,6 +4,7 @@
 #include "../quanpin/quanpin_query.h"
 #include "../user_dictionary/user_dictionary_journal.h"
 #include <spdlog/spdlog.h>
+#include <unordered_set>
 #include <utility>
 
 namespace
@@ -48,12 +49,15 @@ std::vector<WordItem> WubiCandidateProvider::query(const QueryRequest &request)
     }
 
     std::vector<WordItem> candidates;
+    // 同一个字常同时有简码与全码（工 = a / aaaa），前缀查询会把两行都带出来。按 ORDER BY 顺序
+    // 只保留每个词的第一行：精确码行排在最前，调频也就落在用户实际敲的那个码上。
+    std::unordered_set<std::string> seen_words;
     int result = SQLITE_ROW;
     while ((result = sqlite3_step(query_statement_)) == SQLITE_ROW)
     {
         const auto *key = reinterpret_cast<const char *>(sqlite3_column_text(query_statement_, 0));
         const auto *value = reinterpret_cast<const char *>(sqlite3_column_text(query_statement_, 1));
-        if (key == nullptr || value == nullptr)
+        if (key == nullptr || value == nullptr || !seen_words.insert(value).second)
         {
             continue;
         }

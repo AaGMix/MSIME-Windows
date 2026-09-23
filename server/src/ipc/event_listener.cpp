@@ -1737,9 +1737,40 @@ std::mutex queueMutex;
 // 顶字推送后的 HideCandidate 抑制标记：CommitCandidateAndContinue 会让 DLL 提交文本并
 // 结束旧组合，TSF 随之发来 HideCandidateWnd；若 HideCandidate 处理器照常 ClearState，
 // 会把服务端刚重建好的余码组合（如「数据」顶字后剩下的 x）抹掉，用户后续按键从空组合
-// 开始组词——这正是「顶字后 x 没进组词」的根因。两个值都只在 worker 线程读写。
+// 开始组词——这正是「顶字后 x 没进组词」的根因。所有值都只在 worker 线程读写。
+// 顶字与四码唯一自动上屏都会推送，每次推送成功记一笔、每个 HideCandidate 消费一笔；
+// 不能在下一个按键时撤销：快打时下一个字母常常先于 DLL 应用推送到达服务端，那时撤销
+// 标记，随后到来的 HideCandidateWnd 就会把余码清掉。推送被 DLL 丢弃（焦点/组合纪元已变）
+// 时不会有对应的 HideCandidateWnd，所以另设一个时限，过期的记账不再压制真正的清理。
+constexpr ULONGLONG kTopCommitHideSuppressMs = 1000;
 uint64_t g_topCommitRemainderClient = 0;
 uint64_t g_topCommitRemainderEpoch = 0;
+uint32_t g_topCommitPendingHides = 0;
+ULONGLONG g_topCommitLastPushMs = 0;
+
+void NoteTopCommitPushed(uint64_t client_id, uint64_t activation_epoch)
+{
+    if (client_id != g_topCommitRemainderClient || activation_epoch != g_topCommitRemainderEpoch)
+    {
+        g_topCommitPendingHides = 0;
+    }
+    g_topCommitRemainderClient = client_id;
+    g_topCommitRemainderEpoch = activation_epoch;
+    ++g_topCommitPendingHides;
+    g_topCommitLastPushMs = GetTickCount64();
+}
+
+// 消费一笔推送记账；返回这个 HideCandidate 是否对应一次仍在时限内的顶字/自动上屏推送。
+bool ConsumeTopCommitPendingHide(uint64_t client_id, uint64_t activation_epoch)
+{
+    if (g_topCommitPendingHides == 0 || client_id != g_topCommitRemainderClient ||
+        activation_epoch != g_topCommitRemainderEpoch)
+    {
+        return false;
+    }
+    --g_topCommitPendingHides;
+    return GetTickCount64() - g_topCommitLastPushMs <= kTopCommitHideSuppressMs;
+}
 
 void PrepareCandidateList(uint64_t client_id, uint64_t activation_epoch);
 void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t request_id);
@@ -1841,13 +1872,11 @@ void WorkerThread()
             const ULONGLONG queue_elapsed_ms = task.enqueued_at_ms == 0 ? 0 : GetTickCount64() - task.enqueued_at_ms;
             CAND_DIAG_LOGF(L"task HideCandidate client={} epoch={} request={} queued_ms={}", task.client_id,
                            task.activation_epoch, task.pipe_data.request_id, queue_elapsed_ms);
-            // 顶字推送引发的 TSF HideCandidateWnd：余码组合还活着，绝不能 ClearState，
-            // 否则用户刚敲下的那个字母就从服务端组合里消失了。
-            const bool top_commit_remainder_alive = task.client_id == g_topCommitRemainderClient &&
-                                                    task.activation_epoch == g_topCommitRemainderEpoch &&
-                                                    !g_inputSession->get_pinyin_sequence().empty();
-            g_topCommitRemainderClient = 0;
-            g_topCommitRemainderEpoch = 0;
+            // 顶字/自动上屏推送引发的 TSF HideCandidateWnd：余码组合还活着，绝不能 ClearState，
+            // 否则用户刚敲下的那个字母就从服务端组合里消失了。无论组合是否为空都消费一笔记账，
+            // 组合为空（用户没有抢敲）时照常走下面的清理。
+            const bool pushed_hide = ConsumeTopCommitPendingHide(task.client_id, task.activation_epoch);
+            const bool top_commit_remainder_alive = pushed_hide && !g_inputSession->get_pinyin_sequence().empty();
             if (top_commit_remainder_alive)
             {
                 CAND_DIAG_LOGF(L"task HideCandidate suppressed (top-commit remainder alive) client={} epoch={}",
@@ -4141,10 +4170,6 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     /* 先清理一下状态 */
     Global::MsgTypeToTsf = Global::DataFromServerMsgType::Normal;
     ::ReadDataFromNamedPipe(0b000111);
-    // 新按键到来即撤销顶字余码的 HideCandidate 抑制：若推送失败导致 TSF 不会发来
-    // 对应的 HideCandidateWnd，标记不能滞留到压制住下一次真正的提交/失焦清理。
-    g_topCommitRemainderClient = 0;
-    g_topCommitRemainderEpoch = 0;
 
     // TSF classifies VK_NUMPAD0..9 as candidate digit keys. Keep the IPC
     // contract symmetric before any selection/composition predicates run.
@@ -4420,6 +4445,9 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
                     BuildWubiCommitAndContinuePayload(Global::candidate_ui.selected_text)))
             {
                 ClearState();
+                // 推送同样会引来 HideCandidateWnd；用户若已抢敲下一个字母，那时服务端组合
+                // 就是这个字母，不能被这次 Hide 清掉。
+                NoteTopCommitPushed(client_id, activation_epoch);
             }
         }
         // UILess 与 pinyin 预编辑样式会为字母键等一帧回复（上限 50ms）：给它们一帧免得空等；
@@ -4479,12 +4507,15 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         if (Global::MsgTypeToTsf == Global::DataFromServerMsgType::Normal)
         {
             // 推送会让 DLL 结束旧组合，TSF 随之发来 HideCandidateWnd；标记本客户端的余码
-            // 组合仍然存活，HideCandidate 处理器据此跳过 ClearState。
-            g_topCommitRemainderClient = client_id;
-            g_topCommitRemainderEpoch = activation_epoch;
-            (void)SendToTsfWorkerThreadClientViaNamedpipe(
-                client_id, activation_epoch, Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidateAndContinue,
-                BuildWubiCommitAndContinuePayload(committed_text));
+            // 组合仍然存活，HideCandidate 处理器据此跳过 ClearState。推送失败就不会有这次 Hide，
+            // 也就不记账。
+            if (SendToTsfWorkerThreadClientViaNamedpipe(
+                    client_id, activation_epoch,
+                    Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidateAndContinue,
+                    BuildWubiCommitAndContinuePayload(committed_text)))
+            {
+                NoteTopCommitPushed(client_id, activation_epoch);
+            }
         }
         // UILess 与 pinyin 预编辑样式会为字母键等一帧回复（上限 50ms）。这里绝不能回 Normal
         // （SendCurrentDataToClient 会 ClearState，把刚重建的组合再清掉），只能回渲染帧。
