@@ -117,6 +117,11 @@ std::vector<WordItem> ShuangpinEngine::query(const QueryRequest &request)
         return {};
     }
 
+    // 整句联想开关随请求下发到词典层，四条整句来源据此各自门控（见 generateSeries）。
+    dictionary_.set_sentence_association(request.sentence_association);
+    // 前文同理随请求下发；换了前文，按旧前文重排出来的缓存顺序作废。
+    dictionary_.set_rescoring_context(request.rescoring_context);
+
     const std::string &raw_input = request.raw_input;
     const std::string &raw_input_with_cases =
         request.raw_input_with_cases.empty() ? request.raw_input : request.raw_input_with_cases;

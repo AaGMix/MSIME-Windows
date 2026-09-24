@@ -7,6 +7,9 @@
 #include "../common/cache.h"
 #include "../core/key_event.h"
 #include "../core/word_item.h"
+#include "../core/sentence_association_options.h"
+#include "../neural/neural_decoder.h"
+#include "lattice_rerank.h"
 #include "quanpin_query.h"
 #include "engine/ngram/language_model.h"
 #include "../core/fuzzy_pinyin_options.h"
@@ -69,6 +72,14 @@ class QuanpinDictionary
                                     unsigned autocorrect_types, const std::string &word, CandidateSource source);
 
     std::string search_sentence_from_ime_engine(const std::string &user_pinyin);
+
+    // 设置整句候选来源与去重补位选项。值发生变化时清一次缓存，避免旧候选被继续复用。
+    void set_sentence_association(const SentenceAssociationOptions &options);
+
+    // 光标前已上屏的文本，作为神经重排给模型看的上下文。宿主能拿到应用里的前文就给它，
+    // 拿不到就不设——空上下文照样能排，只是模型只看句子本身、看不到上文。
+    // 变化时清一次缓存：同一串拼音在不同上文下的排序可以不同。
+    void set_rescoring_context(const std::string &context);
 
     void reset_state();
     void reset_cache();
@@ -144,6 +155,14 @@ class QuanpinDictionary
     // 词格整句的打分模型（kenlm 三元），按资源路径进程内共享、只读。缺模型时
     // valid() 为假，word_lattice 退回旧的启发式打分：整句候选只是变差，不会消失。
     const ngram::LanguageModel *language_model_ = nullptr;
+    // 神经整句模型（chinese-ime-lm），按资源路径进程内共享、只读。两档可同时参与打分；
+    // 缺文件时对应的整句候选不出，不影响其它候选。
+    const neural::SentenceModel *neural_desktop_model_ = nullptr;
+    const neural::SentenceModel *neural_keyboard_model_ = nullptr;
+    // 整句候选来源与去重补位选项，默认全关；由 set_sentence_association 随请求更新。
+    SentenceAssociationOptions sentence_association_;
+    // 神经重排的上下文（光标前已上屏的文本）。宿主没给就是空串。
+    std::string rescoring_context_;
     std::unordered_map<std::string, sqlite3_stmt *> statement_cache_;
     std::string db_path_;
 

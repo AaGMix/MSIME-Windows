@@ -8,6 +8,9 @@
 #include "../common/cache.h"
 #include "../core/key_event.h"
 #include "../core/word_item.h"
+#include "../core/sentence_association_options.h"
+#include "../neural/neural_decoder.h"
+#include "../quanpin/lattice_rerank.h"
 #include "../quanpin/quanpin_query.h"
 #include "engine/ngram/language_model.h"
 #include "shuangpin_profile.h"
@@ -66,6 +69,12 @@ class ShuangpinDictionary
 
     std::string search_sentence_from_ime_engine(const std::string &user_pinyin);
 
+    // 设置整句候选来源与去重补位选项。值变化时清缓存，见 QuanpinDictionary::set_sentence_association。
+    void set_sentence_association(const SentenceAssociationOptions &options);
+
+    // 神经重排的上下文，见 QuanpinDictionary::set_rescoring_context。
+    void set_rescoring_context(const std::string &context);
+
     explicit ShuangpinDictionary(const ShuangpinProfile &profile = GetXiaoheShuangpinProfile(),
                                  metasequoia::RuntimePaths paths = metasequoia::RuntimePaths::legacy());
     ~ShuangpinDictionary();
@@ -84,6 +93,14 @@ class ShuangpinDictionary
     metasequoia::PinyinDecoder decoder_;
     // 与全拼共用的词格打分模型，见 QuanpinDictionary::language_model_。
     const ngram::LanguageModel *language_model_ = nullptr;
+    // 神经整句模型，见 QuanpinDictionary::neural_desktop_model_。与全拼共用同一份
+    // 进程内缓存（按资源路径），双拼这侧只是各自持一份指针。
+    const neural::SentenceModel *neural_desktop_model_ = nullptr;
+    const neural::SentenceModel *neural_keyboard_model_ = nullptr;
+    // 整句候选来源与去重补位选项，默认全关；由 set_sentence_association 随请求更新。
+    SentenceAssociationOptions sentence_association_;
+    // 神经重排的上下文（光标前已上屏的文本）。宿主没给就是空串。
+    std::string rescoring_context_;
     HelpcodeUtils::SharedKeymap helpcodes_;
     std::unordered_map<std::string, sqlite3_stmt *> quanpin_statement_cache_;
     void reset_cache_if_database_changed();

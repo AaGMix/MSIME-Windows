@@ -31,14 +31,21 @@ inline size_t CountCanonicalSyllables(const std::string &canonical_pinyin) noexc
     return 1 + static_cast<size_t>(std::count(canonical_pinyin.begin(), canonical_pinyin.end(), '\''));
 }
 
-// 整句候选（词格 Generated / Google 解码器 Fallback）独立上屏——不接在造词前缀
-// 后面、自己就是整条输入——时是否该落库。该落：整句是猜出来的，词库里没有它那一行，
-// 调频改的是已有的行，改不到它。不落库的话用户选多少次，下次它仍然要靠猜，也仍然
-// 排在词库里那条同音短语后面。
+// 猜出来的整句来源：词格 Generated、Google 解码器 Fallback，以及神经整句
+// NeuralDesktop / NeuralKeyboard。它们都不是词库里已有的行，落库/学习判定同类处理。
+constexpr bool IsGuessedSentenceSource(CandidateSource source) noexcept
+{
+    return source == CandidateSource::Generated || source == CandidateSource::Fallback ||
+           source == CandidateSource::NeuralDesktop || source == CandidateSource::NeuralKeyboard;
+}
+
+// 整句候选独立上屏——不接在造词前缀后面、自己就是整条输入——时是否该落库。该落：整句是
+// 猜出来的，词库里没有它那一行，调频改的是已有的行，改不到它。不落库的话用户选多少次，
+// 下次它仍然要靠猜，也仍然排在词库里那条同音短语后面。
 inline bool ShouldStoreStandaloneSentence(CandidateSource source,
                                           const std::string &candidate_canonical_pinyin) noexcept
 {
-    if (source != CandidateSource::Generated && source != CandidateSource::Fallback)
+    if (!IsGuessedSentenceSource(source))
     {
         return false;
     }
@@ -57,7 +64,11 @@ inline bool ShouldStoreEarlyReturnPhrase(CandidateSource source, bool creating_w
                                          const std::string &prefix_canonical_pinyin,
                                          const std::string &candidate_canonical_pinyin) noexcept
 {
-    if (source != CandidateSource::Generated || candidate_canonical_pinyin.empty())
+    // 与词格 Generated 同一支：神经整句同样带 canonical quanpin，可以结束一段造词或独立
+    // 上屏。Google Fallback 沿用旧语义仍不走这条造词落库路径。
+    const bool early_return_source = source == CandidateSource::Generated || source == CandidateSource::NeuralDesktop ||
+                                     source == CandidateSource::NeuralKeyboard;
+    if (!early_return_source || candidate_canonical_pinyin.empty())
     {
         return false;
     }

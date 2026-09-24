@@ -3,6 +3,7 @@
 #include "key_event.h"
 #include "fuzzy_pinyin_options.h"
 #include "scheme_type.h"
+#include "sentence_association_options.h"
 #include <string>
 #include <vector>
 
@@ -30,5 +31,11 @@ struct QueryRequest
     bool enable_quanpin_autocorrect_neighbor = false;
     std::vector<KeyStroke> key_strokes;
     metasequoia::FuzzyPinyinOptions fuzzy_pinyin;
+    // 整句候选来源与去重补位选项，默认全关。
+    SentenceAssociationOptions sentence_association;
+    // 给神经重排看的前文：本会话最近上屏的文本。空着也能重排，只是模型看不到语境，「shanghai」
+    // 到底是上海还是伤害就只能靠词格自己的静态分。词典层只取末尾若干字（RerankOptions::
+    // context_chars），所以这里给多了也无妨。
+    std::string rescoring_context;
     bool valid = false;
 };

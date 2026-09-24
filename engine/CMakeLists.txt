@@ -50,6 +50,9 @@ set(METASEQUOIA_IME_ENGINE_SOURCES
     local_modes/kaomoji_query.cpp
     local_modes/quick_phrase_query.cpp
     local_modes/unicode_query.cpp
+    neural/sentence_model.cpp
+    neural/neural_decoder.cpp
+    neural/rescore_worker.cpp
     providers/japanese_candidate_provider.cpp
     providers/pinyin_candidate_provider.cpp
     providers/provider_registry.cpp
@@ -58,6 +61,7 @@ set(METASEQUOIA_IME_ENGINE_SOURCES
     quanpin/quanpin_dictionary.cpp
     quanpin/quanpin_query.cpp
     quanpin/quanpin_utils.cpp
+    quanpin/lattice_rerank.cpp
     quanpin/word_lattice.cpp
     schemes/japanese_romaji_scheme.cpp
     schemes/quanpin_scheme.cpp
@@ -206,6 +210,11 @@ if(BUILD_TESTING)
     add_executable(test_engine_smoke tests/src/test_engine_smoke.cpp)
     target_link_libraries(test_engine_smoke PRIVATE MetasequoiaIme::Engine)
     add_test(NAME engine_smoke COMMAND test_engine_smoke)
+
+    # 神经整句排序集成测试：需数据目录里备好 sentence-model*.safetensors，缺文件时优雅跳过。
+    add_executable(test_neural_sentence tests/src/test_neural_sentence.cpp)
+    target_link_libraries(test_neural_sentence PRIVATE MetasequoiaIme::Engine)
+    add_test(NAME neural_sentence COMMAND test_neural_sentence)
 
     add_executable(test_input_session tests/src/test_input_session.cpp)
     target_compile_definitions(test_input_session PRIVATE METASEQUOIA_SKIP_FREQUENCY_TESTS)

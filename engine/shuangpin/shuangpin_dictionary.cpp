@@ -53,6 +53,10 @@ ShuangpinDictionary::ShuangpinDictionary(const ShuangpinProfile &profile, metase
     : profile_(profile), paths_(std::move(paths)), decoder_(paths_.resource(metasequoia::assets::pinyin_model),
                                                             paths_.user(metasequoia::assets::pinyin_user_dictionary)),
       language_model_(&ngram::shared_language_model(paths_.resource(metasequoia::assets::language_model))),
+      neural_desktop_model_(neural::shared_sentence_model(
+          metasequoia::path_to_utf8(paths_.resource(metasequoia::assets::neural_model_desktop)))),
+      neural_keyboard_model_(neural::shared_sentence_model(
+          metasequoia::path_to_utf8(paths_.resource(metasequoia::assets::neural_model_keyboard)))),
       helpcodes_(HelpcodeUtils::load_helpcode_keymap(paths_.resources, HelpcodeUtils::selected_helpcode_schema())),
       _kb_input_sequence(100), _cached_buffer(128), _cached_buffer_sgl(128), _cached_buffer_sgl_reversed(128),
       _cached_buffer_dbl(128), _cached_buffer_series(128)
@@ -160,7 +164,7 @@ vector<ShuangpinDictionary::WordItem> ShuangpinDictionary::generateSeries( //
         }
         else
         { /* 可能数据库查询的结果是空，这时就需要联想，这个只适合在此处联想 */
-            if (candidate_list.size() == 0)
+            if (candidate_list.size() == 0 && sentence_association_.google)
             {
                 string quanpin_str =
                     ShuangpinUtil::convert_seg_shuangpin_to_seg_complete_pinyin(pinyin_segmentation, profile_);
@@ -203,7 +207,8 @@ vector<ShuangpinDictionary::WordItem> ShuangpinDictionary::generateSeries( //
         // 命中词库的候选之后；merge_lattice_candidates 算出的位置就是这条 Fallback
         // 所在的下标，词格随后会落在它上面。
         const auto quanpin_syllables = quanpin::split_segments(quanpin_segmentation);
-        if (quanpin_syllables.size() >= 2 && quanpin_segmentation.find('\'') != std::string::npos)
+        if (sentence_association_.google && quanpin_syllables.size() >= 2 &&
+            quanpin_segmentation.find('\'') != std::string::npos)
         {
             // 同上：解码器认 nue/lue，词库与下面的 canonical 读音认 nve/lve。
             const std::string google_sentence =
@@ -219,13 +224,33 @@ vector<ShuangpinDictionary::WordItem> ShuangpinDictionary::generateSeries( //
                     WordItem(_pinyin_sequence, google_sentence, 1, CandidateSource::Fallback, quanpin_segmentation));
             }
         }
+        // 词格给 Trigram 候选和神经模型共用；只开神经时仍在内部解出 n-best，但不显示词格首选。
+        // 与全拼同构，见 QuanpinDictionary::query_series。
+        std::vector<quanpin::SourcedLatticeReranker> neural_rerankers;
+        if (sentence_association_.neural_keyboard && neural_keyboard_model_ != nullptr)
+        {
+            neural_rerankers.push_back({quanpin::make_neural_reranker(neural_keyboard_model_, rescoring_context_),
+                                        CandidateSource::NeuralKeyboard});
+        }
+        if (sentence_association_.neural_desktop && neural_desktop_model_ != nullptr)
+        {
+            neural_rerankers.push_back({quanpin::make_neural_reranker(neural_desktop_model_, rescoring_context_),
+                                        CandidateSource::NeuralDesktop});
+        }
         quanpin::WordLatticeOptions lattice_options;
-        lattice_options.nbest = 1;
+        const bool needs_alternatives = !neural_rerankers.empty() || (sentence_association_.word_lattice &&
+                                                                      sentence_association_.show_next_on_duplicate);
+        lattice_options.nbest = needs_alternatives ? static_cast<int>(neural::RerankOptions{}.max_paths) : 1;
+        lattice_options.include_lattice_best = sentence_association_.word_lattice;
+        lattice_options.show_next_on_duplicate = sentence_association_.show_next_on_duplicate;
         lattice_options.language_model = language_model_;
-        quanpin::merge_lattice_candidates(
-            candidate_list, quanpin_syllables,
-            quanpin::make_lattice_db_lookup(quanpin_db_, quanpin_statement_cache_, lattice_options.span_limit),
-            pinyin_sequence, lattice_options);
+        if (sentence_association_.word_lattice || !neural_rerankers.empty())
+        {
+            quanpin::merge_lattice_candidates(
+                candidate_list, quanpin_syllables,
+                quanpin::make_lattice_db_lookup(quanpin_db_, quanpin_statement_cache_, lattice_options.span_limit),
+                pinyin_sequence, lattice_options, neural_rerankers);
+        }
 
         /* 缓存起来 */
         _cached_buffer_series.insert(effective_cache_key, candidate_list);
@@ -1113,6 +1138,27 @@ void ShuangpinDictionary::reset_cache()
     _cached_buffer_sgl_reversed.clear();
     _cached_buffer_dbl.clear();
     _cached_buffer_series.clear();
+}
+
+void ShuangpinDictionary::set_sentence_association(const SentenceAssociationOptions &options)
+{
+    if (sentence_association_ == options)
+    {
+        return;
+    }
+    sentence_association_ = options;
+    // 开关变了就清缓存，否则打开/关闭要等缓存过期才见效。见 generateSeries 的整句块。
+    reset_cache();
+}
+
+void ShuangpinDictionary::set_rescoring_context(const std::string &context)
+{
+    if (rescoring_context_ == context)
+    {
+        return;
+    }
+    rescoring_context_ = context;
+    reset_cache();
 }
 
 void ShuangpinDictionary::reset_cache_if_database_changed()

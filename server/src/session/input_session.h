@@ -53,6 +53,11 @@ class IInputSession
     virtual bool wubi_four_code_is_complete() const = 0;
     virtual bool has_active_helpcode() const = 0;
 
+    // 本会话最近上屏的文本，给神经整句重排当前文。空实现：除引擎会话外没人需要前文。
+    virtual void set_rescoring_context(std::string)
+    {
+    }
+
     virtual void set_pinyin_sequence(const std::string &pinyin_sequence) = 0;
     virtual void set_pinyin_sequence_with_cases(const std::string &pinyin_sequence) = 0;
 
