@@ -33,6 +33,13 @@
   gap: 10px;
 }
 
+/* 标题是 flex 子项时默认可收缩，旁边的说明文字一长就会把标题逐字挤成
+   两行（如「输入速度」变「输入速 / 度」）。标题保持自然宽度不收缩，
+   空间不足时由说明或控件一侧换行吸收。 */
+.section-header > .section-title {
+  flex-shrink: 0;
+}
+
 .divider {
   width: 100%;
   height: 0.5px;

@@ -5,6 +5,7 @@
 #include "../schemes/japanese_romaji_scheme.h"
 #include "../quanpin/quanpin_utils.h"
 #include "../shuangpin/shuangpin_query.h"
+#include <algorithm>
 #include <stdexcept>
 
 namespace
@@ -310,7 +311,13 @@ void ImeSession::refresh_candidates()
     }
 
     state_.candidates = provider_registry_.resolve(state_.request.scheme).query(state_.request);
-    const bool wubi_table_answered = !state_.candidates.empty() && !composition_uses_pinyin_fallback_;
+    // The wubi provider also returns longer codes that start with the input (per-key hints), and a
+    // one-to-three letter prefix almost always has some. Only a row for exactly this code means the
+    // table answered it; hints alone must not keep mixed input from offering pinyin.
+    const bool wubi_table_answered =
+        !composition_uses_pinyin_fallback_ &&
+        std::any_of(state_.candidates.begin(), state_.candidates.end(),
+                    [this](const WordItem &item) { return item.pinyin == state_.request.normalized_input; });
 
     if (wubi_scheme_ != nullptr)
     {
@@ -333,8 +340,14 @@ void ImeSession::refresh_candidates()
         fallback.key_strokes = state_.request.key_strokes;
         if (fallback.valid)
         {
-            state_.candidates = provider_registry_.resolve(fallback.scheme).query(fallback);
-            state_.answered_by_pinyin_fallback = !state_.candidates.empty();
+            // Pinyin that finds nothing leaves the wubi prefix hints in place instead of emptying them,
+            // unless pinyin already owns this composition: its rest must not switch back to wubi.
+            std::vector<WordItem> pinyin_candidates = provider_registry_.resolve(fallback.scheme).query(fallback);
+            state_.answered_by_pinyin_fallback = !pinyin_candidates.empty();
+            if (state_.answered_by_pinyin_fallback || composition_uses_pinyin_fallback_)
+            {
+                state_.candidates = std::move(pinyin_candidates);
+            }
             composition_uses_pinyin_fallback_ = composition_uses_pinyin_fallback_ || state_.answered_by_pinyin_fallback;
             if (state_.answered_by_pinyin_fallback)
             {

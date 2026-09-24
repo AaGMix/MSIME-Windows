@@ -173,6 +173,18 @@ class InputSession
     std::vector<std::size_t> segment_raw_boundaries() const;
     std::string get_quanpin() const;
     bool is_all_complete_pure_pinyin() const;
+    // The current composition is a complete four-letter wubi code answered by the wubi table with
+    // exactly one candidate. Hosts decide whether to auto-commit on this; the engine only reports
+    // the fact. A four-letter spelling answered by the pinyin fallback is deliberately not one:
+    // session.h's answered_by_pinyin_fallback comment explains that a code the table did not answer
+    // is not a unique wubi code, and committing it would take away the fifth letter mixed input
+    // exists to allow.
+    bool wubi_unique_four_code() const;
+    // The current composition is a complete four-letter wubi code the wubi table answered (not a
+    // pinyin fallback), regardless of how many candidates it has. Hosts use it to commit the first
+    // candidate when the user types past the fourth letter: a complete code that keeps growing must
+    // not silently swallow the extra letters. See wubi_unique_four_code for the uniqueness part.
+    bool wubi_four_code_is_complete() const;
     bool has_active_helpcode() const;
 
     void set_pinyin_sequence(const std::string &pinyin_sequence);

@@ -1785,6 +1785,44 @@ std::pair<std::string, std::string> RankingKeysForCandidate(const WordItem &item
 std::queue<Task> taskQueue;
 std::mutex queueMutex;
 
+// 顶字推送后的 HideCandidate 抑制标记：CommitCandidateAndContinue 会让 DLL 提交文本并
+// 结束旧组合，TSF 随之发来 HideCandidateWnd；若 HideCandidate 处理器照常 ClearState，
+// 会把服务端刚重建好的余码组合（如「数据」顶字后剩下的 x）抹掉，用户后续按键从空组合
+// 开始组词——这正是「顶字后 x 没进组词」的根因。所有值都只在 worker 线程读写。
+// 顶字与四码唯一自动上屏都会推送，每次推送成功记一笔、每个 HideCandidate 消费一笔；
+// 不能在下一个按键时撤销：快打时下一个字母常常先于 DLL 应用推送到达服务端，那时撤销
+// 标记，随后到来的 HideCandidateWnd 就会把余码清掉。推送被 DLL 丢弃（焦点/组合纪元已变）
+// 时不会有对应的 HideCandidateWnd，所以另设一个时限，过期的记账不再压制真正的清理。
+constexpr ULONGLONG kTopCommitHideSuppressMs = 1000;
+uint64_t g_topCommitRemainderClient = 0;
+uint64_t g_topCommitRemainderEpoch = 0;
+uint32_t g_topCommitPendingHides = 0;
+ULONGLONG g_topCommitLastPushMs = 0;
+
+void NoteTopCommitPushed(uint64_t client_id, uint64_t activation_epoch)
+{
+    if (client_id != g_topCommitRemainderClient || activation_epoch != g_topCommitRemainderEpoch)
+    {
+        g_topCommitPendingHides = 0;
+    }
+    g_topCommitRemainderClient = client_id;
+    g_topCommitRemainderEpoch = activation_epoch;
+    ++g_topCommitPendingHides;
+    g_topCommitLastPushMs = GetTickCount64();
+}
+
+// 消费一笔推送记账；返回这个 HideCandidate 是否对应一次仍在时限内的顶字/自动上屏推送。
+bool ConsumeTopCommitPendingHide(uint64_t client_id, uint64_t activation_epoch)
+{
+    if (g_topCommitPendingHides == 0 || client_id != g_topCommitRemainderClient ||
+        activation_epoch != g_topCommitRemainderEpoch)
+    {
+        return false;
+    }
+    --g_topCommitPendingHides;
+    return GetTickCount64() - g_topCommitLastPushMs <= kTopCommitHideSuppressMs;
+}
+
 void PrepareCandidateList(uint64_t client_id, uint64_t activation_epoch);
 void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t request_id);
 void ClearState();
@@ -1837,6 +1875,11 @@ void WorkerThread()
         {
             // Every task carrying an owner is rejected after a focus/session
             // transition, including UI-originated candidate actions.
+            // 这条丢弃无其他日志；排查丢键时先看这里（2026-09 曾疑似顶字丢键，探针证实
+            // 该路径并未触发，日志留作以后定位任务消失的入口）。
+            CAND_DIAG_LOGF(L"task stale-dropped type={} client={} task_epoch={} current_epoch={}",
+                           static_cast<int>(task.type), task.client_id, task.activation_epoch,
+                           GetActivePipeClient().epoch);
             continue;
         }
 
@@ -1887,6 +1930,18 @@ void WorkerThread()
             const ULONGLONG queue_elapsed_ms = task.enqueued_at_ms == 0 ? 0 : GetTickCount64() - task.enqueued_at_ms;
             CAND_DIAG_LOGF(L"task HideCandidate client={} epoch={} request={} queued_ms={}", task.client_id,
                            task.activation_epoch, task.pipe_data.request_id, queue_elapsed_ms);
+            // 顶字/自动上屏推送引发的 TSF HideCandidateWnd：余码组合还活着，绝不能 ClearState，
+            // 否则用户刚敲下的那个字母就从服务端组合里消失了。无论组合是否为空都消费一笔记账，
+            // 组合为空（用户没有抢敲）时照常走下面的清理。
+            const bool pushed_hide = ConsumeTopCommitPendingHide(task.client_id, task.activation_epoch);
+            const bool top_commit_remainder_alive = pushed_hide && !g_inputSession->get_pinyin_sequence().empty();
+            if (top_commit_remainder_alive)
+            {
+                CAND_DIAG_LOGF(L"task HideCandidate suppressed (top-commit remainder alive) client={} epoch={}",
+                               task.client_id, task.activation_epoch);
+                RequestShowCandidateWindow();
+                break;
+            }
             // Only a hide this thread delivered late can belong to a keystroke the
             // user has already typed past — that is the one worth holding briefly,
             // because a show for a later keystroke is right behind it. A hide
@@ -1924,6 +1979,11 @@ void WorkerThread()
                 DIAG_LOGF(L"[key-latency] side=server stage=queue request={} client={} epoch={} elapsed_ms={}",
                           task.pipe_data.request_id, task.client_id, task.activation_epoch, queue_elapsed_ms);
             }
+            // 顶字后第 4 码丢失的定位探针：DLL 侧 keydown-sent 已确认发出，若这里没打出来，
+            // 说明任务根本没进队列（reader 未收到/未入队）；打出来了但组合没变，才是 HandleImeKey 内部问题。
+            CAND_DIAG_LOGF(L"task ImeKeyEvent dispatch request={} keycode=0x{:X} wch=U+{:04X} epoch={}",
+                           task.pipe_data.request_id, task.pipe_data.keycode, static_cast<unsigned>(task.pipe_data.wch),
+                           task.activation_epoch);
             HandleImeKey(task.client_id, task.activation_epoch, task.pipe_data.request_id);
             break;
         }
@@ -3001,6 +3061,11 @@ void MainPipeClientThread(HANDLE clientPipe, uint64_t handlerId)
         switch (pipeData.event_type)
         {
         case FanyImePipeEventType::KeyEvent: {
+            // 与 worker 侧的 dispatch 探针配对：reader 收到键包即记，两边对照可把丢键
+            // 精确到「reader 未收到」还是「worker 未派发」。request_id 是 DLL 侧分配的，
+            // 可直接与 [msime][issue47] 的 keydown-sent request 对齐。
+            CAND_DIAG_LOGF(L"main-pipe KeyEvent received request={} keycode=0x{:X} wch=U+{:04X}", pipeData.request_id,
+                           pipeData.keycode, static_cast<unsigned>(pipeData.wch));
             EnqueueTask(TaskType::ImeKeyEvent, pipeData, activation.epoch);
             break;
         }
@@ -4146,6 +4211,15 @@ void HandleTranslationCommitKey(uint64_t client_id, uint64_t activation_epoch, u
     SendCurrentDataToClient(client_id, activation_epoch, request_id);
 }
 
+// 真顶字与自动上屏的推送负载："<消费字符数>\t<上屏文本>"。TSF 拿这个数字裁自己的
+// 组合缓冲，所以服务端看到的是四码、用户已抢敲第五个字母时，第五个字母不会被旧快照覆盖。
+// 消费数就是五笔完整码的字母数（engine/schemes/wubi_scheme.h 的 kMaxCodeLength）。
+constexpr std::size_t kWubiCompleteCodeLength = 4;
+std::wstring BuildWubiCommitAndContinuePayload(const std::wstring &text)
+{
+    return std::to_wstring(kWubiCompleteCodeLength) + L"\t" + text;
+}
+
 /**
  * @brief
  *
@@ -4206,6 +4280,12 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
 
     const std::string input_before_key =
         g_inputSession ? g_inputSession->get_pinyin_sequence_with_cases() : std::string{};
+    // 顶字要的是「插入之前」的原始串长度与光标位置：ApplyCompositionEditKey 会把第五个字母插进
+    // 本地 raw 并把光标推到 5，之后再问就分不清「用户又敲了一个字母」和「本来就停在别处」。引擎
+    // 随后会把 raw 裁回四码，这个快照是唯一能区分两者的地方（raw_length_before_key == 4 且光标
+    // 在末尾 = 用户正在往后打，不是回来改码）。
+    const std::size_t raw_length_before_key = input_before_key.size();
+    const std::size_t caret_before_key = GlobalIme::composition.caret_position;
     const bool shift_only = (Global::ModifiersDown & 0b00000111u) == 0b00000001u;
     const bool chinese_scheme = g_inputSession && (g_inputSession->current_scheme_type() == SchemeType::Quanpin ||
                                                    g_inputSession->current_scheme_type() == SchemeType::Shuangpin);
@@ -4399,6 +4479,122 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         // Keep preedit identical to the typed Y-prefixed English.
         GlobalIme::composition.segmented_pinyin = GlobalIme::composition.raw_input_with_cases;
     }
+
+    // 五笔四码唯一自动上屏：敲满四码且码表只给一个候选时，直接走与空格完全相同的提交路径，
+    // 用户不必再按一次空格。判定只发生在字母键插入之后（上面的 ApplyCompositionEditKey）：
+    // 退格、方向键、composition_restored 等路径都不会到这里，所以「打满第四键就上屏」只有
+    // 这一个入口。这是无条件行为，不读配置。
+    const bool letter_key = Global::Keycode >= 'A' && Global::Keycode <= 'Z';
+    if (!g_english_input_mode && letter_key &&
+        FanyImeIpc::ShouldAutoCommitCompleteWubiCode(g_inputSession->wubi_unique_four_code(),
+                                                     GlobalIme::composition.creating_word.active))
+    {
+        // 候选页是异步发布的：此刻 ui.items / ui.page_words 可能还停在第 3 码那一拍，而提交
+        // 路径读的正是这两份数据。先按当前组合同步重建一次，否则会把上一拍的候选上屏。
+        // forced_index_in_page = 0 让结算不进入渲染等待（与鼠标点击同类），自动上屏的语义
+        // 是「这个码只有一个候选」，必须显式取 0 而不是跟随页内选择。
+        PrepareCandidateList(client_id, activation_epoch);
+        Global::candidate_ui.select_first_on_page();
+        ProcessSelectionKey(VK_SPACE, client_id, activation_epoch, /*forced_index_in_page=*/0);
+        if (Global::MsgTypeToTsf == Global::DataFromServerMsgType::Normal)
+        {
+            // 真上屏只能靠 worker 管道推送：字母键在默认 raw 预编辑样式下不读请求-回复管道，
+            // 回一帧 Normal 既不会上屏，还会被 TSF 当成「不属于本次请求」的帧缓存起来，
+            // 而本函数返回前 Server 已经清掉组合，两边就此分叉。推送携带消费的 4 个字符，
+            // TSF 裁自己的缓冲；快打时用户已多敲的字母因此不会被旧快照覆盖。
+            if (SendToTsfWorkerThreadClientViaNamedpipe(
+                    client_id, activation_epoch,
+                    Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidateAndContinue,
+                    BuildWubiCommitAndContinuePayload(Global::candidate_ui.selected_text)))
+            {
+                ClearState();
+                // 推送同样会引来 HideCandidateWnd；用户若已抢敲下一个字母，那时服务端组合
+                // 就是这个字母，不能被这次 Hide 清掉。
+                NoteTopCommitPushed(client_id, activation_epoch);
+            }
+        }
+        // UILess 与 pinyin 预编辑样式会为字母键等一帧回复（上限 50ms）：给它们一帧免得空等；
+        // raw 样式不读回复，塞一帧反而变成死帧。
+        if (IsUiLessMode() || GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
+        {
+            SendCurrentDataToClient(client_id, activation_epoch, request_id);
+        }
+        return;
+    }
+
+    // 真顶字：完整四码（不论是否唯一）之后再敲一个字母时，先上屏该码的首选候选，再把这个字母
+    // 留作下一次组合的开头——用户已经在打下一个字，字母绝不能丢。它不看自动上屏开关：开关
+    // 只决定「唯一码要不要多敲一键才上屏」，不决定丢不丢输入。判定复用同一份引擎事实，
+    // 但不要求唯一；上屏取候选 0（首选），不进入 30ms 渲染等待。
+    if (!g_english_input_mode && letter_key && raw_length_before_key == kWubiCompleteCodeLength &&
+        caret_before_key == raw_length_before_key &&
+        FanyImeIpc::ShouldCommitCompleteWubiCodeOnNextKey(g_inputSession->wubi_four_code_is_complete(),
+                                                          /*key_is_letter=*/true, /*caret_at_end=*/true,
+                                                          GlobalIme::composition.creating_word.active))
+    {
+        PrepareCandidateList(client_id, activation_epoch);
+        Global::candidate_ui.select_first_on_page();
+        ProcessSelectionKey(VK_SPACE, client_id, activation_epoch, /*forced_index_in_page=*/0);
+        const std::wstring committed_text = Global::candidate_ui.selected_text;
+
+        // 用刚敲下的这个字母重建服务端组合。ProcessSelectionKey 已经把引擎与组合清空，这里
+        // 把字母写回去；引擎此刻的 raw 仍是被裁回的四码，所以必须显式设置而不是继续追加。
+        // 大小写照 ApplyCompositionEditKey 的同一套规则取，保持 preedit 与用户敲键一致。
+        char next_char = static_cast<char>(Global::Keycode + ('a' - 'A'));
+        if (Global::Wch >= L'A' && Global::Wch <= L'Z')
+        {
+            next_char = static_cast<char>(Global::Wch);
+        }
+        else if (Global::Wch >= L'a' && Global::Wch <= L'z')
+        {
+            next_char = static_cast<char>(Global::Wch);
+        }
+        const std::string next_raw(1, next_char);
+        GlobalIme::composition.clear_creating_word();
+        GlobalIme::composition.selection_history.clear();
+        g_inputSession->set_pinyin_sequence(next_raw);
+        g_inputSession->set_pinyin_sequence_with_cases(next_raw);
+        g_inputSession->recompute_candidates();
+        GlobalIme::composition.raw_input_with_cases = g_inputSession->get_pinyin_sequence_with_cases();
+        GlobalIme::composition.segmented_pinyin = g_inputSession->get_pinyin_segmentation_with_cases();
+        GlobalIme::composition.caret_position = GlobalIme::composition.raw_input_with_cases.size();
+        PrepareCandidateList(client_id, activation_epoch);
+        // 组合被提交时 TSF 会送 HideCandidateWnd 把候选窗藏起来；顶字重建的新组合必须
+        // 显式把窗口再请出来，否则后续整词的候选（xyyf 的统计）用户永远看不到。
+        RequestShowCandidateWindow();
+
+        // 推送与用户下一个按键是两条独立路径：TSF 裁的是它自己那一刻的缓冲，所以「服务端说
+        // 消费 4 个、TSF 手里已经有 5 个」时，第 5 个自然留下来继续组词。服务端的组合也正好
+        // 是同一批多出来的字母，两边都从同一条按键流派生，不会错位。不要 ClearState：重建的
+        // 组合正是下一次按键要用的状态。
+        if (Global::MsgTypeToTsf == Global::DataFromServerMsgType::Normal)
+        {
+            // 推送会让 DLL 结束旧组合，TSF 随之发来 HideCandidateWnd；标记本客户端的余码
+            // 组合仍然存活，HideCandidate 处理器据此跳过 ClearState。推送失败就不会有这次 Hide，
+            // 也就不记账。
+            if (SendToTsfWorkerThreadClientViaNamedpipe(
+                    client_id, activation_epoch,
+                    Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidateAndContinue,
+                    BuildWubiCommitAndContinuePayload(committed_text)))
+            {
+                NoteTopCommitPushed(client_id, activation_epoch);
+            }
+        }
+        // UILess 与 pinyin 预编辑样式会为字母键等一帧回复（上限 50ms）。这里绝不能回 Normal
+        // （SendCurrentDataToClient 会 ClearState，把刚重建的组合再清掉），只能回渲染帧。
+        if (IsUiLessMode())
+        {
+            SendUiLessCompositionToClient(client_id, activation_epoch, request_id);
+        }
+        else if (GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
+        {
+            Global::MsgTypeToTsf = Global::DataFromServerMsgType::Preedit;
+            Global::candidate_ui.selected_text = GetPreedit();
+            SendCurrentDataToClient(client_id, activation_epoch, request_id);
+        }
+        return;
+    }
+
     //
     // 先判断要不要触发云联想
     // 判断依据：

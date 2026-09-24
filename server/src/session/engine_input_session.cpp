@@ -129,6 +129,16 @@ bool EngineInputSession::is_all_complete_pure_pinyin() const
     return session_.is_all_complete_pure_pinyin();
 }
 
+bool EngineInputSession::wubi_unique_four_code() const
+{
+    return session_.wubi_unique_four_code();
+}
+
+bool EngineInputSession::wubi_four_code_is_complete() const
+{
+    return session_.wubi_four_code_is_complete();
+}
+
 bool EngineInputSession::has_active_helpcode() const
 {
     return session_.has_active_helpcode();

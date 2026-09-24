@@ -194,7 +194,7 @@ shuangpin_preedit_mode = "shuangpin"
 # 双拼方案，可选："xiaohe", "ziranma", "shoudao", "microsoft"
 # shuangpin_schema = "xiaohe"
 shuangpin_schema = "xiaohe"
-# 五笔方案，可选："wubi86", "wubi98"
+# 五笔方案，当前仅支持 "wubi86"；98 版待词库发布后另开任务接线
 wubi_schema = "wubi86"
 # 日语方案，当前支持："romaji"
 japanese_schema = "romaji"

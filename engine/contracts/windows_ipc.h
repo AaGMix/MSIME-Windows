@@ -356,7 +356,14 @@ constexpr std::uint32_t SmartPunctuationDirectLetterChanged = 25;
 // classifies nothing, queues nothing and never opens the statistics pipe, so
 // the opt-out costs the input path exactly one relaxed atomic load.
 constexpr std::uint32_t StatisticsEnabledChanged = 26;
-constexpr std::uint32_t MaxKnown = StatisticsEnabledChanged;
+// Server-decided auto-commit with the characters it consumed. Payload
+// "<consumed>\t<text>": consumed is the decimal number of leading characters this
+// delivery replaces in the TSF keystroke buffer, text is the committed text (empty
+// consumes without committing). TSF trims its own buffer with that count instead of
+// applying a remainder the Server computed from a possibly stale view, so letters the
+// user typed past the committed code survive as the next composition.
+constexpr std::uint32_t CommitCandidateAndContinue = 27;
+constexpr std::uint32_t MaxKnown = CommitCandidateAndContinue;
 // Source compatibility for the Server's historical spellings.
 constexpr std::uint32_t SwitchToEn = SwitchToEnglish;
 constexpr std::uint32_t SwitchToCn = SwitchToChinese;

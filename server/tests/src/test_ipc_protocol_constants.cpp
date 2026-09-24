@@ -51,9 +51,11 @@ TEST_CASE(ipc_pipe_ready_is_a_distinct_server_reply)
     REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectDigitChanged, 24u);
     REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectLetterChanged, 25u);
     REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged, 26u);
+    REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidateAndContinue, 27u);
     // Opcode 23 (the removed paired-symbol space conversion) is intentionally
-    // left unused.
-    REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::MaxKnown, 26u);
+    // left unused, and the number is never recycled: a shipped test build would
+    // otherwise misread a new frame. New frames take the next free number.
+    REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::MaxKnown, 27u);
     REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::FocusSessionReady >
             Global::DataFromServerMsgTypeToTsfWorkerThread::PagingCommaPeriodChanged);
     REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::PipeReady >
@@ -90,8 +92,10 @@ TEST_CASE(ipc_pipe_ready_is_a_distinct_server_reply)
             Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectDigitChanged);
     REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged >
             Global::DataFromServerMsgTypeToTsfWorkerThread::SmartPunctuationDirectLetterChanged);
+    REQUIRE(Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidateAndContinue >
+            Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged);
     REQUIRE_EQ(Global::DataFromServerMsgTypeToTsfWorkerThread::MaxKnown,
-               Global::DataFromServerMsgTypeToTsfWorkerThread::StatisticsEnabledChanged);
+               Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidateAndContinue);
 }
 
 TEST_CASE(ipc_client_suspension_is_a_distinct_nonterminal_route_reset)

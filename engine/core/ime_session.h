@@ -57,6 +57,12 @@ class ImeSession
     {
         return state_.answered_by_pinyin_fallback;
     }
+    // Forwarded from the live wubi scheme so a session with no wubi scheme answers false. The
+    // composition knows whether its raw input is a full four-letter code; only the scheme holds it.
+    bool wubi_code_is_complete() const
+    {
+        return wubi_scheme_ != nullptr && wubi_scheme_->has_complete_code();
+    }
     const std::vector<WordItem> &get_candidates() const;
     bool expand_initial_candidates();
 
