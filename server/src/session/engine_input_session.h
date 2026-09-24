@@ -38,6 +38,10 @@ class EngineInputSession : public IInputSession
     void set_pinyin_sequence(const std::string &pinyin_sequence) override;
     void set_pinyin_sequence_with_cases(const std::string &pinyin_sequence) override;
 
+    void set_caret(std::optional<std::size_t> caret) override;
+    std::size_t prefix_end() const override;
+    std::string pending_suffix() const override;
+
     int store_user_phrase(std::string pinyin, std::string word) override;
     int store_user_phrase_from_canonical_pinyin(std::string pinyin, std::string word) override;
     int pin_candidate(std::string pinyin, std::string word) override;

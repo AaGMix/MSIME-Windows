@@ -731,6 +731,24 @@ std::wstring BuildCreateWordPipePayload(const std::string &remaining_raw_input_w
     return remaining + L'\t' + word + L'\t' + preedit;
 }
 
+// NeedToCreateWord 带光标变体。可选第 4 字段（offset into remaining_raw）必须以
+// CompositionRestore 协商为前提：旧 DLL 的解析器把第 2 个 '\t' 之后的尾部整个当
+// display_preedit，未协商时追加会污染 inline preedit（AC8），此时帧与旧 Server 的
+// plain builder 字节一致。协商侧前缀选词结算后光标归后缀首（0），必须显式携带，
+// 否则 DLL 按省略语义把光标镜到末尾。串尾造词流 caret 恒在末尾，不带字段。
+std::wstring BuildCreateWordPipePayloadWithCaret(bool client_supports_restore,
+                                                 const std::string &remaining_raw_input_with_cases,
+                                                 const std::string &current_word)
+{
+    std::wstring payload = BuildCreateWordPipePayload(remaining_raw_input_with_cases, current_word);
+    if (FanyImeIpc::ShouldCreateWordFrameCarryCaret(client_supports_restore, GlobalIme::composition.caret_position,
+                                                    remaining_raw_input_with_cases.size()))
+    {
+        payload += L'\t' + std::to_wstring(GlobalIme::composition.caret_position);
+    }
+    return payload;
+}
+
 // 日语模式由配置项决定，和 R 模式（中文里临时切日语）无关：TSF 侧只能看到配置，
 // 两侧必须用同一个判据，否则按键分类会不一致、预编辑会错位。
 bool IsJapaneseInputMode()
@@ -902,6 +920,25 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
     }
     composition.caret_position = (std::min)(composition.caret_position, raw.size());
 
+    // R2/R10：光标前缀重算总门控（与 Ctrl+Backspace / Ctrl+方向同一谓词族）。未协商、
+    // UILess、专用英文、特殊模式组合一律维持整串转换，光标只是显示层插入点。
+    const bool caret_resegmentation = FanyImeIpc::ShouldResegmentCompositionByCaret(
+        client_supports_restore, IsUiLessMode(), g_english_input_mode, IsSpecialModeCompositionActive(raw));
+    // 箭头与 Ctrl+方向路径不改 raw、没有 pending 序列，喂完光标重解一次即可。串尾
+    // 也必须显式喂：引擎 caret_ 只在 set_pinyin_sequence 触发的 apply_pending_sequence
+    // 里复位，箭头路径绕过它——串尾不喂 nullopt（与 set_caret(size) 在量化边界上等
+    // 价）会残留上一次前缀激活的 caret_，候选停在旧前缀上、空格结算走错前缀路径（R7）。
+    const auto resegment_by_caret = [&]() {
+        if (!caret_resegmentation)
+        {
+            return;
+        }
+        g_inputSession->set_caret(composition.caret_position < raw.size()
+                                      ? std::optional<std::size_t>(composition.caret_position)
+                                      : std::nullopt);
+        g_inputSession->recompute_candidates();
+    };
+
     // Ctrl+Left / Ctrl+Right jump the caret by one segmentation unit instead of
     // one character, consuming the same engine boundaries Ctrl+Backspace
     // deletes. The Server owns the unit model, so it moves the authoritative
@@ -922,6 +959,7 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
                     keycode == VK_LEFT ? FanyImeIpc::PreviousSegmentBoundary(boundaries, composition.caret_position)
                                        : FanyImeIpc::NextSegmentBoundary(boundaries, composition.caret_position);
                 composition_restored = true;
+                resegment_by_caret();
                 return true;
             }
         }
@@ -936,6 +974,7 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
         {
             ++composition.caret_position;
         }
+        resegment_by_caret();
         return true;
     }
 
@@ -1065,7 +1104,19 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
 
     g_inputSession->set_pinyin_sequence(raw);
     g_inputSession->set_pinyin_sequence_with_cases(raw);
-    g_inputSession->recompute_candidates();
+    if (caret_resegmentation && composition.caret_position < raw.size())
+    {
+        // apply_pending_sequence() 会复位引擎光标：先让新 raw 生效，再喂光标做前缀
+        // 重解（R2/R6）。caret 在串尾时不进这里，上一次 recompute 就是现状整串解码
+        // （R7 零回归）。
+        g_inputSession->recompute_candidates();
+        g_inputSession->set_caret(composition.caret_position);
+        g_inputSession->recompute_candidates();
+    }
+    else
+    {
+        g_inputSession->recompute_candidates();
+    }
     composition.raw_input_with_cases = raw;
     return true;
 }
@@ -1862,6 +1913,13 @@ void WorkerThread()
             CAND_DIAG_LOGF(L"task ShowCandidate client={} epoch={} request={} caret=({},{}) input_units={}",
                            task.client_id, task.activation_epoch, task.pipe_data.request_id, Global::Point[0],
                            Global::Point[1], GlobalIme::composition.raw_input_with_cases.size());
+            if (FanyImeIpc::IsCaretPrefixEmpty(g_inputSession->prefix_end(),
+                                               g_inputSession->get_pinyin_sequence_with_cases().size()))
+            {
+                // R4：光标前缀为空时 DLL 的 Show 事件不得唤醒一个空候选窗。
+                HideCandidateWindowAndDropItems();
+                break;
+            }
             PrepareCandidateList(task.client_id, task.activation_epoch);
             RequestShowCandidateWindow();
             break;
@@ -3677,7 +3735,11 @@ void PrepareCandidateList(uint64_t client_id, uint64_t activation_epoch)
             items.resize(24);
     }
 
-    if (items.empty() && !g_english_input_mode)
+    // R4：光标前缀为空时不造「整串假候选」——前缀为空就该没有候选（候选窗由调用方
+    // 收起）。caret 未设置时 prefix_end 等于串长，此分支永不触发，现状零差异。
+    if (items.empty() && !g_english_input_mode &&
+        !FanyImeIpc::IsCaretPrefixEmpty(g_inputSession->prefix_end(),
+                                        g_inputSession->get_pinyin_sequence_with_cases().size()))
     {
         items.emplace_back(pinyin, pinyin, 1, CandidateSource::Fallback);
     }
@@ -4344,9 +4406,10 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     /* 先处理一下通用的按键，包括所有可能的按键，如普通的拼音字符按键、空格、Tab
      * 等等，然后再在下面处理其中的特殊的按键 */
     bool composition_restored = false;
-    const bool client_supports_restore =
-        (Global::Keycode == VK_BACK || Global::Keycode == VK_LEFT || Global::Keycode == VK_RIGHT) &&
-        ClientNegotiatedCompositionRestore(client_id);
+    // 前缀重算让所有编辑键（含字母/Delete）都需要协商结果；段操作（Ctrl+Backspace /
+    // Ctrl+方向）的键位与修饰键条件仍由各自的 chord 判定把守，这里放宽键位限制不影
+    // 响它们。
+    const bool client_supports_restore = is_composition_edit_key && ClientNegotiatedCompositionRestore(client_id);
     const bool r_mode_prefix_backspace = g_r_mode_triggered && Global::Keycode == VK_BACK && input_before_key.empty();
     if (r_mode_prefix_backspace)
     {
@@ -4667,7 +4730,31 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         }
         else
         {
-            RefreshCandidatePageUi(true);
+            // R2/R4：前缀重算生效时光标移动会改变候选内容——前缀为空则收起候选窗，
+            // 其余（含移回串尾）一律从引擎重读重建页面。移回串尾时引擎已按整串重算，
+            // 但页面 items 还是旧前缀候选，只刷新页面会让那批旧候选参与结算（真机回归：
+            // ni'hao'ya 右移回串尾后空格只上屏「你好」+「ya」）。整串解码（未启用或未协商）
+            // 维持只刷新页面的现状（R7/AC8 零差异）。
+            const std::string caret_raw = g_inputSession->get_pinyin_sequence_with_cases();
+            const std::size_t prefix_end = g_inputSession->prefix_end();
+            const bool caret_resegmentation = FanyImeIpc::ShouldResegmentCompositionByCaret(
+                client_supports_restore, IsUiLessMode(), g_english_input_mode,
+                IsSpecialModeCompositionActive(caret_raw));
+            switch (FanyImeIpc::ResolveCaretArrowCandidatePublish(caret_resegmentation, prefix_end, caret_raw.size()))
+            {
+            case FanyImeIpc::CaretArrowCandidatePublish::Hide:
+                HideCandidateWindowAndDropItems();
+                break;
+            case FanyImeIpc::CaretArrowCandidatePublish::RebuildFromEngine:
+                // 窗口可能因之前的前缀为空状态被收起（单音节后缀从 caret=0 右移两次），
+                // 必须显式请求显示；PrepareCandidateList 末尾自带 RefreshCandidatePageUi(false)。
+                PrepareCandidateList(client_id, activation_epoch);
+                RequestShowCandidateWindow();
+                break;
+            case FanyImeIpc::CaretArrowCandidatePublish::RefreshPageOnly:
+                RefreshCandidatePageUi(true);
+                break;
+            }
         }
     }
     else if (IsCandidateNavigationKey(Global::Keycode) && !is_unicode_plus)
@@ -5048,8 +5135,22 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
         }
         // 这次选择之前是否已经在造词。下面的造词收尾会清掉这个标志，之后就问不出来了。
         const bool was_creating_word = GlobalIme::composition.creating_word.active;
+        // R5 前缀选词：候选来自光标前缀时，advance 消耗的正是前缀本身，剩余 raw 就是
+        // 后缀。必须在 advance 之前判定（advance 会缩短 raw）；结算把会话光标复位为
+        // 「后缀整串转换」（nullopt），组合态光标归后缀首，之后由编辑键按新光标重新
+        // 接管前缀语义。该状态只可能由门控内的编辑键产生（未协商/UILess 的光标从不
+        // 进会话），因此无需重复门控。云/英文/表情等特殊候选在上方提前返回，不会进入
+        // 这里。
+        const bool caret_prefix_selection =
+            g_inputSession->prefix_end() < g_inputSession->get_pinyin_sequence_with_cases().size();
         auto selection_transition =
             g_inputSession->advance_composition_after_selection(curWordPinyin, curWord, curWordItem.canonical_pinyin);
+        if (caret_prefix_selection)
+        {
+            g_inputSession->set_caret(std::nullopt);
+            g_inputSession->recompute_candidates();
+            GlobalIme::composition.caret_position = 0;
+        }
         // A cloud suggestion is an already-composed result returned for the
         // current query.  It must commit as one candidate even when the
         // returned query spelling is shorter than the raw input (for example
@@ -5086,8 +5187,9 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
             GlobalIme::composition.creating_word.word = creating_word_progress.word;
             GlobalIme::composition.creating_word.preedit = creating_word_progress.preedit;
             /* 更新一下中间态的造词时 tsf 端所需的数据 */
-            Global::candidate_ui.selected_text = BuildCreateWordPipePayload(
-                g_inputSession->get_pinyin_sequence_with_cases(), GlobalIme::composition.creating_word.word);
+            Global::candidate_ui.selected_text = BuildCreateWordPipePayloadWithCaret(
+                ClientNegotiatedCompositionRestore(client_id), g_inputSession->get_pinyin_sequence_with_cases(),
+                GlobalIme::composition.creating_word.word);
             if (creating_word_progress.completed)
             { /* 最终的造词 */
 #ifdef FANY_DEBUG
@@ -5155,6 +5257,11 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
         }
         else
         {
+            // 组合继续时同步剩余 raw。HandleImeKey 在选词之前就写过它，不同步的话下一次
+            // 编辑键里「raw 变了且 caret==0 → 光标移到串尾」的判定会误触发：前缀选词后
+            // caret 已按造词帧的 caret 字段归 0，DLL 光标停在后缀首，Server 却跳到串尾，
+            // 之后的插入与移动两侧分叉。
+            GlobalIme::composition.raw_input_with_cases = g_inputSession->get_pinyin_sequence_with_cases();
             /* TODO: 这里到 main 线程的时候，可能下面的那个清理状态的操作已经执行了，因此，这里可能会导致 string
              * 越界的问题 */
             RequestShowCandidateWindow();

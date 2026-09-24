@@ -641,7 +641,12 @@ const std::vector<WordItem> &InputSession::candidates() const
           mixed_expressive_options_.kaomoji_candidates) &&
          (scheme() == SchemeType::Quanpin || scheme() == SchemeType::Shuangpin)))
     {
+        // update_mixed_candidates() assembles this from the decoded prefix while it is active.
         return mixed_candidates_;
+    }
+    if (prefix_candidates_active_)
+    {
+        return prefix_candidates_;
     }
     return engine_.get_candidates();
 }
@@ -810,10 +815,94 @@ std::optional<std::string> InputSession::update_local_candidates()
 
 void InputSession::update_mixed_candidates()
 {
-    mixed_candidates_ = candidate_queries_.mixed(engine_.get_candidates(), engine_.get_request().raw_input, scheme(),
-                                                 english_input_options_, mixed_expressive_options_,
-                                                 dedicated_english_mode_, local_input_mode_);
+    refresh_prefix_candidates();
+    const auto &decoded = prefix_candidates_active_ ? prefix_candidates_ : engine_.get_candidates();
+    // Association (English/emoji suggestions) follows the string being converted: the caret
+    // prefix while it is active, the full raw input otherwise.
+    const std::string association_prefix =
+        prefix_candidates_active_ ? prefix_query_input_ : engine_.get_request().raw_input;
+    mixed_candidates_ = candidate_queries_.mixed(decoded, association_prefix, scheme(), english_input_options_,
+                                                 mixed_expressive_options_, dedicated_english_mode_, local_input_mode_);
     apply_candidate_positions(mixed_candidates_);
+}
+
+void InputSession::set_caret(std::optional<std::size_t> caret)
+{
+    if (caret.has_value())
+    {
+        *caret = std::min(*caret, editing_text().size());
+    }
+    caret_ = caret;
+}
+
+std::size_t InputSession::quantized_prefix_end() const
+{
+    // Unset caret means the end of the string: full-string decoding, exactly the legacy path.
+    const std::string &raw = get_pinyin_sequence_with_cases();
+    if (!caret_.has_value())
+    {
+        return raw.size();
+    }
+    // Segmentation contract (engine spec #187): the caret prefix may only be quantized against
+    // segment_raw_boundaries(), never against a re-derived segmentation.
+    const std::vector<std::size_t> boundaries = segment_raw_boundaries();
+    // No unit model (wubi, japanese, local modes, dedicated English): do not quantize.
+    if (boundaries.empty())
+    {
+        return raw.size();
+    }
+    // Floor to the last complete unit at or before the caret: an incomplete trailing unit
+    // belongs to the pending suffix. boundaries always contains 0, so the boundary before
+    // upper_bound always exists.
+    return *std::prev(std::upper_bound(boundaries.begin(), boundaries.end(), caret_position()));
+}
+
+std::size_t InputSession::prefix_end() const
+{
+    return quantized_prefix_end();
+}
+
+std::string InputSession::pending_suffix() const
+{
+    const std::string &raw = get_pinyin_sequence_with_cases();
+    const std::size_t end = quantized_prefix_end();
+    return end < raw.size() ? raw.substr(end) : std::string{};
+}
+
+void InputSession::refresh_prefix_candidates()
+{
+    prefix_candidates_active_ = false;
+    if (!caret_.has_value() || dedicated_english_mode_ || local_input_mode_ != LocalInputMode::None)
+    {
+        prefix_candidates_.clear();
+        prefix_query_input_.clear();
+        return;
+    }
+    const std::string &raw_with_cases = get_pinyin_sequence_with_cases();
+    const std::size_t end = quantized_prefix_end();
+    if (end >= raw_with_cases.size())
+    {
+        // The caret sits on the final boundary or the scheme has no unit model: the full-string
+        // engine decode already on hand is the answer.
+        prefix_candidates_.clear();
+        prefix_query_input_.clear();
+        return;
+    }
+    std::string prefix;
+    prefix.reserve(end);
+    std::transform(raw_with_cases.begin(), raw_with_cases.begin() + static_cast<std::ptrdiff_t>(end),
+                   std::back_inserter(prefix),
+                   [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    if (prefix_query_input_ != prefix)
+    {
+        // The with-cases prefix keeps the display casing the scheme expects; the lowercased
+        // copy doubles as the cache key (the query key itself is always lowercase).
+        prefix_candidates_ = engine_.query_raw_candidates(prefix, raw_with_cases.substr(0, end));
+        prefix_query_input_ = prefix;
+    }
+    // An empty prefix (caret at/before the first boundary) decodes to no candidates on purpose:
+    // the host hides its candidate window while the preedit keeps showing the full pinyin.
+    prefix_candidates_active_ = true;
 }
 
 void InputSession::update_dedicated_english_candidates()
@@ -838,6 +927,9 @@ void InputSession::update_dedicated_english_candidates()
 void InputSession::reset_composition()
 {
     caret_.reset();
+    prefix_candidates_.clear();
+    prefix_query_input_.clear();
+    prefix_candidates_active_ = false;
     immediate_phrase_progress_ = {};
     clear_pending_sequence();
     online_requests_.invalidate();

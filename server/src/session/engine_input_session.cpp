@@ -154,6 +154,21 @@ void EngineInputSession::set_pinyin_sequence_with_cases(const std::string &pinyi
     return session_.set_pinyin_sequence_with_cases(pinyin_sequence);
 }
 
+void EngineInputSession::set_caret(std::optional<std::size_t> caret)
+{
+    return session_.set_caret(caret);
+}
+
+std::size_t EngineInputSession::prefix_end() const
+{
+    return session_.prefix_end();
+}
+
+std::string EngineInputSession::pending_suffix() const
+{
+    return session_.pending_suffix();
+}
+
 int EngineInputSession::store_user_phrase(std::string pinyin, std::string word)
 {
     return session_.store_user_phrase(pinyin, word);

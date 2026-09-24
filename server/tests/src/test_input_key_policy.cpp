@@ -246,6 +246,71 @@ TEST_CASE(temporary_r_mode_japanese_session_is_not_replaced_by_config_sync)
     REQUIRE(!FanyImeIpc::InputSessionMatchesConfig(false, true, false));
 }
 
+TEST_CASE(caret_resegmentation_requires_negotiated_non_uiless_pinyin_composition)
+{
+    using FanyImeIpc::ShouldResegmentCompositionByCaret;
+    // R10/AC8：协商过 CompositionRestore 的非 UILess 客户端才启用前缀重算。
+    REQUIRE(ShouldResegmentCompositionByCaret(true, false, false, false));
+    // 未协商（旧 DLL 组合）：一切照旧。
+    REQUIRE(!ShouldResegmentCompositionByCaret(false, false, false, false));
+    // UILess 宿主：候选窗由宿主自绘，回退路径不得变坏。
+    REQUIRE(!ShouldResegmentCompositionByCaret(true, true, false, false));
+    // 专用英文模式：光标仍是显示层插入点。
+    REQUIRE(!ShouldResegmentCompositionByCaret(true, false, true, false));
+    // K/U/T/E/M/J/Y 等特殊模式组合：无单元模型语义，不重算。
+    REQUIRE(!ShouldResegmentCompositionByCaret(true, false, false, true));
+}
+
+TEST_CASE(caret_prefix_empty_requires_non_empty_raw_and_zero_prefix)
+{
+    using FanyImeIpc::IsCaretPrefixEmpty;
+    // R4：光标在串首（量化后前缀为空）：无候选，候选窗隐藏。
+    REQUIRE(IsCaretPrefixEmpty(0, 14));
+    // 前缀非空：不算空。
+    REQUIRE(!IsCaretPrefixEmpty(2, 14));
+    // 整串解码（caret 未设置）：prefix_end == 串长，永不判空。
+    REQUIRE(!IsCaretPrefixEmpty(14, 14));
+    // raw 为空的组合：不属于 R4（避免把空组合误判成「前缀为空」）。
+    REQUIRE(!IsCaretPrefixEmpty(0, 0));
+}
+
+TEST_CASE(caret_arrow_candidate_publish_rebuilds_from_engine_at_both_prefix_and_tail)
+{
+    using FanyImeIpc::CaretArrowCandidatePublish;
+    using FanyImeIpc::ResolveCaretArrowCandidatePublish;
+    // R4：前缀为空（raw 非空）——收起候选窗，与门控无关。
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(true, 0, 14), CaretArrowCandidatePublish::Hide);
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(false, 0, 14), CaretArrowCandidatePublish::Hide);
+    // 门控开 × 前缀中间：按前缀候选重建页面。
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(true, 2, 14), CaretArrowCandidatePublish::RebuildFromEngine);
+    // 门控开 × 回到串尾：引擎已按整串重算，页面必须从引擎重读重建（真机回归修复点）。
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(true, 14, 14), CaretArrowCandidatePublish::RebuildFromEngine);
+    // 门控关（未协商/UILess/专用英文/特殊模式）：光标从不进会话，维持只刷新页面（AC8）。
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(false, 2, 14), CaretArrowCandidatePublish::RefreshPageOnly);
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(false, 14, 14), CaretArrowCandidatePublish::RefreshPageOnly);
+    // 门控开但 raw 为空（仅剩已选汉字的中间态）：没有候选内容可重建，保持只刷新。
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(true, 0, 0), CaretArrowCandidatePublish::RefreshPageOnly);
+    REQUIRE_EQ(ResolveCaretArrowCandidatePublish(false, 0, 0), CaretArrowCandidatePublish::RefreshPageOnly);
+}
+
+TEST_CASE(create_word_frame_carries_caret_only_for_negotiated_mid_string_caret)
+{
+    using FanyImeIpc::ShouldCreateWordFrameCarryCaret;
+    // R5/AC2：协商侧前缀选词结算后光标归后缀首（0），必须携带让 DLL 镜到后缀首。
+    REQUIRE(ShouldCreateWordFrameCarryCaret(true, 0, 14));
+    // 协商侧光标在剩余 raw 中间：同样携带。
+    REQUIRE(ShouldCreateWordFrameCarryCaret(true, 3, 14));
+    // 协商侧串尾造词流：光标恒在末尾，省略字段与现状字节一致。
+    REQUIRE(!ShouldCreateWordFrameCarryCaret(true, 14, 14));
+    // 空 raw：无位置可表达，也不带。
+    REQUIRE(!ShouldCreateWordFrameCarryCaret(true, 0, 0));
+    // AC8 回归锚：未协商（旧 DLL）时无条件回 plain 3 字段帧——改动前这里光标
+    // 在中间会误追加第 4 字段，旧解析器把尾部当 display_preedit。
+    REQUIRE(!ShouldCreateWordFrameCarryCaret(false, 0, 14));
+    REQUIRE(!ShouldCreateWordFrameCarryCaret(false, 3, 14));
+    REQUIRE(!ShouldCreateWordFrameCarryCaret(false, 14, 14));
+}
+
 TEST_CASE(wubi_unique_four_code_commit_is_unconditional_and_guards_its_preconditions)
 {
     using FanyImeIpc::ShouldAutoCommitCompleteWubiCode;

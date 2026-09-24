@@ -341,6 +341,10 @@ void InputSession::reset_cache()
     engine_.reset_cache();
     if (canonical_phrase_engine_)
         canonical_phrase_engine_->reset_cache();
+    // 前缀候选是按文本缓存的，不跟着引擎缓存失效：只清缓存键，让下一次
+    // refresh_prefix_candidates 按新权重/选项重查；保留当前列表，避免 caret
+    // 激活期间出现空候选窗。
+    prefix_query_input_.clear();
 }
 
 const std::vector<WordItem> &InputSession::get_candidates() const

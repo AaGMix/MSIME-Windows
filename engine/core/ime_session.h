@@ -34,6 +34,12 @@ class ImeSession
     // has to shorten the live composition, and under the wubi fallback the pinyin-shaped
     // caller would otherwise address a scheme that is not the active one and be ignored.
     void replace_active_raw_input(const std::string &raw_input, const std::string &raw_input_with_cases);
+    // Runs one standalone candidate query for the given raw input without touching the live
+    // composition: the active scheme's raw/key strokes and state_'s request/candidates stay put.
+    // Query options (helpcode, autocorrect, fuzzy) match refresh_candidates exactly. The caret
+    // driven prefix decoding in InputSession uses this to decode a prefix while the composition
+    // still owns the full raw string.
+    std::vector<WordItem> query_raw_candidates(const std::string &raw_input, const std::string &raw_input_with_cases);
     void reset();
     void reset_cache();
     int create_word(std::string pinyin, std::string word);
@@ -67,6 +73,9 @@ class ImeSession
     }
 
   private:
+    // Shared option injection for refresh_candidates() and query_raw_candidates(); the two must
+    // not drift or a prefix query would answer with different candidates than the live pipeline.
+    void apply_request_options(QueryRequest &request) const;
     void refresh_candidates();
     void bind_wubi_scheme();
     SchemeType candidate_scheme() const;
