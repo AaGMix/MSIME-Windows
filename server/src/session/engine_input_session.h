@@ -35,6 +35,7 @@ class EngineInputSession : public IInputSession
     bool wubi_four_code_is_complete() const override;
     bool has_active_helpcode() const override;
 
+    void set_rescoring_context(std::string context) override;
     void set_pinyin_sequence(const std::string &pinyin_sequence) override;
     void set_pinyin_sequence_with_cases(const std::string &pinyin_sequence) override;
 

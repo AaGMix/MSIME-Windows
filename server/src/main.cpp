@@ -18,6 +18,7 @@
 #include "english/english_ime.h"
 #include "emoji/emoji_ime.h"
 #include "kaomoji/kaomoji_ime.h"
+#include "engine/neural/rescore_worker.h"
 #include "utils/common_utils.h"
 #include "utils/single_instance.h"
 #include "session/session_factory.h"
@@ -176,6 +177,9 @@ int CALLBACK WinMain(_In_ HINSTANCE hInstance, _In_ HINSTANCE /*hPrevInstance*/,
     AiAssistant::Start([](const std::string &candidate, const std::string &identity, uint64_t generation) {
         FanyNamedPipe::EnqueueAiCandidate(candidate, identity, generation);
     });
+    // 神经整句重排：打分在引擎自己的后台线程上跑，算完通过这个回调回到任务队列，由队列去重查候选。
+    // 不 Start 什么线程——没开这个开关的用户不会平白多一条。
+    neural::RescoreWorker::instance().set_ready_callback([] { FanyNamedPipe::EnqueueRescoredCandidates(); });
     EnglishIme::Start(
         CommonUtils::get_ime_data_path() + "\\english.db",
         [](std::vector<WordItem> candidates, const std::string &input, uint64_t generation) {

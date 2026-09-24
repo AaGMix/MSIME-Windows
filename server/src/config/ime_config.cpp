@@ -122,6 +122,12 @@ bool g_english_candidates_enabled = false;
 bool g_candidate_translations_enabled = true;
 int g_english_mixed_input_min_chars = kEnglishMixedInputMinCharsDefault;
 bool g_cloud_candidates_enabled = true;
+// 整句候选来源与去重补位开关，默认全关。
+bool g_assoc_sentence_wordlattice = false;
+bool g_assoc_sentence_google = false;
+bool g_assoc_sentence_neural_desktop = false;
+bool g_assoc_sentence_neural_keyboard = false;
+bool g_assoc_sentence_show_next_on_duplicate = false;
 bool g_emoji_mixed_input_enabled = false;
 bool g_kaomoji_mixed_input_enabled = false;
 bool g_unicode_mode_enabled = true;
@@ -1057,6 +1063,11 @@ bool LoadImeConfig()
                     : kEnglishMixedInputMinCharsDefault;
         }
         g_cloud_candidates_enabled = tbl["general"]["cloud_candidates"].value_or(true);
+        g_assoc_sentence_wordlattice = tbl["association"]["sentence_wordlattice"].value_or(false);
+        g_assoc_sentence_google = tbl["association"]["sentence_google"].value_or(false);
+        g_assoc_sentence_neural_desktop = tbl["association"]["sentence_neural_desktop"].value_or(false);
+        g_assoc_sentence_neural_keyboard = tbl["association"]["sentence_neural_keyboard"].value_or(false);
+        g_assoc_sentence_show_next_on_duplicate = tbl["association"]["sentence_show_next_on_duplicate"].value_or(false);
         g_emoji_mixed_input_enabled = tbl["general"]["emoji_mixed_input"].value_or(false);
         g_kaomoji_mixed_input_enabled = tbl["general"]["kaomoji_mixed_input"].value_or(false);
         g_unicode_mode_enabled = tbl["utility"]["unicode_mode"].value_or(true);
@@ -3384,6 +3395,77 @@ bool SetConfiguredCloudCandidatesEnabled(bool enabled)
         return false;
     }
     g_cloud_candidates_enabled = enabled;
+    return true;
+}
+
+// 整句候选来源与去重补位开关的 getter / setter。写入 [association] 段，值域为布尔。
+bool GetConfiguredAssocSentenceWordLattice()
+{
+    return g_assoc_sentence_wordlattice;
+}
+bool SetConfiguredAssocSentenceWordLattice(bool enabled)
+{
+    if (!WriteConfiguredValue("association", "sentence_wordlattice", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_assoc_sentence_wordlattice = enabled;
+    return true;
+}
+
+bool GetConfiguredAssocSentenceGoogle()
+{
+    return g_assoc_sentence_google;
+}
+bool SetConfiguredAssocSentenceGoogle(bool enabled)
+{
+    if (!WriteConfiguredValue("association", "sentence_google", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_assoc_sentence_google = enabled;
+    return true;
+}
+
+bool GetConfiguredAssocSentenceNeuralDesktop()
+{
+    return g_assoc_sentence_neural_desktop;
+}
+bool SetConfiguredAssocSentenceNeuralDesktop(bool enabled)
+{
+    if (!WriteConfiguredValue("association", "sentence_neural_desktop", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_assoc_sentence_neural_desktop = enabled;
+    return true;
+}
+
+bool GetConfiguredAssocSentenceNeuralKeyboard()
+{
+    return g_assoc_sentence_neural_keyboard;
+}
+bool SetConfiguredAssocSentenceNeuralKeyboard(bool enabled)
+{
+    if (!WriteConfiguredValue("association", "sentence_neural_keyboard", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_assoc_sentence_neural_keyboard = enabled;
+    return true;
+}
+
+bool GetConfiguredAssocSentenceShowNextOnDuplicate()
+{
+    return g_assoc_sentence_show_next_on_duplicate;
+}
+bool SetConfiguredAssocSentenceShowNextOnDuplicate(bool enabled)
+{
+    if (!WriteConfiguredValue("association", "sentence_show_next_on_duplicate", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_assoc_sentence_show_next_on_duplicate = enabled;
     return true;
 }
 

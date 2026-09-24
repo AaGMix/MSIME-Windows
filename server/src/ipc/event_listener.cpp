@@ -717,6 +717,10 @@ void AppendAiContext(const std::string &committed_word)
             ++cut;
         g_ai_context.erase(0, cut);
     }
+    // 同一份上屏历史也是神经整句重排的前文（青简那边叫 InputHistory）：下一次查询会随
+    // QueryRequest 下发到词典层。词典层自己按 RerankOptions::context_chars 取末尾若干字。
+    if (g_inputSession)
+        g_inputSession->set_rescoring_context(g_ai_context);
 }
 
 std::wstring BuildCreateWordPipePayload(const std::string &remaining_raw_input_with_cases,
@@ -1207,6 +1211,16 @@ std::string BuildCurrentCandidatePage()
             view.badge = " ☁️";
         else if (item.source == CandidateSource::AiSuggestion)
             view.badge = " 🤖";
+        // 整句来源标签与设置页名称保持一致，方便同时比较四个来源。两家选中同一句时只剩一行，
+        // 标签归先保留下来的来源；开启去重补位后，其余来源会改为显示自己的下一条不同结果。
+        else if (item.source == CandidateSource::Generated)
+            view.badge = " 〔Trigram〕";
+        else if (item.source == CandidateSource::Fallback)
+            view.badge = " 〔Unigram〕";
+        else if (item.source == CandidateSource::NeuralDesktop)
+            view.badge = " 〔神经D〕";
+        else if (item.source == CandidateSource::NeuralKeyboard)
+            view.badge = " 〔神经K〕";
         view.fixed_position = item.fixed_position > 0;
         EnglishIme::TranslationQuery translation_query;
         if (!translation_page && BuildTranslationQuery(item, translation_query))
@@ -1600,6 +1614,8 @@ enum class TaskType
     RefreshCandidatePage,
     ResetInputSessionCache,
     ExitEnglishInputMode,
+    // 神经整句重排在后台线程里算完了，候选顺序需要就地更新一次。
+    ApplyRescoredOrder,
 };
 
 struct Task
@@ -1830,6 +1846,7 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
 void WaitForCandidateRenderSync(UINT keycode);
 void ApplyCloudCandidate(const std::string &candidate, const std::string &pinyin, uint64_t generation,
                          const std::optional<metasequoia::OnlineQuery> &query);
+void ApplyRescoredOrder();
 void ApplyAiCandidate(const std::string &candidate, const std::string &identity, uint64_t generation,
                       const std::optional<metasequoia::OnlineQuery> &query);
 void ApplyEnglishCandidates(std::vector<WordItem> candidates, const std::string &input, uint64_t generation);
@@ -2408,6 +2425,11 @@ void WorkerThread()
             }
             break;
         }
+
+        case TaskType::ApplyRescoredOrder: {
+            ApplyRescoredOrder();
+            break;
+        }
         }
     }
 
@@ -2462,6 +2484,19 @@ void EnqueueCloudCandidate(const std::string &candidate, const std::string &piny
         task.online_query = origin.engine_query;
         task.client_id = origin.client_id;
         task.activation_epoch = origin.activation_epoch;
+        taskQueue.push(std::move(task));
+    }
+    pipe_queueCv.notify_one();
+}
+
+// 后台线程算完了一批整句重排。它不知道自己算的是不是当前这次输入——那要在任务线程上、拿着
+// g_inputSession 才判断得了——所以这里只负责把「去看一眼」排进队列，判断留给 ApplyRescoredOrder。
+void EnqueueRescoredCandidates()
+{
+    {
+        std::lock_guard lock(queueMutex);
+        Task task;
+        task.type = TaskType::ApplyRescoredOrder;
         taskQueue.push(std::move(task));
     }
     pipe_queueCv.notify_one();
@@ -3864,6 +3899,53 @@ void ApplyCloudCandidate(const std::string &candidate, const std::string &pinyin
     Global::candidate_ui.select_first_on_page();
     Global::candidate_ui.clear_page();
     RefreshCandidatePageUi(true);
+}
+
+// 候选列表当初是按词格的静态顺序发出去的，因为打分那会儿还没算完。现在算完了：把引擎的候选缓存
+// 丢掉重查一次，这一次 quanpin::make_neural_reranker 能在结果表里查到顺序，整句就落到它该在的位
+// 置上。重查本身不碰模型，走的还是词格那条快路。
+//
+// 后台线程算的可能已经是上一次输入的了（用户没停手），所以这里不认「哪一批」，只看重查出来的词
+// 序有没有真的变：没变就一个字节都不动 UI。这既挡掉了过期结果，也挡掉了模型弃权的情况。
+void ApplyRescoredOrder()
+{
+    if (!g_inputSession || g_translation_candidates_active)
+        return;
+    // 造词界面和译文页各自占着 items，重排不该去动它们。
+    if (GlobalIme::composition.creating_word.active)
+        return;
+    if (Global::candidate_ui.items.empty())
+        return;
+    const FanyImeIpc::CandidateUiOwner owner = SnapshotCandidateUiOwner();
+    if (!owner || !IsPipeActivationCurrent(owner.client_id, owner.activation_epoch))
+        return;
+
+    const std::vector<WordItem> before = g_inputSession->get_candidates();
+    // 云/AI 候选只活在 series cache 里，reset_cache 会把它们一起清掉，而它们的请求早已回来、不会
+    // 再发一次——不补回来，重排一落地它们就从列表里消失了。重查不推进在线请求的 generation，
+    // 所以用当前的 online_query 原样回填即可；回填时若同一句已被整句候选占了，引擎自己会拒绝。
+    std::vector<WordItem> online_items;
+    std::copy_if(before.begin(), before.end(), std::back_inserter(online_items), [](const WordItem &item) {
+        return item.source == CandidateSource::CloudSuggestion || item.source == CandidateSource::AiSuggestion;
+    });
+    g_inputSession->reset_cache();
+    g_inputSession->recompute_candidates();
+    if (!online_items.empty())
+    {
+        if (const auto query = g_inputSession->online_query())
+        {
+            for (const WordItem &item : online_items)
+                g_inputSession->apply_online_candidate(*query, item.word, item.source);
+        }
+    }
+    const std::vector<WordItem> &after = g_inputSession->get_candidates();
+    if (after.size() == before.size() &&
+        std::equal(before.begin(), before.end(), after.begin(),
+                   [](const WordItem &a, const WordItem &b) { return a.word == b.word; }))
+        return;
+
+    PrepareCandidateList(owner.client_id, owner.activation_epoch);
+    RequestShowCandidateWindow();
 }
 
 void ApplyAiCandidate(const std::string &candidate, const std::string &identity, uint64_t generation,

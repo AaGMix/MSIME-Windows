@@ -559,6 +559,62 @@
   </div>
 
   <div class="section">
+    <div class="section-header">
+      <div>
+        <div class="section-title">整句候选</div>
+        <div class="input-setting-description">输入多个拼音音节时，提供整句候选</div>
+      </div>
+    </div>
+    <div class="frequency-option-content">
+      <div class="section-header frequency-option-row">
+        <div>
+          <div class="section-title">Trigram 模型整句</div>
+          <div class="input-setting-description">使用三元语言模型生成整句候选</div>
+        </div>
+        <div class="ftb-toggle-btn" id="sentenceWordLatticeToggleBtn" role="switch" aria-checked="false" tabindex="0">
+          <div class="ftb-toggle-knob"></div>
+        </div>
+      </div>
+      <div class="section-header frequency-option-row">
+        <div>
+          <div class="section-title">Unigram 模型整句</div>
+          <div class="input-setting-description">使用 Google 拼音的一元语言模型生成整句候选</div>
+        </div>
+        <div class="ftb-toggle-btn" id="sentenceGoogleToggleBtn" role="switch" aria-checked="false" tabindex="0">
+          <div class="ftb-toggle-knob"></div>
+        </div>
+      </div>
+      <div class="section-header frequency-option-row">
+        <div>
+          <div class="section-title">神经网络模型整句（效果优先）</div>
+          <div class="input-setting-description">结合已上屏的前文，从内部生成的最多 12 个备选句中选择，处理时间较长</div>
+        </div>
+        <div class="ftb-toggle-btn" id="sentenceNeuralDesktopToggleBtn" role="switch" aria-checked="false" tabindex="0">
+          <div class="ftb-toggle-knob"></div>
+        </div>
+      </div>
+      <div class="section-header frequency-option-row">
+        <div>
+          <div class="section-title">神经网络模型整句（速度优先）</div>
+          <div class="input-setting-description">使用轻量模型从最多 12 个备选句中选择；两种模式可同时独立给出结果</div>
+        </div>
+        <div class="ftb-toggle-btn" id="sentenceNeuralKeyboardToggleBtn" role="switch" aria-checked="false" tabindex="0">
+          <div class="ftb-toggle-knob"></div>
+        </div>
+      </div>
+      <div class="section-header frequency-option-row">
+        <div>
+          <div class="section-title">去重后补充次选</div>
+          <div class="input-setting-description">某个模型的首选与已有候选重复时，显示该模型排名最高的下一条不同结果</div>
+        </div>
+        <div class="ftb-toggle-btn" id="sentenceShowNextOnDuplicateToggleBtn" role="switch" aria-checked="false" tabindex="0">
+          <div class="ftb-toggle-knob"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
     <div class="section-header"><div class="section-title">拼音方案调频</div></div>
     <div class="frequency-option-content">
       <div class="section-header frequency-option-row">

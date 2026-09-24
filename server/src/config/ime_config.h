@@ -277,6 +277,17 @@ bool GetConfiguredKaomojiMixedInputEnabled();
 bool SetConfiguredKaomojiMixedInputEnabled(bool enabled);
 bool GetConfiguredCloudCandidatesEnabled();
 bool SetConfiguredCloudCandidatesEnabled(bool enabled);
+// 整句候选来源与去重补位开关（[association] 段），默认全关。
+bool GetConfiguredAssocSentenceWordLattice();
+bool SetConfiguredAssocSentenceWordLattice(bool enabled);
+bool GetConfiguredAssocSentenceGoogle();
+bool SetConfiguredAssocSentenceGoogle(bool enabled);
+bool GetConfiguredAssocSentenceNeuralDesktop();
+bool SetConfiguredAssocSentenceNeuralDesktop(bool enabled);
+bool GetConfiguredAssocSentenceNeuralKeyboard();
+bool SetConfiguredAssocSentenceNeuralKeyboard(bool enabled);
+bool GetConfiguredAssocSentenceShowNextOnDuplicate();
+bool SetConfiguredAssocSentenceShowNextOnDuplicate(bool enabled);
 bool GetConfiguredUnicodeModeEnabled();
 bool SetConfiguredUnicodeModeEnabled(bool enabled);
 bool GetConfiguredQuickPhraseEnabled();
