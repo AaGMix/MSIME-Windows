@@ -309,6 +309,8 @@ TEST_CASE(create_word_frame_carries_caret_only_for_negotiated_mid_string_caret)
     REQUIRE(!ShouldCreateWordFrameCarryCaret(false, 0, 14));
     REQUIRE(!ShouldCreateWordFrameCarryCaret(false, 3, 14));
     REQUIRE(!ShouldCreateWordFrameCarryCaret(false, 14, 14));
+}
+
 TEST_CASE(wubi_unique_four_code_commit_is_unconditional_and_guards_its_preconditions)
 {
     using FanyImeIpc::ShouldAutoCommitCompleteWubiCode;
