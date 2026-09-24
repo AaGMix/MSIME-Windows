@@ -478,6 +478,13 @@ jobs:
         shell: pwsh
         run: ./scripts/build-language-model.ps1
 
+      # The neural sentence models are downloaded from the chinese-ime-lm release pinned in
+      # neural-model/lock.json and checked against the SHA256 recorded there. Prepare-PackageFiles.ps1
+      # asserts they exist, so this has to run before the payload is collected.
+      - name: Download the neural sentence models
+        shell: pwsh
+        run: ./scripts/fetch-neural-model.ps1
+
       - name: Decide the signing mode
         id: signing
         shell: pwsh
