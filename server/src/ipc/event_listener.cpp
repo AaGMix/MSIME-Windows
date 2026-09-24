@@ -5257,6 +5257,11 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
         }
         else
         {
+            // 组合继续时同步剩余 raw。HandleImeKey 在选词之前就写过它，不同步的话下一次
+            // 编辑键里「raw 变了且 caret==0 → 光标移到串尾」的判定会误触发：前缀选词后
+            // caret 已按造词帧的 caret 字段归 0，DLL 光标停在后缀首，Server 却跳到串尾，
+            // 之后的插入与移动两侧分叉。
+            GlobalIme::composition.raw_input_with_cases = g_inputSession->get_pinyin_sequence_with_cases();
             /* TODO: 这里到 main 线程的时候，可能下面的那个清理状态的操作已经执行了，因此，这里可能会导致 string
              * 越界的问题 */
             RequestShowCandidateWindow();
