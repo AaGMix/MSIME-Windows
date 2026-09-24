@@ -33,6 +33,8 @@ export type CandidateAppearanceConfig = {
   cand_text_color?: string;
   page_size?: number;
   candidate_window_follow_cursor?: boolean;
+  candidate_fixed_badge?: boolean;
+  candidate_fixed_badge_style?: string;
   ui_backend?: string;
   system_fonts?: string[];
 };
@@ -487,6 +489,10 @@ export function applyAppearanceConfig(
   if (typeof candidateAppearance?.candidate_window_follow_cursor === 'boolean') {
     applyToggleState('candidateFollowCursorToggleBtn', candidateAppearance.candidate_window_follow_cursor);
   }
+  if (typeof candidateAppearance?.candidate_fixed_badge === 'boolean') {
+    applyToggleState('candidateFixedBadgeToggleBtn', candidateAppearance.candidate_fixed_badge);
+  }
+  applyDropdownValue('candFixedBadgeStyleBtn', 'candFixedBadgeStyleMenu', candidateAppearance?.candidate_fixed_badge_style);
   applyDropdownValue('uiBackendBtn', 'uiBackendMenu', candidateAppearance?.ui_backend);
   populateFontMenus(candidateAppearance?.system_fonts);
   renderFallbackFonts();
@@ -562,6 +568,10 @@ export async function setupAppearance() {
   setupToggleButton('candidateFollowCursorToggleBtn', (active) => {
     postConfigUpdate('appearance.candidate_window_follow_cursor', active);
   });
+  setupToggleButton('candidateFixedBadgeToggleBtn', (active) => {
+    postConfigUpdate('appearance.candidate_fixed_badge', active);
+  });
+  setupDropdownMenu('candFixedBadgeStyleBtn', 'candFixedBadgeStyleMenu', '', true, 'appearance.candidate_fixed_badge_style');
 
   // 候选窗样式
   FONT_MENUS.forEach((menu) => {

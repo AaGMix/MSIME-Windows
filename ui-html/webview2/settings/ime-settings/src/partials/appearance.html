@@ -55,6 +55,33 @@
     </div>
     <div class="divider"></div>
     <div class="section-header">
+      <div>
+        <div class="section-title">固定候选徽标</div>
+        <div class="floating-toolbar-description">为手动固定的候选词显示角标，便于辨认</div>
+      </div>
+      <div class="ftb-toggle-btn active" id="candidateFixedBadgeToggleBtn" role="switch" aria-checked="true" tabindex="0">
+        <div class="ftb-toggle-knob"></div>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div class="section-header">
+      <div class="section-title">固定候选徽标样式</div>
+      <div class="dropdown">
+        <button class="dropdown-toggle" id="candFixedBadgeStyleBtn">
+          <span>回形针</span>
+          <div class="arrow">
+            <img src="./assets/arrow.svg" alt="arrow">
+          </div>
+        </button>
+        <div class="dropdown-menu" id="candFixedBadgeStyleMenu">
+          <div class="dropdown-item" data-value="paperclip">回形针</div>
+          <div class="dropdown-item" data-value="pushpin">图钉</div>
+          <div class="dropdown-item" data-value="dot">圆点</div>
+        </div>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div class="section-header">
       <div class="section-title">候选窗主字体</div>
       <div class="dropdown">
         <div class="dropdown-toggle font-combobox" id="candEnglishFontBtn">

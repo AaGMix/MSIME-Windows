@@ -137,6 +137,10 @@ candidate_skin = "willow_green"
 #   pinyin -> 显示分词预编辑（与候选框当前行为一致）
 #   empty  -> 隐藏顶部预编辑行
 candidate_window_preedit_style = "pinyin"
+# 固定排位候选词是否显示徽标
+candidate_fixed_badge = true
+# 固定排位候选词徽标样式，可选："paperclip", "pushpin", "dot"
+candidate_fixed_badge_style = "paperclip"
 # TSF 行内预编辑样式，可选："raw", "pinyin", "empty"
 #   raw    -> 原始按键序列
 #   pinyin -> 分词后的拼音序列（Server 回包 Preedit）

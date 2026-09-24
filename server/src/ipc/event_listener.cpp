@@ -1169,6 +1169,10 @@ std::string BuildCurrentCandidatePage()
                               (current_scheme == SchemeType::Quanpin && GetConfiguredQuanpinHelpcodeEnabled() &&
                                GetConfiguredShowQuanpinHelpcodeInCandidateWindow()));
 
+    // 组页时读一次徽标配置，循环内不再逐条查
+    const bool show_fixed_badge = GetConfiguredCandidateFixedBadge();
+    const std::string fixed_badge_style = GetConfiguredCandidateFixedBadgeStyle();
+
     const int start = ui.current_page_start();
     const int loop = ui.current_page_count();
 
@@ -1208,6 +1212,7 @@ std::string BuildCurrentCandidatePage()
         else if (item.source == CandidateSource::AiSuggestion)
             view.badge = " 🤖";
         view.fixed_position = item.fixed_position > 0;
+        ApplyFixedPositionBadge(view, show_fixed_badge, fixed_badge_style);
         EnglishIme::TranslationQuery translation_query;
         if (!translation_page && BuildTranslationQuery(item, translation_query))
         {

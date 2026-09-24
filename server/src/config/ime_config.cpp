@@ -157,6 +157,8 @@ std::string g_ui_backend = "d2d";
 std::string g_ui_backend_active = "d2d";
 std::string g_candidate_skin = "fluent";
 std::string g_candidate_window_preedit_style = "pinyin";
+bool g_candidate_fixed_badge = true;
+std::string g_candidate_fixed_badge_style = "paperclip";
 std::string g_theme_mode = "system";
 std::string g_theme_settings = "follow";
 std::string g_theme_cand = "follow";
@@ -209,6 +211,13 @@ bool IsValidCandidateSkinId(const std::string &skin)
     return std::all_of(skin.begin(), skin.end(), [](unsigned char ch) {
         return std::islower(ch) || std::isdigit(ch) || ch == '.' || ch == '_' || ch == '-';
     });
+}
+
+// 固定排位徽标样式白名单。存枚举名而非字面 emoji：TOML/日志/diff 里不出现图形字符，
+// 日后新增样式只改这里和展示层的映射。
+bool IsValidCandidateFixedBadgeStyle(const std::string &style)
+{
+    return style == "paperclip" || style == "pushpin" || style == "dot";
 }
 
 const std::vector<std::string_view> &AiAssistantProviders()
@@ -1155,6 +1164,13 @@ bool LoadImeConfig()
             const std::string preedit_style =
                 tbl["appearance"]["candidate_window_preedit_style"].value_or(std::string("pinyin"));
             g_candidate_window_preedit_style = preedit_style == "empty" ? "empty" : "pinyin";
+        }
+        g_candidate_fixed_badge = tbl["appearance"]["candidate_fixed_badge"].value_or(true);
+        {
+            // 非法样式一律回退到默认徽标，避免手改配置后出现无法删除的畸形标记
+            const std::string badge_style =
+                tbl["appearance"]["candidate_fixed_badge_style"].value_or(std::string("paperclip"));
+            g_candidate_fixed_badge_style = IsValidCandidateFixedBadgeStyle(badge_style) ? badge_style : "paperclip";
         }
         {
             const std::string theme_mode = tbl["appearance"]["theme_mode"].value_or(std::string("system"));
@@ -3061,6 +3077,40 @@ bool SetConfiguredCandidateWindowPreeditStyle(const std::string &style)
         return false;
     }
     g_candidate_window_preedit_style = style;
+    return true;
+}
+
+bool GetConfiguredCandidateFixedBadge()
+{
+    return g_candidate_fixed_badge;
+}
+
+bool SetConfiguredCandidateFixedBadge(bool enabled)
+{
+    if (!WriteConfiguredValue("appearance", "candidate_fixed_badge", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_candidate_fixed_badge = enabled;
+    return true;
+}
+
+const std::string &GetConfiguredCandidateFixedBadgeStyle()
+{
+    return g_candidate_fixed_badge_style;
+}
+
+bool SetConfiguredCandidateFixedBadgeStyle(const std::string &style)
+{
+    if (!IsValidCandidateFixedBadgeStyle(style))
+    {
+        return false;
+    }
+    if (!WriteConfiguredValue("appearance", "candidate_fixed_badge_style", EscapeTomlBasicString(style)))
+    {
+        return false;
+    }
+    g_candidate_fixed_badge_style = style;
     return true;
 }
 
