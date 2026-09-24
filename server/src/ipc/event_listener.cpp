@@ -893,25 +893,6 @@ bool IsCandidateNavigationKey(UINT keycode)
            keycode == VK_NEXT || keycode == VK_UP || keycode == VK_DOWN;
 }
 
-// Retract the last selected segment of the word being created. The engine raw
-// returns to the spelling that segment consumed, the accumulated word returns to
-// its pre-selection state, and candidates are rebuilt for the restored raw. The
-// caller must have verified that a snapshot exists.
-bool RetreatCreatingWordSelection()
-{
-    auto &composition = GlobalIme::composition;
-    if (!composition.restore_last_selection())
-    {
-        return false;
-    }
-
-    const std::string &restored_raw = composition.raw_input_with_cases;
-    g_inputSession->set_pinyin_sequence(restored_raw);
-    g_inputSession->set_pinyin_sequence_with_cases(restored_raw);
-    g_inputSession->recompute_candidates();
-    return true;
-}
-
 bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool client_supports_restore,
                              bool &composition_restored)
 {
@@ -1026,18 +1007,25 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
             }
         }
 
-        if (!composition_restored && FanyImeIpc::ShouldRetreatCreatingWordSelection(
-                                         composition.creating_word.active, IsUiLessMode(), client_supports_restore,
-                                         raw.size(), composition.caret_position, composition.selection_history.size()))
+        if (!composition_restored &&
+            FanyImeIpc::ShouldRetreatCreatingWordSelection(
+                composition.creating_word.active, IsUiLessMode(), client_supports_restore, raw.size(),
+                composition.selection_history.size(), composition.last_selection_raw_edited()))
         {
             // This Backspace must not also delete the character: the retraction
-            // removes the segment and restores its raw spelling instead.
-            composition_restored = RetreatCreatingWordSelection();
+            // removes the segment and restores its raw spelling instead. The
+            // restore is state only -- the engine sequence, its candidates and
+            // the restored-caret prefix are applied exactly once by the tail
+            // below, so nothing here may rebuild them; a helper that did cost
+            // a second full candidate query on every retraction.
+            composition_restored = composition.restore_last_selection();
             if (composition_restored)
             {
                 // The retraction already replaced the raw, the word and the
-                // caret; re-applying the pre-retraction raw would undo it.
-                return true;
+                // caret; the local copy must follow it so the tail below
+                // re-applies the restored sequence with its caret prefix
+                // recompute instead of clobbering it with the stale raw.
+                raw = composition.raw_input_with_cases;
             }
         }
         else if (!composition_restored && composition.caret_position > 0)
@@ -1093,6 +1081,11 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
         }
         raw.insert(raw.begin() + static_cast<std::ptrdiff_t>(composition.caret_position), input);
         ++composition.caret_position;
+        // Typing locks the newest selection (Rime's selected_before_editing):
+        // Backspace must keep deleting these fresh characters instead of
+        // retracting the selection out from under them. Caret moves never reach
+        // here and deliberately do not lock.
+        composition.note_raw_inserted();
     }
 
     if (raw.empty() && !keep_creating_word_after_empty_raw)
@@ -4752,7 +4745,9 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
                 SendUiLessCompositionToClient(client_id, activation_epoch, request_id);
             }
         }
-        else if (composition_restored)
+        else if (composition_restored || (Global::Keycode == VK_BACK && FanyImeIpc::HasRetreatBackspaceShape(
+                                                                            GlobalIme::composition.creating_word.active,
+                                                                            IsUiLessMode(), client_supports_restore)))
         {
             // Unlike an ordinary deletion, the retraction and the unit caret
             // jump are not mirrored by TSF on its own: for a deletion TSF
@@ -4760,6 +4755,17 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
             // it applies the caret field. It must therefore be sent in both
             // preedit styles, and the trailing caret field pins the
             // authoritative caret.
+            //
+            // The second condition answers every Backspace inside the shape --
+            // retreat, plain character deletion behind the edit lock, or a
+            // no-op behind an empty history: the DLL arms its hold from the
+            // same shape (its creating-word mirror), and without this frame the
+            // default raw preedit style would send no reply at all, burning the
+            // hold's full 50 ms timeout. The payload then describes the state
+            // the key left behind -- restored, unchanged, or one character
+            // shorter when the caret deletion in ApplyCompositionEditKey ran --
+            // which is what the hold applies in every outcome.
+            const int restored_selection = GlobalIme::composition.take_restored_selection_absolute_index();
             Global::MsgTypeToTsf = Global::DataFromServerMsgType::CompositionRestored;
             Global::candidate_ui.selected_text = BuildCreateWordPipePayload(GlobalIme::composition.raw_input_with_cases,
                                                                             GlobalIme::composition.creating_word.word) +
@@ -4772,6 +4778,41 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
                 // state (ending it would send HideCandidateWnd, which resets
                 // this very composition), so the window is taken down here.
                 HideCandidateWindowAndDropItems();
+            }
+            else if (FanyImeIpc::IsCaretPrefixEmpty(g_inputSession->prefix_end(),
+                                                    g_inputSession->get_pinyin_sequence_with_cases().size()))
+            {
+                // The caret may have jumped to the start of the raw (segment
+                // edits and Ctrl+arrow land here too): an empty prefix must not
+                // wake a candidate window -- same rule as the ShowCandidate
+                // task and the caret-arrow Hide path.
+                HideCandidateWindowAndDropItems();
+            }
+            else
+            {
+                // The window may have been taken down while the caret stood at
+                // an empty prefix (caret-driven resegmentation), and even when
+                // it stayed up the page still holds the pre-retraction items.
+                // Rebuild from the engine and ask for the window explicitly,
+                // mirroring the caret-arrow RebuildFromEngine path.
+                PrepareCandidateList(client_id, activation_epoch);
+                if (restored_selection >= 0)
+                {
+                    // A retraction re-highlights the item the user had picked
+                    // on the rebuilt page (same prefix, no frequency update ran
+                    // during the creating word, so the order still matches the
+                    // pre-selection page). The next key can re-pick or change it
+                    // without hunting for it again.
+                    auto &ui = Global::candidate_ui;
+                    if (ui.item_total_count > 0 && ui.page_size > 0)
+                    {
+                        const int position = std::min(restored_selection, ui.item_total_count - 1);
+                        ui.page_index = position / ui.page_size;
+                        ui.selected_index_in_page = position % ui.page_size;
+                        RefreshCandidatePageUi(false);
+                    }
+                }
+                RequestShowCandidateWindow();
             }
         }
         else if (GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
@@ -5251,8 +5292,11 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
             // Snapshot the state the user is leaving before this selection
             // overwrites it. The engine's current raw cannot serve as the
             // snapshot: it still contains the remaining suffix, which the user
-            // may delete before asking to retract this segment.
-            GlobalIme::composition.push_selection_snapshot(selection_transition.consumed_raw_input_with_cases);
+            // may delete before asking to retract this segment. The picked
+            // candidate position travels with it so a retraction can put that
+            // item back under the highlight.
+            GlobalIme::composition.push_selection_snapshot(selection_transition.consumed_raw_input_with_cases,
+                                                           Global::candidate_ui.page_index * page_size + index);
             /* 打开造词开关 */
             GlobalIme::composition.creating_word.active = true;
             Global::MsgTypeToTsf = Global::DataFromServerMsgType::NeedToCreateWord;

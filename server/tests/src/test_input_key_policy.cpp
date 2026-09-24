@@ -79,24 +79,46 @@ TEST_CASE(composition_reply_includes_microsoft_shuangpin_ing_key)
     REQUIRE(!FanyImeIpc::ShouldSendCompositionReply(false, false, false, false, false, false));
 }
 
-TEST_CASE(backspace_retracts_only_the_last_selected_segment_boundary)
+TEST_CASE(backspace_retracts_the_last_selected_segment_before_deleting)
 {
     using FanyImeIpc::ShouldRetreatCreatingWordSelection;
-    // The normal case: one character left, caret at the end, snapshot available,
-    // and a client that negotiated the retraction reply.
-    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 1, 1, 1));
+    // The Rime/WeChat-style default: a live word with an unlocked snapshot
+    // retracts on the first Backspace, however much raw stays behind -- the
+    // remaining length and the caret position no longer qualify it.
+    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 4, 1, false));
+    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 1, 3, false));
     // A spelling already emptied by a Ctrl+Backspace segment deletion still owns
     // its snapshots, so the plain Backspace retracts the selected segment.
-    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 0, 0, 1));
+    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 0, 1, false));
     // No active word, UILess host, old DLL, or no snapshot.
-    REQUIRE(!ShouldRetreatCreatingWordSelection(false, false, true, 1, 1, 1));
-    REQUIRE(!ShouldRetreatCreatingWordSelection(true, true, true, 1, 1, 1));
-    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, false, 1, 1, 1));
-    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 1, 1, 0));
-    // More than one character left: this Backspace only deletes a character.
-    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 2, 2, 3));
-    // Caret at the start of the remaining input cannot delete the character.
-    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 1, 0, 1));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(false, false, true, 4, 1, false));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, true, true, 4, 1, false));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, false, 4, 1, false));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 4, 0, false));
+    // A character typed after the selection locks it (selected_before_editing):
+    // Backspace keeps deleting the fresh input so it stays editable.
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 4, 1, true));
+    // ...unless there is nothing left to delete: with an empty raw the key can
+    // only mean retract, and discarding the selection would regress #35.
+    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 0, 1, true));
+}
+
+TEST_CASE(retreat_backspace_shape_is_what_the_client_can_see)
+{
+    using FanyImeIpc::HasRetreatBackspaceShape;
+    // The DLL arms its reply hold from its creating-word mirror alone -- it
+    // cannot see the Server's snapshot history or edit lock -- so the shape
+    // holds, and the Server owes it a frame in every outcome (retreat, locked
+    // deletion, or a no-op behind an empty history), exactly while a word is
+    // being created on a non-UILess negotiated client.
+    REQUIRE(HasRetreatBackspaceShape(true, false, true));
+    // No active word, UILess host, or unnegotiated client: the DLL never arms.
+    REQUIRE(!HasRetreatBackspaceShape(false, false, true));
+    REQUIRE(!HasRetreatBackspaceShape(true, true, true));
+    REQUIRE(!HasRetreatBackspaceShape(true, false, false));
+    // The shape alone never rewrites state: with no snapshot the same predicate
+    // only owes the frame.
+    REQUIRE(!FanyImeIpc::ShouldRetreatCreatingWordSelection(true, false, true, 4, 0, false));
 }
 
 TEST_CASE(segment_backspace_is_ctrl_only)

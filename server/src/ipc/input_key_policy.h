@@ -109,21 +109,44 @@ constexpr bool ShouldSendCompositionReply(bool is_alpha_key, bool is_manual_piny
            is_unicode_plus || is_japanese_long_vowel;
 }
 
-// The Backspace that would delete the last remaining pinyin character of an
-// in-progress word retracts the last selected segment instead of deleting the
-// character and dropping the whole composition. Retraction needs a caret that
-// could actually delete the character -- which is the caret sitting at the end
-// of a spelling holding at most one character, including the spelling a
-// segment Backspace already emptied -- a snapshot to restore, and a client that
-// negotiated the CompositionRestore capability: UILess hosts draw their own
-// candidate UI, and a DLL without the capability treats the reply as a
-// transport fault rather than ignoring it.
-constexpr bool ShouldRetreatCreatingWordSelection(bool creating_word_active, bool ui_less, bool client_supports_restore,
-                                                  std::size_t raw_length, std::size_t caret_position,
-                                                  std::size_t selection_history_size)
+// Backspace inside a live creating-word state retracts the newest selection
+// first -- Rime/WeChat style "backspace undoes the last pick" -- instead of the
+// old caret-qualified triggers (delete the remaining raw down to the last
+// character, or stand right behind the word). The remaining raw length and the
+// caret no longer matter; the two guards that still do are:
+//  - selection_history empty: nothing to retract, so the shape alone only owes
+//    the client a frame describing whatever state the key left behind;
+//  - last_selection_raw_edited: a character typed after the selection locks it
+//    (Rime's selected_before_editing) so Backspace keeps deleting the freshly
+//    typed input. An empty raw overrides the lock: with nothing to delete the
+//    key can only mean retract, and dropping the selection instead would
+//    regress #35 (whole composition discarded).
+// Both need a client that negotiated the CompositionRestore capability: UILess
+// hosts draw their own candidate UI, and a DLL without the capability treats
+// the reply as a transport fault rather than ignoring it.
+//
+// The shape itself is the contract with the client: TSF arms its reply hold
+// whenever its mirror of the creating-word state is non-empty
+// (word_for_creating_word), because that is the only part of this predicate it
+// can see -- snapshot existence and the edit lock live Server-side. HandleImeKey
+// therefore answers every Backspace inside this shape through
+// HasRetreatBackspaceShape, retreat or not, so the two conditions must stay in
+// step: raw styles would otherwise send no reply at all and the hold would burn
+// its full 50 ms timeout.
+constexpr bool HasRetreatBackspaceShape(bool creating_word_active, bool ui_less, bool client_supports_restore)
 {
-    return creating_word_active && !ui_less && client_supports_restore && raw_length <= 1 &&
-           caret_position == raw_length && selection_history_size > 0;
+    return creating_word_active && !ui_less && client_supports_restore;
+}
+
+// The shape plus a snapshot that may actually rewrite the composition; the
+// shape alone only owes the client a frame. This is the only combination that
+// may rewrite state on a Backspace.
+constexpr bool ShouldRetreatCreatingWordSelection(bool creating_word_active, bool ui_less, bool client_supports_restore,
+                                                  std::size_t raw_length, std::size_t selection_history_size,
+                                                  bool last_selection_raw_edited)
+{
+    return HasRetreatBackspaceShape(creating_word_active, ui_less, client_supports_restore) &&
+           selection_history_size > 0 && (!last_selection_raw_edited || raw_length == 0);
 }
 
 // Ctrl+Backspace inside a composition deletes one segmentation unit instead of
