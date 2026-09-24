@@ -22,4 +22,8 @@ log.txt
 /language-model/cache/
 /language-model/sc.lm
 /language-model/sc.lm.incoming
+
+# 神经整句模型：lock.json 和 NOTICE.md 进仓库，下载下来的 safetensors 不进 ——
+# 由 scripts/fetch-neural-model.ps1 按 lock.json 从 release 重新取到并校验 sha256。
+/neural-model/*.safetensors
 __pycache__/

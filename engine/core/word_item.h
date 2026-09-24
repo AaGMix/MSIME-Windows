@@ -16,6 +16,12 @@ enum class CandidateSource
     Kaomoji,
     Generated,
     Fallback,
+    // 神经整句重排挑中的那一条：句子本身还是词格解出来的 n-best，chinese-ime-lm 的字符级
+    // Transformer 只负责在里面挑最准的一句，挑中的那行记在这里，词格自己的第一名仍记
+    // Generated。重排器弃权或后台还没算完时不会出现这两个来源。desktop 档更准更慢，
+    // keyboard 档更快。两者都属于「猜出来的整句」，落库/学习判定与 Generated/Fallback 同类。
+    NeuralDesktop,
+    NeuralKeyboard,
 };
 
 struct WordItem

@@ -209,6 +209,14 @@ class InputSession
     {
         engine_.set_fuzzy_pinyin_options(options);
     }
+    void set_sentence_association(const SentenceAssociationOptions &options)
+    {
+        engine_.set_sentence_association(options);
+    }
+    void set_rescoring_context(std::string context)
+    {
+        engine_.set_rescoring_context(std::move(context));
+    }
     void set_chinese_punctuation_enabled(bool enabled)
     {
         chinese_punctuation_enabled_ = enabled;

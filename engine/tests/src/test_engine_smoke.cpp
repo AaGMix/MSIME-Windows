@@ -2,6 +2,8 @@
 #include "../../core/data_path.h"
 #include "../../english/english_dictionary.h"
 #include "../../japanese/romaji_converter.h"
+#include "../../neural/neural_decoder.h"
+#include "../../quanpin/word_lattice.h"
 #include "../../user_dictionary/user_dictionary_journal.h"
 #include "test_directory_cleanup.h"
 
@@ -14,6 +16,8 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace
 {
@@ -82,6 +86,152 @@ int run_test()
     if (japanese::HiraganaToKatakana("かな") != "カナ" || japanese::HiraganaToRomaji("カナ") != "kana")
     {
         throw std::runtime_error("Kana conversion changed during the platform port.");
+    }
+
+    {
+        // Neural-only mode still asks the lattice for twelve internal alternatives, but it must not
+        // expose the lattice's own pick while the asynchronous neural result is pending.
+        std::unordered_map<std::string, std::vector<quanpin::LatticeLexeme>> table;
+        table["ni"] = {{"ni", "你", 4000}, {"ni", "拟", 3000}, {"ni", "泥", 2000}, {"ni", "逆", 1000}};
+        table["hao"] = {{"hao", "好", 4000}, {"hao", "号", 3000}, {"hao", "浩", 2000}, {"hao", "耗", 1000}};
+        const auto lookup = [&](const quanpin::Segments &span) {
+            std::string key;
+            for (const std::string &syllable : span)
+            {
+                if (!key.empty())
+                    key.push_back('\'');
+                key += syllable;
+            }
+            const auto found = table.find(key);
+            return found == table.end() ? std::vector<quanpin::LatticeLexeme>{} : found->second;
+        };
+
+        quanpin::WordLatticeOptions options;
+        options.nbest = static_cast<int>(neural::RerankOptions{}.max_paths);
+        options.include_lattice_best = false;
+        options.show_next_on_duplicate = true;
+        const std::vector<quanpin::LatticePath> neural_paths =
+            quanpin::decode_word_lattice({"ni", "hao"}, lookup, options);
+        std::size_t desktop_alternatives = 0;
+        std::size_t keyboard_alternatives = 0;
+        std::vector<quanpin::SourcedLatticeReranker> rerankers;
+        rerankers.push_back({[&](std::vector<quanpin::LatticePath> &paths) {
+                                 desktop_alternatives = paths.size();
+                                 return true;
+                             },
+                             CandidateSource::NeuralDesktop});
+        rerankers.push_back({[&](std::vector<quanpin::LatticePath> &paths) {
+                                 keyboard_alternatives = paths.size();
+                                 return true;
+                             },
+                             CandidateSource::NeuralKeyboard});
+        std::vector<WordItem> selected;
+        quanpin::merge_lattice_candidates(selected, {"ni", "hao"}, lookup, "ni'hao", options, rerankers);
+        if (desktop_alternatives != 12 || keyboard_alternatives != 12 || selected.size() != 2 ||
+            selected[0].source != CandidateSource::NeuralKeyboard || selected[0].word != neural_paths[0].sentence ||
+            selected[1].source != CandidateSource::NeuralDesktop || selected[1].word != neural_paths[1].sentence)
+        {
+            throw std::runtime_error("Keyboard did not keep the shared neural best before desktop's next choice.");
+        }
+
+        std::vector<WordItem> different_neural_best;
+        const std::vector<quanpin::SourcedLatticeReranker> different_best_rerankers = {
+            {[](std::vector<quanpin::LatticePath> &paths) {
+                 std::swap(paths[0], paths[1]);
+                 return true;
+             },
+             CandidateSource::NeuralDesktop},
+            {[](std::vector<quanpin::LatticePath> &) { return true; }, CandidateSource::NeuralKeyboard}};
+        quanpin::merge_lattice_candidates(different_neural_best, {"ni", "hao"}, lookup, "ni'hao", options,
+                                          different_best_rerankers);
+        if (different_neural_best.size() != 2 || different_neural_best[0].source != CandidateSource::NeuralDesktop ||
+            different_neural_best[0].word != neural_paths[1].sentence ||
+            different_neural_best[1].source != CandidateSource::NeuralKeyboard ||
+            different_neural_best[1].word != neural_paths[0].sentence)
+        {
+            throw std::runtime_error("Desktop did not precede keyboard when their neural best rows differed.");
+        }
+
+        std::vector<WordItem> pending;
+        const std::vector<quanpin::SourcedLatticeReranker> pending_rerankers = {
+            {[](std::vector<quanpin::LatticePath> &) { return false; }, CandidateSource::NeuralDesktop},
+            {[](std::vector<quanpin::LatticePath> &) { return false; }, CandidateSource::NeuralKeyboard}};
+        quanpin::merge_lattice_candidates(pending, {"ni", "hao"}, lookup, "ni'hao", options, pending_rerankers);
+        if (!pending.empty())
+        {
+            throw std::runtime_error("Neural-only sentence selection exposed a lattice row before scoring finished.");
+        }
+
+        std::vector<WordItem> keyboard_ready;
+        const std::vector<quanpin::SourcedLatticeReranker> keyboard_ready_rerankers = {
+            {[](std::vector<quanpin::LatticePath> &) { return false; }, CandidateSource::NeuralDesktop},
+            {[](std::vector<quanpin::LatticePath> &) { return true; }, CandidateSource::NeuralKeyboard}};
+        quanpin::merge_lattice_candidates(keyboard_ready, {"ni", "hao"}, lookup, "ni'hao", options,
+                                          keyboard_ready_rerankers);
+        if (keyboard_ready.size() != 1 || keyboard_ready[0].source != CandidateSource::NeuralKeyboard ||
+            keyboard_ready[0].word != neural_paths[0].sentence)
+        {
+            throw std::runtime_error("Keyboard neural output waited for the desktop model.");
+        }
+
+        quanpin::WordLatticeOptions trigram_consensus_options = options;
+        trigram_consensus_options.include_lattice_best = true;
+        std::vector<WordItem> trigram_consensus;
+        const std::vector<quanpin::SourcedLatticeReranker> trigram_consensus_rerankers = {
+            {[](std::vector<quanpin::LatticePath> &) { return true; }, CandidateSource::NeuralKeyboard}};
+        quanpin::merge_lattice_candidates(trigram_consensus, {"ni", "hao"}, lookup, "ni'hao", trigram_consensus_options,
+                                          trigram_consensus_rerankers);
+        if (trigram_consensus.size() != 2 || trigram_consensus[0].source != CandidateSource::Generated ||
+            trigram_consensus[0].word != neural_paths[0].sentence ||
+            trigram_consensus[1].source != CandidateSource::NeuralKeyboard ||
+            trigram_consensus[1].word != neural_paths[1].sentence)
+        {
+            throw std::runtime_error("Trigram consensus was not promoted ahead of the neural rows.");
+        }
+
+        // Simulate an earlier Unigram row equal to every later source's first choice. Ownership must
+        // remain Unigram, Trigram, keyboard, desktop regardless of reranker input or completion order.
+        const std::vector<quanpin::LatticePath> static_paths =
+            quanpin::decode_word_lattice({"ni", "hao"}, lookup, options);
+        std::vector<WordItem> deduplicated;
+        deduplicated.emplace_back("ni'hao", static_paths.front().sentence, 1, CandidateSource::Fallback, "ni'hao");
+        options.include_lattice_best = true;
+        options.show_next_on_duplicate = true;
+        const std::vector<quanpin::SourcedLatticeReranker> duplicate_rerankers = {
+            {[](std::vector<quanpin::LatticePath> &) { return true; }, CandidateSource::NeuralDesktop},
+            {[](std::vector<quanpin::LatticePath> &paths) {
+                 std::swap(paths[0], paths[1]);
+                 return true;
+             },
+             CandidateSource::NeuralKeyboard}};
+        quanpin::merge_lattice_candidates(deduplicated, {"ni", "hao"}, lookup, "ni'hao", options, duplicate_rerankers);
+        if (deduplicated.size() != 4 || deduplicated[0].source != CandidateSource::Fallback ||
+            deduplicated[0].word != static_paths[0].sentence ||
+            deduplicated[1].source != CandidateSource::NeuralKeyboard ||
+            deduplicated[1].word != static_paths[2].sentence ||
+            deduplicated[2].source != CandidateSource::NeuralDesktop ||
+            deduplicated[2].word != static_paths[3].sentence || deduplicated[3].source != CandidateSource::Generated ||
+            deduplicated[3].word != static_paths[1].sentence)
+        {
+            throw std::runtime_error("Unigram consensus was not promoted before distinct fallback rows.");
+        }
+
+        // Desktop must wait while an enabled keyboard model is pending. Trigram can already appear
+        // because its ownership was fixed before either neural model.
+        std::vector<WordItem> partially_ready;
+        partially_ready.emplace_back("ni'hao", static_paths.front().sentence, 1, CandidateSource::Fallback, "ni'hao");
+        const std::vector<quanpin::SourcedLatticeReranker> partially_ready_rerankers = {
+            {[](std::vector<quanpin::LatticePath> &) { return true; }, CandidateSource::NeuralDesktop},
+            {[](std::vector<quanpin::LatticePath> &) { return false; }, CandidateSource::NeuralKeyboard}};
+        quanpin::merge_lattice_candidates(partially_ready, {"ni", "hao"}, lookup, "ni'hao", options,
+                                          partially_ready_rerankers);
+        if (partially_ready.size() != 2 || partially_ready[0].source != CandidateSource::Fallback ||
+            partially_ready[0].word != static_paths[0].sentence ||
+            partially_ready[1].source != CandidateSource::Generated ||
+            partially_ready[1].word != static_paths[1].sentence)
+        {
+            throw std::runtime_error("Desktop neural output appeared before keyboard ownership was fixed.");
+        }
     }
 
     const auto unique_suffix = std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());

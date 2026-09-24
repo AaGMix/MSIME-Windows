@@ -802,6 +802,61 @@ void test_word_lattice()
     }
 
     {
+        // 整句只出各来源的首选，n-best 的其余部分是解码中间产物，不进候选区。
+        // 没有重排器时就一条；重排器改了主意时，把它的首选和词格的首选各留一条。
+        std::unordered_map<std::string, std::vector<LatticeLexeme>> table;
+        table["ni"] = {{"ni", "你", 12000}, {"ni", "拟", 3000}, {"ni", "泥", 2000}};
+        table["hao"] = {{"hao", "好", 12000}, {"hao", "号", 3000}, {"hao", "耗", 2000}};
+
+        std::vector<WordItem> alone;
+        quanpin::merge_lattice_candidates(alone, {"ni", "hao"}, make_table_lattice_lookup(table), "ni'hao");
+        expect(alone.size() == 1, fmt::format("Expected a single lattice sentence, got {}", alone.size()));
+
+        // 重排器把第二条顶到首位：两条首选都要留下，重排的在前。
+        std::vector<WordItem> reranked;
+        quanpin::merge_lattice_candidates(
+            reranked, {"ni", "hao"}, make_table_lattice_lookup(table), "ni'hao", {},
+            [](std::vector<quanpin::LatticePath> &paths) {
+                if (paths.size() >= 2)
+                    std::swap(paths[0], paths[1]);
+                return true;
+            },
+            CandidateSource::NeuralDesktop);
+        expect(reranked.size() == 2,
+               fmt::format("Expected the reranker's pick and the lattice's, got {}", reranked.size()));
+        if (reranked.size() == 2 && alone.size() == 1)
+        {
+            expect(reranked.front().word != alone.front().word && reranked[1].word == alone.front().word,
+                   "Expected the reranked pick first and the lattice's own pick behind it.");
+            // 来源要分得开：候选框据此标注是谁挑的。
+            expect(reranked.front().source == CandidateSource::NeuralDesktop &&
+                       reranked[1].source == CandidateSource::Generated,
+                   "Expected the reranker's pick tagged with its own source and the lattice's with Generated.");
+        }
+
+        // 重排器同意词格的排序时不该凭空多出一行，但来源要记在重排那边：模型看过并认可了它。
+        std::vector<WordItem> agreed;
+        quanpin::merge_lattice_candidates(
+            agreed, {"ni", "hao"}, make_table_lattice_lookup(table), "ni'hao", {},
+            [](std::vector<quanpin::LatticePath> &) { return true; }, CandidateSource::NeuralDesktop);
+        expect(agreed.size() == 1,
+               fmt::format("A reranker that agrees should add no extra row, got {}", agreed.size()));
+        if (agreed.size() == 1)
+        {
+            expect(agreed.front().source == CandidateSource::NeuralDesktop,
+                   "A reranker that ran and agreed should still be credited for the row.");
+        }
+
+        // 弃权（模型没加载、后台还没算完）与「跑了且同意」不是一回事：来源仍是词格。
+        std::vector<WordItem> declined;
+        quanpin::merge_lattice_candidates(
+            declined, {"ni", "hao"}, make_table_lattice_lookup(table), "ni'hao", {},
+            [](std::vector<quanpin::LatticePath> &) { return false; }, CandidateSource::NeuralDesktop);
+        expect(declined.size() == 1 && declined.front().source == CandidateSource::Generated,
+               "A reranker that declined must leave the row credited to the lattice.");
+    }
+
+    {
         std::unordered_map<std::string, std::vector<LatticeLexeme>> table;
         table["g"] = {{"g", "个", 100}};
         table["k"] = {{"k", "可", 100}};

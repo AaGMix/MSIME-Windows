@@ -48,6 +48,11 @@ namespace quanpin
 //
 // Lattice WordItem.weight is log_prob * 1000 and is often negative. List
 // order is the ranking; do not sort these rows by weight.
+//
+// merge_lattice_candidates inserts at most three rows, not the whole n-best: each
+// reranker's pick and, when enabled, the lattice's own pick. The
+// rest of the n-best exists so the reranker has something to choose from -- several
+// near-identical sentences are a decoder detail, not a candidate list.
 
 struct LatticeLexeme
 {
@@ -68,6 +73,12 @@ struct WordLatticeOptions
 {
     int beam = 32;
     int nbest = 5;
+    // Whether the lattice's own best path should become a visible candidate. Neural-only mode sets
+    // this to false: the lattice still supplies n-best paths to the reranker, but only its pick is shown.
+    bool include_lattice_best = true;
+    // Each visible source contributes at most one row. When its first choice duplicates an earlier
+    // candidate, continue down that source's own ranking until a distinct sentence is found.
+    bool show_next_on_duplicate = false;
     // Cap on lexemes per span (injected lookups). The DB lookup applies the
     // same cap itself, inside query_exact_segmentations_keyed_flat.
     int span_limit = 32;
@@ -103,6 +114,23 @@ struct WordLatticeOptions
 
 using WordLatticeLookup = std::function<std::vector<LatticeLexeme>(const Segments &span)>;
 
+// Optional second opinion on the decoded n-best, applied before the paths become candidates.
+// engine/neural supplies one that reorders them by a character-level Transformer; anything else
+// that can rank finished sentences would plug in the same way. Reordering only -- a reranker must
+// not add, drop, or edit paths, because their WordItem fields are derived from them afterwards.
+//
+// Returns whether it actually ranked the paths. False means it declined -- the model abstained, or
+// (in the async case) its answer is not back yet -- and the order on return is still the lattice's.
+// The caller needs this to attribute the surviving row: a reranker that ran and agreed leaves the
+// same order as one that never ran, and those two are not the same thing to report.
+using LatticeReranker = std::function<bool(std::vector<LatticePath> &paths)>;
+
+struct SourcedLatticeReranker
+{
+    LatticeReranker rerank;
+    CandidateSource source = CandidateSource::Generated;
+};
+
 // Index where a whole-sentence candidate belongs: just past the leading run of
 // Database/UserDatabase hits whose key equals the typed syllables exactly.
 // Prefix-range and fuzzy rows are not exact hits even when they happen to have
@@ -114,8 +142,21 @@ size_t generated_sentence_insert_position(const std::vector<WordItem> &candidate
 std::vector<LatticePath> decode_word_lattice(const Segments &syllables, const WordLatticeLookup &lookup,
                                              const WordLatticeOptions &options = {});
 
+// `rerank_source` is the source stamped on the reranker's pick, so the candidate list can say which
+// component chose that row. When options.include_lattice_best is true, the lattice's own pick stays
+// CandidateSource::Generated; when false, no row is inserted until the reranker has produced a result.
 void merge_lattice_candidates(std::vector<WordItem> &candidates, const Segments &syllables,
                               const WordLatticeLookup &lookup, const std::string &typed_pinyin,
-                              const WordLatticeOptions &options = {});
+                              const WordLatticeOptions &options = {}, const LatticeReranker &rerank = {},
+                              CandidateSource rerank_source = CandidateSource::Generated);
+
+// Runs every enabled reranker independently over the same original n-best. Each completed reranker
+// may contribute one visible row. Existing candidates (including Unigram) and Trigram reserve their
+// rows first. If both neural models have the same best remaining row, NeuralKeyboard owns it and is
+// displayed first; otherwise NeuralDesktop keeps its best remaining row and is displayed first.
+// A Unigram or Trigram best shared by another enabled source is promoted ahead of the neural rows.
+void merge_lattice_candidates(std::vector<WordItem> &candidates, const Segments &syllables,
+                              const WordLatticeLookup &lookup, const std::string &typed_pinyin,
+                              const WordLatticeOptions &options, const std::vector<SourcedLatticeReranker> &rerankers);
 
 } // namespace quanpin

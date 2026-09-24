@@ -526,7 +526,8 @@ int InputSession::store_user_phrase_from_canonical_pinyin(std::string pinyin, st
     return canonical_phrase_engine_->create_word_from_canonical_pinyin(std::move(pinyin), std::move(word));
 }
 
-// 整句候选（词格 CandidateSource::Generated、Google 解码器 CandidateSource::Fallback）
+// 整句候选（词格 CandidateSource::Generated、Google 解码器 CandidateSource::Fallback、
+// 神经整句 NeuralDesktop / NeuralKeyboard）
 // 是猜出来的，词库里没有它那一行，所以调频对它无效：update_weight_by_pinyin_and_word
 // 改的是 SQLite 里已存在的行，找不到行就什么也不做，用户于是发现自己选多少次都提不上来。
 // 选中即落库才是对的处理：存成用户词组之后，下次同样的输入它以 UserDatabase 候选出现，

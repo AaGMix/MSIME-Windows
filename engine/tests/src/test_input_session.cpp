@@ -638,6 +638,11 @@ int run_test()
         database.execute("CREATE TABLE tbl_3_n(key TEXT,jp TEXT,value TEXT,weight INTEGER)");
         {
             metasequoia::InputSession sentence(SchemeType::Quanpin);
+            // 整句联想默认全关，这一段考的就是整句候选，得先把造句那两条打开。
+            SentenceAssociationOptions association;
+            association.word_lattice = true;
+            association.google = true;
+            sentence.set_sentence_association(association);
             type(sentence, "na'yi'tiao");
             const auto guessed = candidate_index(sentence, "那一条");
             const auto guessed_source = sentence.candidates()[guessed].source;
@@ -660,6 +665,10 @@ int run_test()
         {
             // 学习整句是造词，不是调频：关掉候选学习的会话一条也不该落库。
             metasequoia::InputSession unlearned(SchemeType::Quanpin, 0, true, true, false);
+            SentenceAssociationOptions association;
+            association.word_lattice = true;
+            association.google = true;
+            unlearned.set_sentence_association(association);
             type(unlearned, "na'yi'na");
             const auto guessed = candidate_index(unlearned, "那一那");
             (void)unlearned.select_candidate(guessed);

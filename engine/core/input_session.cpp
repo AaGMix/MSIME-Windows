@@ -978,7 +978,8 @@ std::optional<std::string> InputSession::learn_candidate(std::size_t index)
     // 整句候选走造词，不走调频：它在词库里没有行可改。不受 frequency_adjustment_
     // 约束（那是候选词频策略），也不跳过 index == 0——首位整句同样没有落库，
     // 下次仍要靠猜，存下来才稳定。
-    if (selected.source == CandidateSource::Generated || selected.source == CandidateSource::Fallback)
+    if (selected.source == CandidateSource::Generated || selected.source == CandidateSource::Fallback ||
+        selected.source == CandidateSource::NeuralDesktop || selected.source == CandidateSource::NeuralKeyboard)
     {
         return learn_sentence_candidate(selected);
     }

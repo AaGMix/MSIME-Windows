@@ -239,6 +239,10 @@ QuanpinDictionary::QuanpinDictionary(std::string db_path, metasequoia::RuntimePa
       decoder_(paths_.resource(metasequoia::assets::pinyin_model),
                paths_.user(metasequoia::assets::pinyin_user_dictionary)),
       language_model_(&ngram::shared_language_model(paths_.resource(metasequoia::assets::language_model))),
+      neural_desktop_model_(neural::shared_sentence_model(
+          metasequoia::path_to_utf8(paths_.resource(metasequoia::assets::neural_model_desktop)))),
+      neural_keyboard_model_(neural::shared_sentence_model(
+          metasequoia::path_to_utf8(paths_.resource(metasequoia::assets::neural_model_keyboard)))),
       db_path_(db_path.empty() ? metasequoia::path_to_utf8(paths_.dictionary(metasequoia::assets::main_dictionary))
                                : std::move(db_path))
 {
@@ -522,33 +526,58 @@ std::vector<WordItem> QuanpinDictionary::query_series(const std::string &raw_inp
         //
         // 不管走哪条，送进去之前都要把 ü 换成它认的写法：它的音节表里只有 nue/lue，
         // nve 会被拆成 nv + e。见 quanpin::to_google_spelling。
-        const std::string google_input =
-            raw_input.find('\'') != std::string::npos
-                ? quanpin::to_google_spelling(raw_input)
-                : remove_delimiters(quanpin::to_google_spelling(segmentation.empty() ? raw_input : segmentation));
-        const std::string google_sentence = search_sentence_from_ime_engine(google_input);
-        if (!google_sentence.empty())
+        // Google 整句（Fallback）：仅在开关打开时才解码、才出候选。
+        if (sentence_association_.google)
         {
-            const auto duplicate = std::find_if(result.begin(), result.end(),
-                                                [&](const WordItem &item) { return item.word == google_sentence; });
-            if (duplicate == result.end())
+            const std::string google_input =
+                raw_input.find('\'') != std::string::npos
+                    ? quanpin::to_google_spelling(raw_input)
+                    : remove_delimiters(quanpin::to_google_spelling(segmentation.empty() ? raw_input : segmentation));
+            const std::string google_sentence = search_sentence_from_ime_engine(google_input);
+            if (!google_sentence.empty())
             {
-                // 整句 fallback 必须带上 canonical quanpin，否则以它结尾的造词无法落库：
-                // update_creating_word_progress 依赖 canonical_pinyin 才能拼出完整读音。
-                // segmentation 为空时保持为空，交由既有逻辑判定为不可落库。
-                const size_t insert_at = quanpin::generated_sentence_insert_position(result, segments);
-                result.insert(result.begin() + static_cast<std::ptrdiff_t>(insert_at),
-                              WordItem(segmentation.empty() ? raw_input : segmentation, google_sentence, 1,
-                                       CandidateSource::Fallback, segmentation));
+                const auto duplicate = std::find_if(result.begin(), result.end(),
+                                                    [&](const WordItem &item) { return item.word == google_sentence; });
+                if (duplicate == result.end())
+                {
+                    // 整句 fallback 必须带上 canonical quanpin，否则以它结尾的造词无法落库：
+                    // update_creating_word_progress 依赖 canonical_pinyin 才能拼出完整读音。
+                    // segmentation 为空时保持为空，交由既有逻辑判定为不可落库。
+                    const size_t insert_at = quanpin::generated_sentence_insert_position(result, segments);
+                    result.insert(result.begin() + static_cast<std::ptrdiff_t>(insert_at),
+                                  WordItem(segmentation.empty() ? raw_input : segmentation, google_sentence, 1,
+                                           CandidateSource::Fallback, segmentation));
+                }
             }
         }
 
+        // 词格给 Trigram 候选和神经模型共用：只开神经时仍在内部解出 n-best 供它重排，
+        // 但不把词格自己的首选显示出来。神经模型不自己造句，只在这批路径中选一句。
+        std::vector<quanpin::SourcedLatticeReranker> neural_rerankers;
+        if (sentence_association_.neural_keyboard && neural_keyboard_model_ != nullptr)
+        {
+            neural_rerankers.push_back({quanpin::make_neural_reranker(neural_keyboard_model_, rescoring_context_),
+                                        CandidateSource::NeuralKeyboard});
+        }
+        if (sentence_association_.neural_desktop && neural_desktop_model_ != nullptr)
+        {
+            neural_rerankers.push_back({quanpin::make_neural_reranker(neural_desktop_model_, rescoring_context_),
+                                        CandidateSource::NeuralDesktop});
+        }
         quanpin::WordLatticeOptions lattice_options;
-        lattice_options.nbest = 1;
+        // 神经模型和去重补位都需要完整候选池；否则只解最优的一条。
+        const bool needs_alternatives = !neural_rerankers.empty() || (sentence_association_.word_lattice &&
+                                                                      sentence_association_.show_next_on_duplicate);
+        lattice_options.nbest = needs_alternatives ? static_cast<int>(neural::RerankOptions{}.max_paths) : 1;
+        lattice_options.include_lattice_best = sentence_association_.word_lattice;
+        lattice_options.show_next_on_duplicate = sentence_association_.show_next_on_duplicate;
         lattice_options.language_model = language_model_;
-        quanpin::merge_lattice_candidates(
-            result, segments, quanpin::make_lattice_db_lookup(db_, statement_cache_, lattice_options.span_limit),
-            segmentation.empty() ? raw_input : segmentation, lattice_options);
+        if (sentence_association_.word_lattice || !neural_rerankers.empty())
+        {
+            quanpin::merge_lattice_candidates(
+                result, segments, quanpin::make_lattice_db_lookup(db_, statement_cache_, lattice_options.span_limit),
+                segmentation.empty() ? raw_input : segmentation, lattice_options, neural_rerankers);
+        }
     }
 
     if (result.size() < kSparsePinyinFallbackThreshold)
@@ -767,6 +796,11 @@ std::vector<WordItem> QuanpinDictionary::append_ime_fallback(const std::string &
                                                              std::vector<WordItem> result)
 {
     if (!result.empty())
+    {
+        return result;
+    }
+    // 这条兜底整句也来自 Google 解码器，随「Google 整句联想」开关一起关闭。
+    if (!sentence_association_.google)
     {
         return result;
     }
@@ -1066,6 +1100,29 @@ void QuanpinDictionary::reset_cache()
     cache_.clear();
     series_cache_.clear();
     segmentation_cache_.clear();
+}
+
+void QuanpinDictionary::set_sentence_association(const SentenceAssociationOptions &options)
+{
+    if (sentence_association_ == options)
+    {
+        return;
+    }
+    sentence_association_ = options;
+    // 开关变了，之前缓存的候选列表按旧开关算出，必须清掉，否则打开/关闭后要到缓存过期
+    // 才见效。整句候选都进这几个缓存，见 query_series / query_single_path。
+    reset_cache();
+}
+
+void QuanpinDictionary::set_rescoring_context(const std::string &context)
+{
+    if (rescoring_context_ == context)
+    {
+        return;
+    }
+    rescoring_context_ = context;
+    // 上文变了，缓存里的顺序是按旧上文重排出来的，同 set_sentence_association。
+    reset_cache();
 }
 
 void QuanpinDictionary::reset_cache_if_database_changed()
