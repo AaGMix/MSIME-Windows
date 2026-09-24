@@ -340,6 +340,11 @@ const std::string &GetConfiguredCandidateWindowLayout();
 bool SetConfiguredCandidateWindowLayout(const std::string &layout);
 bool GetConfiguredCandidateWindowFollowCursor();
 bool SetConfiguredCandidateWindowFollowCursor(bool enabled);
+// 固定排位候选词徽标：总开关 + 样式枚举（"paperclip" | "pushpin" | "dot"）。
+bool GetConfiguredCandidateFixedBadge();
+bool SetConfiguredCandidateFixedBadge(bool enabled);
+const std::string &GetConfiguredCandidateFixedBadgeStyle();
+bool SetConfiguredCandidateFixedBadgeStyle(const std::string &style);
 // "d2d" | "webview2" — candidate, floating toolbar, and tray menu renderer.
 // Changing this writes config immediately; the process snapshot does not switch
 // until the IME server is restarted.

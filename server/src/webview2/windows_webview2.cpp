@@ -3875,6 +3875,25 @@ HRESULT OnControllerCreatedSettingsWnd(            //
                                     PostSettingsConfig();
                                 }
                             }
+                            else if (path == "appearance.candidate_fixed_badge")
+                            {
+                                const bool value = json::value_to<bool>(data.at("value"));
+                                if (SetConfiguredCandidateFixedBadge(value))
+                                {
+                                    // 徽标在组页时拼进词条，不刷新的话要等下次上屏才看得见改动
+                                    FanyNamedPipe::EnqueueRefreshCandidatePageTask();
+                                    PostSettingsConfig();
+                                }
+                            }
+                            else if (path == "appearance.candidate_fixed_badge_style")
+                            {
+                                const std::string value = json::value_to<std::string>(data.at("value"));
+                                if (SetConfiguredCandidateFixedBadgeStyle(value))
+                                {
+                                    FanyNamedPipe::EnqueueRefreshCandidatePageTask();
+                                    PostSettingsConfig();
+                                }
+                            }
                             else if (path == "appearance.page_size")
                             {
                                 const int value = static_cast<int>(data.at("value").as_int64());
@@ -4665,6 +4684,8 @@ void PostSettingsConfig()
             {"candidate_window_follow_cursor", GetConfiguredCandidateWindowFollowCursor()},
             {"candidate_skin", GetConfiguredCandidateSkin()},
             {"candidate_window_preedit_style", GetConfiguredCandidateWindowPreeditStyle()},
+            {"candidate_fixed_badge", GetConfiguredCandidateFixedBadge()},
+            {"candidate_fixed_badge_style", GetConfiguredCandidateFixedBadgeStyle()},
             {"tsf_preedit_style", GetConfiguredTsfPreeditStyle()},
             {"theme_mode", GetConfiguredThemeMode()},
             {"theme_settings", GetConfiguredThemeSettings()},

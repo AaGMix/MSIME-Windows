@@ -399,6 +399,8 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
             {"candidate_window_follow_cursor", GetConfiguredCandidateWindowFollowCursor()},
             {"candidate_skin", GetConfiguredCandidateSkin()},
             {"candidate_window_preedit_style", GetConfiguredCandidateWindowPreeditStyle()},
+            {"candidate_fixed_badge", GetConfiguredCandidateFixedBadge()},
+            {"candidate_fixed_badge_style", GetConfiguredCandidateFixedBadgeStyle()},
             {"tsf_preedit_style", GetConfiguredTsfPreeditStyle()},
             {"theme_mode", GetConfiguredThemeMode()},
             {"theme_settings", GetConfiguredThemeSettings()},
@@ -614,6 +616,10 @@ bool ApplyConfigUpdate(const json::object &data)
         return SetConfiguredCandidateSkin(json::value_to<std::string>(data.at("value")));
     if (path == "appearance.candidate_window_preedit_style")
         return SetConfiguredCandidateWindowPreeditStyle(json::value_to<std::string>(data.at("value")));
+    if (path == "appearance.candidate_fixed_badge")
+        return SetConfiguredCandidateFixedBadge(json::value_to<bool>(data.at("value")));
+    if (path == "appearance.candidate_fixed_badge_style")
+        return SetConfiguredCandidateFixedBadgeStyle(json::value_to<std::string>(data.at("value")));
     if (path == "appearance.page_size")
         return SetConfiguredCandidatePageSize(static_cast<int>(data.at("value").as_int64()));
     if (path == "appearance.font")
