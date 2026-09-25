@@ -76,11 +76,25 @@ struct CreatingWordSnapshot
     // page, so the next key can re-pick or change it without hunting (Rime's
     // reopen "keeps selection"). -1 when unknown.
     int selected_absolute_index = -1;
+    // Normalized prefix the picked page was built for (see
+    // FanyImeIpc::NormalizeCandidatePagePrefix). The rebuilt page only holds the
+    // same items when it decodes the same prefix; the retraction compares the two
+    // before re-applying the recorded position.
+    std::string selected_page_prefix;
     // Rime's selected_before_editing: a character typed after this selection
     // locks it, and Backspace then goes back to deleting characters so the new
     // input stays editable. Caret moves deliberately do not set it -- the caret
     // may stand anywhere, retraction still wins.
     bool raw_edited_after_selection = false;
+};
+
+// One-shot hand-off from restore_last_selection to the frame builder: the
+// recorded candidate position plus the page it belongs to, so the caller only
+// re-highlights after rebuilding a page with the same prefix.
+struct RestoredSelectionHighlight
+{
+    int absolute_index = -1;
+    std::string page_prefix;
 };
 
 struct CompositionState
@@ -94,9 +108,10 @@ struct CompositionState
     // history must disable retraction entirely.
     std::vector<CreatingWordSnapshot> selection_history;
     // One-shot hand-off: the absolute candidate position the newest restore wants
-    // re-highlighted after the caller rebuilds the page. Set by
-    // restore_last_selection, consumed (and reset) by the caller.
-    int restored_selection_absolute_index = -1;
+    // re-highlighted after the caller rebuilds the page, recorded with the page
+    // prefix it belongs to. Set by restore_last_selection, consumed (and reset)
+    // by the caller.
+    RestoredSelectionHighlight restored_selection_highlight;
 
     void clear()
     {
@@ -105,7 +120,7 @@ struct CompositionState
         caret_position = 0;
         creating_word.clear();
         selection_history.clear();
-        restored_selection_absolute_index = -1;
+        restored_selection_highlight = {};
     }
 
     void clear_creating_word()
@@ -118,15 +133,19 @@ struct CompositionState
     // Record the state the user is leaving when a selection continues the word.
     // An empty raw spelling means the candidate came from a source that consumed
     // no typed input, so there is nothing this selection could ever retract.
-    // selected_absolute_index is where the picked candidate sat in the pre-selection
-    // list (page * page_size + index_in_page), so a restore can re-highlight it.
-    void push_selection_snapshot(const std::string &consumed_raw_input_with_cases, int selected_absolute_index = -1)
+    // selected_absolute_index is where the picked candidate sat in the
+    // pre-selection list (page * page_size + index_in_page) and
+    // selected_page_prefix is the normalized prefix that list was built for, so a
+    // restore can re-highlight that item once it rebuilt the same page.
+    void push_selection_snapshot(const std::string &consumed_raw_input_with_cases, int selected_absolute_index = -1,
+                                 const std::string &selected_page_prefix = std::string())
     {
         if (consumed_raw_input_with_cases.empty())
         {
             return;
         }
-        selection_history.push_back({consumed_raw_input_with_cases, creating_word, selected_absolute_index, false});
+        selection_history.push_back(
+            {consumed_raw_input_with_cases, creating_word, selected_absolute_index, selected_page_prefix, false});
     }
 
     // Typing a character after a selection locks the newest snapshot: Backspace
@@ -147,11 +166,11 @@ struct CompositionState
         return !selection_history.empty() && selection_history.back().raw_edited_after_selection;
     }
 
-    int take_restored_selection_absolute_index()
+    RestoredSelectionHighlight take_restored_selection_highlight()
     {
-        const int index = restored_selection_absolute_index;
-        restored_selection_absolute_index = -1;
-        return index;
+        RestoredSelectionHighlight highlight = std::move(restored_selection_highlight);
+        restored_selection_highlight = {};
+        return highlight;
     }
 
     // Restore the newest snapshot: the raw spelling that selection consumed, the
@@ -177,7 +196,7 @@ struct CompositionState
         raw_input_with_cases.insert(0, snapshot.consumed_raw_input_with_cases);
         caret_position += restored_length;
         creating_word = std::move(snapshot.previous_creating_word);
-        restored_selection_absolute_index = snapshot.selected_absolute_index;
+        restored_selection_highlight = {snapshot.selected_absolute_index, std::move(snapshot.selected_page_prefix)};
         return true;
     }
 

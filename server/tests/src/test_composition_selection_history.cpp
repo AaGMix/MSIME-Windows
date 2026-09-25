@@ -115,19 +115,23 @@ TEST_CASE(composition_typing_after_selection_locks_only_the_newest_snapshot)
 TEST_CASE(composition_restore_hands_back_the_picked_candidate_position)
 {
     GlobalIme::CompositionState composition;
-    composition.push_selection_snapshot("te", /*selected_absolute_index=*/3);
-    REQUIRE_EQ(composition.take_restored_selection_absolute_index(), -1);
+    composition.push_selection_snapshot("te", /*selected_absolute_index=*/3, /*selected_page_prefix=*/"ni");
+    REQUIRE_EQ(composition.take_restored_selection_highlight().absolute_index, -1);
 
     REQUIRE(composition.restore_last_selection());
-    REQUIRE_EQ(composition.take_restored_selection_absolute_index(), 3);
+    const GlobalIme::RestoredSelectionHighlight highlight = composition.take_restored_selection_highlight();
+    REQUIRE_EQ(highlight.absolute_index, 3);
+    // The page identity travels with the position: the caller can only apply it
+    // after rebuilding a page with the same prefix.
+    REQUIRE_EQ(highlight.page_prefix, std::string("ni"));
     // One-shot: consuming again must not re-apply a stale highlight to a page
     // that has moved on.
-    REQUIRE_EQ(composition.take_restored_selection_absolute_index(), -1);
+    REQUIRE_EQ(composition.take_restored_selection_highlight().absolute_index, -1);
 
     // Ending the composition clears a position still waiting to be applied.
-    composition.restored_selection_absolute_index = 7;
+    composition.restored_selection_highlight = {7, "le"};
     composition.clear();
-    REQUIRE_EQ(composition.take_restored_selection_absolute_index(), -1);
+    REQUIRE_EQ(composition.take_restored_selection_highlight().absolute_index, -1);
 }
 
 TEST_CASE(composition_selection_snapshot_requires_a_consumed_spelling)

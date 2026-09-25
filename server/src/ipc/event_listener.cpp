@@ -4784,7 +4784,8 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
             // one character shorter when the caret deletion in
             // ApplyCompositionEditKey ran -- which is what the hold applies in
             // every outcome.
-            const int restored_selection = GlobalIme::composition.take_restored_selection_absolute_index();
+            const GlobalIme::RestoredSelectionHighlight restored_highlight =
+                GlobalIme::composition.take_restored_selection_highlight();
             Global::MsgTypeToTsf = Global::DataFromServerMsgType::CompositionRestored;
             Global::candidate_ui.selected_text = BuildCreateWordPipePayload(GlobalIme::composition.raw_input_with_cases,
                                                                             GlobalIme::composition.creating_word.word) +
@@ -4821,17 +4822,23 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
                 // Rebuild from the engine and ask for the window explicitly,
                 // mirroring the caret-arrow RebuildFromEngine path.
                 PrepareCandidateList(client_id, activation_epoch);
-                if (restored_selection >= 0)
+                if (restored_highlight.absolute_index >= 0)
                 {
-                    // A retraction re-highlights the item the user had picked
-                    // on the rebuilt page (same prefix, no frequency update ran
-                    // during the creating word, so the order still matches the
-                    // pre-selection page). The next key can re-pick or change it
-                    // without hunting for it again.
+                    // A retraction re-highlights the item the user had picked on
+                    // the rebuilt page: no frequency update ran during the
+                    // creating word, so a page rebuilt for the same prefix still
+                    // holds the same items in the same order. A page for another
+                    // prefix (the suffix was edited between the pick and the
+                    // retraction) does not, and the recorded position would land
+                    // on an unrelated candidate -- apply it only after the
+                    // prefixes match.
+                    const std::string rebuilt_page_prefix = FanyImeIpc::NormalizeCandidatePagePrefix(
+                        g_inputSession->get_pinyin_sequence_with_cases(), g_inputSession->prefix_end());
                     auto &ui = Global::candidate_ui;
-                    if (ui.item_total_count > 0 && ui.page_size > 0)
+                    if (rebuilt_page_prefix == restored_highlight.page_prefix && ui.item_total_count > 0 &&
+                        ui.page_size > 0)
                     {
-                        const int position = std::min(restored_selection, ui.item_total_count - 1);
+                        const int position = std::min(restored_highlight.absolute_index, ui.item_total_count - 1);
                         ui.page_index = position / ui.page_size;
                         ui.selected_index_in_page = position % ui.page_size;
                         RefreshCandidatePageUi(false);
@@ -5294,6 +5301,10 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
         // 接管前缀语义。该状态只可能由门控内的编辑键产生（未协商/UILess 的光标从不
         // 进会话），因此无需重复门控。云/英文/表情等特殊候选在上方提前返回，不会进入
         // 这里。
+        // 用户眼前这一页的身份也取在 advance 之前：撤销重建的页面只有前缀一致时才
+        // 装着同一批候选，记录的位置才有意义。
+        const std::string selection_page_prefix = FanyImeIpc::NormalizeCandidatePagePrefix(
+            g_inputSession->get_pinyin_sequence_with_cases(), g_inputSession->prefix_end());
         const bool caret_prefix_selection =
             g_inputSession->prefix_end() < g_inputSession->get_pinyin_sequence_with_cases().size();
         auto selection_transition =
@@ -5318,10 +5329,12 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
             // overwrites it. The engine's current raw cannot serve as the
             // snapshot: it still contains the remaining suffix, which the user
             // may delete before asking to retract this segment. The picked
-            // candidate position travels with it so a retraction can put that
-            // item back under the highlight.
+            // candidate position travels with it, together with the page prefix
+            // it was recorded on, so a retraction can put that item back under
+            // the highlight.
             GlobalIme::composition.push_selection_snapshot(selection_transition.consumed_raw_input_with_cases,
-                                                           Global::candidate_ui.page_index * page_size + index);
+                                                           Global::candidate_ui.page_index * page_size + index,
+                                                           selection_page_prefix);
             /* 打开造词开关 */
             GlobalIme::composition.creating_word.active = true;
             Global::MsgTypeToTsf = Global::DataFromServerMsgType::NeedToCreateWord;

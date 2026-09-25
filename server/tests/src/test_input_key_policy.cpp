@@ -138,6 +138,23 @@ TEST_CASE(retreat_backspace_reply_survives_the_key_that_ends_the_word)
     REQUIRE(!ShouldAnswerRetreatBackspace(false, false, false));
 }
 
+TEST_CASE(candidate_page_prefix_normalizes_the_decoded_prefix)
+{
+    using FanyImeIpc::NormalizeCandidatePagePrefix;
+    // The engine decodes the lowercased caret prefix, so the page identity is
+    // case-insensitive and clamped to the raw.
+    REQUIRE_EQ(NormalizeCandidatePagePrefix("NiHaoYa", 2), std::string("ni"));
+    // A caret at the end (or an unset caret) makes the whole string the prefix.
+    REQUIRE_EQ(NormalizeCandidatePagePrefix("NiHaoYa", 7), std::string("nihaoya"));
+    REQUIRE_EQ(NormalizeCandidatePagePrefix("NiHaoYa", 99), std::string("nihaoya"));
+    // An empty prefix and an empty raw share the same page identity.
+    REQUIRE_EQ(NormalizeCandidatePagePrefix("ni", 0), std::string());
+    REQUIRE_EQ(NormalizeCandidatePagePrefix("", 0), std::string());
+    // Shortening the suffix between the pick and the retraction changes the
+    // prefix the page is rebuilt for: the recorded position must not be applied.
+    REQUIRE(NormalizeCandidatePagePrefix("nihaoya", 7) != NormalizeCandidatePagePrefix("nihaoa", 6));
+}
+
 TEST_CASE(segment_backspace_is_ctrl_only)
 {
     using FanyImeIpc::IsSegmentBackspaceKey;

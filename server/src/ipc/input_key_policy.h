@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -189,6 +191,19 @@ constexpr bool ShouldResegmentCompositionByCaret(bool client_supports_restore, b
 constexpr bool IsCaretPrefixEmpty(std::size_t prefix_end, std::size_t raw_length) noexcept
 {
     return prefix_end == 0 && raw_length > 0;
+}
+
+// 候选页的身份是引擎按光标前缀解码出来的那一套候选（refresh_prefix_candidates 会把前缀
+// 折成小写）。选词快照记下的候选绝对位置只在重建页前缀一致时才有意义：选词之后用户可能
+// 用 Del、光标编辑或再次撤销改动了 raw，撤销重建出来的是另一套候选，把旧位置套上去会把
+// 高亮落到不相干的项。调用方在应用记录位置前比较这两个归一化前缀。
+inline std::string NormalizeCandidatePagePrefix(const std::string &raw_input_with_cases, std::size_t prefix_end)
+{
+    const std::size_t end = (std::min)(prefix_end, raw_input_with_cases.size());
+    std::string prefix = raw_input_with_cases.substr(0, end);
+    std::transform(prefix.begin(), prefix.end(), prefix.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return prefix;
 }
 
 // 光标箭头键之后的候选发布决策（2026-09 真机回归修复）：光标移回串尾时引擎已按整串重算，
