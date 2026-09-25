@@ -4486,6 +4486,11 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     /* 先处理一下通用的按键，包括所有可能的按键，如普通的拼音字符按键、空格、Tab
      * 等等，然后再在下面处理其中的特殊的按键 */
     bool composition_restored = false;
+    // The client arms its Backspace reply hold from its own creating-word mirror,
+    // which mirrors the state before this key. Capture that shape here so the
+    // reply below can still answer a Backspace that ends the word (the post-key
+    // shape is gone by then, and the hold would otherwise burn its full timeout).
+    bool retreat_backspace_shape_before_key = false;
     // 前缀重算让所有编辑键（含字母/Delete）都需要协商结果；段操作（Ctrl+Backspace /
     // Ctrl+方向）的键位与修饰键条件仍由各自的 chord 判定把守，这里放宽键位限制不影
     // 响它们。
@@ -4497,6 +4502,10 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     }
     else if (is_composition_edit_key && !r_mode_trigger_key)
     {
+        retreat_backspace_shape_before_key =
+            Global::Keycode == VK_BACK &&
+            FanyImeIpc::HasRetreatBackspaceShape(GlobalIme::composition.creating_word.active, IsUiLessMode(),
+                                                 client_supports_restore);
         ApplyCompositionEditKey(Global::Keycode, Global::Wch, Global::ModifiersDown, client_supports_restore,
                                 composition_restored);
     }
@@ -4705,6 +4714,13 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
                       activation_epoch);
     }
 
+    // The shape the key leaves behind: a Backspace that keeps the creating word
+    // alive still owes the client's hold a frame even when nothing was restored
+    // (a plain deletion behind the edit lock, or a no-op).
+    const bool retreat_backspace_shape_after_key =
+        Global::Keycode == VK_BACK && FanyImeIpc::HasRetreatBackspaceShape(GlobalIme::composition.creating_word.active,
+                                                                           IsUiLessMode(), client_supports_restore);
+
     //
     // 普通的拼音字符，发送 preedit 到 TSF 端
     //
@@ -4745,9 +4761,8 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
                 SendUiLessCompositionToClient(client_id, activation_epoch, request_id);
             }
         }
-        else if (composition_restored || (Global::Keycode == VK_BACK && FanyImeIpc::HasRetreatBackspaceShape(
-                                                                            GlobalIme::composition.creating_word.active,
-                                                                            IsUiLessMode(), client_supports_restore)))
+        else if (FanyImeIpc::ShouldAnswerRetreatBackspace(composition_restored, retreat_backspace_shape_before_key,
+                                                          retreat_backspace_shape_after_key))
         {
             // Unlike an ordinary deletion, the retraction and the unit caret
             // jump are not mirrored by TSF on its own: for a deletion TSF
@@ -4756,27 +4771,37 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
             // preedit styles, and the trailing caret field pins the
             // authoritative caret.
             //
-            // The second condition answers every Backspace inside the shape --
+            // Every Backspace the client may be holding for gets this frame --
             // retreat, plain character deletion behind the edit lock, or a
             // no-op behind an empty history: the DLL arms its hold from the
-            // same shape (its creating-word mirror), and without this frame the
-            // default raw preedit style would send no reply at all, burning the
-            // hold's full 50 ms timeout. The payload then describes the state
-            // the key left behind -- restored, unchanged, or one character
-            // shorter when the caret deletion in ApplyCompositionEditKey ran --
-            // which is what the hold applies in every outcome.
+            // creating-word mirror it saw before the key (word_for_creating_word),
+            // and without this frame the default raw preedit style would send no
+            // reply at all, burning the hold's full 50 ms timeout. The pre-key
+            // shape keeps that promise for the Backspace that deletes the last
+            // raw character and ends the word: the post-key shape is gone by
+            // then, while the client is still holding. The payload then
+            // describes the state the key left behind -- restored, unchanged, or
+            // one character shorter when the caret deletion in
+            // ApplyCompositionEditKey ran -- which is what the hold applies in
+            // every outcome.
             const int restored_selection = GlobalIme::composition.take_restored_selection_absolute_index();
             Global::MsgTypeToTsf = Global::DataFromServerMsgType::CompositionRestored;
             Global::candidate_ui.selected_text = BuildCreateWordPipePayload(GlobalIme::composition.raw_input_with_cases,
                                                                             GlobalIme::composition.creating_word.word) +
                                                  L'\t' + std::to_wstring(GlobalIme::composition.caret_position);
             SendCurrentDataToClient(client_id, activation_epoch, request_id);
-            if (GlobalIme::composition.raw_input_with_cases.empty() && GlobalIme::composition.creating_word.active)
+            if (GlobalIme::composition.raw_input_with_cases.empty())
             {
-                // The raw spelling is gone but the selected segments are still
-                // on screen. TSF leaves its candidate presenter alone in this
-                // state (ending it would send HideCandidateWnd, which resets
-                // this very composition), so the window is taken down here.
+                // The spelling is gone. Two states land here: the raw was already
+                // empty while the selected segments stayed on screen (a segment
+                // Backspace deleted the last unit, R3), or this Backspace deleted
+                // the last character and ended the creating word -- the payload
+                // above tells the client to cancel from that empty state. TSF
+                // leaves its candidate presenter alone in the first state (ending
+                // it would send HideCandidateWnd, which resets this very
+                // composition), so the window is taken down here in both, and the
+                // second must not fall through to a rebuild that would publish
+                // the empty-input fallback candidate.
                 HideCandidateWindowAndDropItems();
             }
             else if (FanyImeIpc::IsCaretPrefixEmpty(g_inputSession->prefix_end(),

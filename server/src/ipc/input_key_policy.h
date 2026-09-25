@@ -132,10 +132,26 @@ constexpr bool ShouldSendCompositionReply(bool is_alpha_key, bool is_manual_piny
 // therefore answers every Backspace inside this shape through
 // HasRetreatBackspaceShape, retreat or not, so the two conditions must stay in
 // step: raw styles would otherwise send no reply at all and the hold would burn
-// its full 50 ms timeout.
+// its full 50 ms timeout. Clearing the creating word also removes the post-key
+// shape, so the reply decision additionally carries the shape captured before
+// the edit (see ShouldAnswerRetreatBackspace below).
 constexpr bool HasRetreatBackspaceShape(bool creating_word_active, bool ui_less, bool client_supports_restore)
 {
     return creating_word_active && !ui_less && client_supports_restore;
+}
+
+// The reply condition for a Backspace inside the shape: the frame is owed
+// whenever the client may be holding for one. shape_before_key is the mirror the
+// client armed its hold from, shape_after_key is what the key left behind.
+// Testing only the post-key shape drops the frame exactly when the edit lock let
+// the key delete the last raw character and the tail then cleared the creating
+// word: the client, which saw the pre-key word, is still holding, and the wait
+// burns its full 50 ms timeout before it falls back to its local deletion. The
+// payload describes whatever the key left behind (ended, shorter, or unchanged),
+// which is what the hold applies in every outcome.
+constexpr bool ShouldAnswerRetreatBackspace(bool composition_restored, bool shape_before_key, bool shape_after_key)
+{
+    return composition_restored || shape_before_key || shape_after_key;
 }
 
 // The shape plus a snapshot that may actually rewrite the composition; the

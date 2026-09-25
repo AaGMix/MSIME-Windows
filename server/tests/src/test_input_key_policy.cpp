@@ -121,6 +121,23 @@ TEST_CASE(retreat_backspace_shape_is_what_the_client_can_see)
     REQUIRE(!FanyImeIpc::ShouldRetreatCreatingWordSelection(true, false, true, 4, 0, false));
 }
 
+TEST_CASE(retreat_backspace_reply_survives_the_key_that_ends_the_word)
+{
+    using FanyImeIpc::ShouldAnswerRetreatBackspace;
+    // An ordinary deletion that keeps the word alive: the post-key shape alone
+    // already owes the frame.
+    REQUIRE(ShouldAnswerRetreatBackspace(false, false, true));
+    // A retraction or a segment edit rewrites state and is answered regardless.
+    REQUIRE(ShouldAnswerRetreatBackspace(true, false, false));
+    // The key that deletes the last raw character clears the creating word, so
+    // only the shape captured before the edit is left: the client armed its hold
+    // from that state and must still get a frame, otherwise it burns its timeout.
+    REQUIRE(ShouldAnswerRetreatBackspace(false, true, false));
+    // No shape before or after, nothing restored: an ordinary Backspace outside
+    // the creating word stays unanswered, as TSF mirrors it locally.
+    REQUIRE(!ShouldAnswerRetreatBackspace(false, false, false));
+}
+
 TEST_CASE(segment_backspace_is_ctrl_only)
 {
     using FanyImeIpc::IsSegmentBackspaceKey;
