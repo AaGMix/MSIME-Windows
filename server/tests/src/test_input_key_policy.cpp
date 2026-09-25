@@ -79,24 +79,98 @@ TEST_CASE(composition_reply_includes_microsoft_shuangpin_ing_key)
     REQUIRE(!FanyImeIpc::ShouldSendCompositionReply(false, false, false, false, false, false));
 }
 
-TEST_CASE(backspace_retracts_only_the_last_selected_segment_boundary)
+TEST_CASE(backspace_retracts_the_last_selected_segment_before_deleting)
 {
     using FanyImeIpc::ShouldRetreatCreatingWordSelection;
-    // The normal case: one character left, caret at the end, snapshot available,
-    // and a client that negotiated the retraction reply.
-    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 1, 1, 1));
+    // The Rime/WeChat-style default: a live word with an unlocked snapshot
+    // retracts on the first Backspace, however much raw stays behind -- the
+    // remaining length and the caret position no longer qualify it.
+    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 4, 1, false));
+    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 1, 3, false));
     // A spelling already emptied by a Ctrl+Backspace segment deletion still owns
     // its snapshots, so the plain Backspace retracts the selected segment.
-    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 0, 0, 1));
+    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 0, 1, false));
     // No active word, UILess host, old DLL, or no snapshot.
-    REQUIRE(!ShouldRetreatCreatingWordSelection(false, false, true, 1, 1, 1));
-    REQUIRE(!ShouldRetreatCreatingWordSelection(true, true, true, 1, 1, 1));
-    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, false, 1, 1, 1));
-    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 1, 1, 0));
-    // More than one character left: this Backspace only deletes a character.
-    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 2, 2, 3));
-    // Caret at the start of the remaining input cannot delete the character.
-    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 1, 0, 1));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(false, false, true, 4, 1, false));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, true, true, 4, 1, false));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, false, 4, 1, false));
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 4, 0, false));
+    // A character typed after the selection locks it (selected_before_editing):
+    // Backspace keeps deleting the fresh input so it stays editable.
+    REQUIRE(!ShouldRetreatCreatingWordSelection(true, false, true, 4, 1, true));
+    // ...unless there is nothing left to delete: with an empty raw the key can
+    // only mean retract, and discarding the selection would regress #35.
+    REQUIRE(ShouldRetreatCreatingWordSelection(true, false, true, 0, 1, true));
+}
+
+TEST_CASE(retreat_backspace_shape_is_what_the_client_can_see)
+{
+    using FanyImeIpc::HasRetreatBackspaceShape;
+    // The DLL arms its reply hold from its creating-word mirror alone -- it
+    // cannot see the Server's snapshot history or edit lock -- so the shape
+    // holds, and the Server owes it a frame in every outcome (retreat, locked
+    // deletion, or a no-op behind an empty history), exactly while a word is
+    // being created on a non-UILess negotiated client.
+    REQUIRE(HasRetreatBackspaceShape(true, false, true));
+    // No active word, UILess host, or unnegotiated client: the DLL never arms.
+    REQUIRE(!HasRetreatBackspaceShape(false, false, true));
+    REQUIRE(!HasRetreatBackspaceShape(true, true, true));
+    REQUIRE(!HasRetreatBackspaceShape(true, false, false));
+    // The shape alone never rewrites state: with no snapshot the same predicate
+    // only owes the frame.
+    REQUIRE(!FanyImeIpc::ShouldRetreatCreatingWordSelection(true, false, true, 4, 0, false));
+}
+
+TEST_CASE(retreat_backspace_reply_survives_the_key_that_ends_the_word)
+{
+    using FanyImeIpc::ShouldAnswerRetreatBackspace;
+    // An ordinary deletion that keeps the word alive: the post-key shape alone
+    // already owes the frame.
+    REQUIRE(ShouldAnswerRetreatBackspace(false, false, true));
+    // A retraction or a segment edit rewrites state and is answered regardless.
+    REQUIRE(ShouldAnswerRetreatBackspace(true, false, false));
+    // The key that deletes the last raw character clears the creating word, so
+    // only the shape captured before the edit is left: the client armed its hold
+    // from that state and must still get a frame, otherwise it burns its timeout.
+    REQUIRE(ShouldAnswerRetreatBackspace(false, true, false));
+    // No shape before or after, nothing restored: an ordinary Backspace outside
+    // the creating word stays unanswered, as TSF mirrors it locally.
+    REQUIRE(!ShouldAnswerRetreatBackspace(false, false, false));
+}
+
+TEST_CASE(deleting_the_last_raw_character_keeps_the_created_word)
+{
+    using FanyImeIpc::ShouldKeepCreatingWordAfterRawEmptied;
+    // The reported regression: after picking 你好 from "nihaoya" and typing more,
+    // deleting the remaining raw down to empty must leave the word on screen so
+    // the next Backspace can retract the pick, not swallow the whole composition.
+    REQUIRE(ShouldKeepCreatingWordAfterRawEmptied(true, false, true, 1));
+    // Only a client that applies the keeping frame keeps the state: an old DLL or
+    // a UILess host cancels its own composition locally.
+    REQUIRE(!ShouldKeepCreatingWordAfterRawEmptied(true, true, true, 1));
+    REQUIRE(!ShouldKeepCreatingWordAfterRawEmptied(true, false, false, 1));
+    // A word being created without a snapshot has nothing to retract: the empty
+    // raw keeps ending the composition (unchanged behavior).
+    REQUIRE(!ShouldKeepCreatingWordAfterRawEmptied(true, false, true, 0));
+    // No word being created: a plain deletion to empty ends the composition.
+    REQUIRE(!ShouldKeepCreatingWordAfterRawEmptied(false, false, true, 3));
+}
+
+TEST_CASE(candidate_page_prefix_normalizes_the_decoded_prefix)
+{
+    using FanyImeIpc::NormalizeCandidatePagePrefix;
+    // The engine decodes the lowercased caret prefix, so the page identity is
+    // case-insensitive and clamped to the raw.
+    REQUIRE_EQ(NormalizeCandidatePagePrefix("NiHaoYa", 2), std::string("ni"));
+    // A caret at the end (or an unset caret) makes the whole string the prefix.
+    REQUIRE_EQ(NormalizeCandidatePagePrefix("NiHaoYa", 7), std::string("nihaoya"));
+    REQUIRE_EQ(NormalizeCandidatePagePrefix("NiHaoYa", 99), std::string("nihaoya"));
+    // An empty prefix and an empty raw share the same page identity.
+    REQUIRE_EQ(NormalizeCandidatePagePrefix("ni", 0), std::string());
+    REQUIRE_EQ(NormalizeCandidatePagePrefix("", 0), std::string());
+    // Shortening the suffix between the pick and the retraction changes the
+    // prefix the page is rebuilt for: the recorded position must not be applied.
+    REQUIRE(NormalizeCandidatePagePrefix("nihaoya", 7) != NormalizeCandidatePagePrefix("nihaoa", 6));
 }
 
 TEST_CASE(segment_backspace_is_ctrl_only)
