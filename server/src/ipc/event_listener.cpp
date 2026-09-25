@@ -4300,6 +4300,64 @@ std::wstring BuildWubiCommitAndContinuePayload(const std::wstring &text)
     return std::to_wstring(kWubiCompleteCodeLength) + L"\t" + text;
 }
 
+// Bring the candidate page in step with the CompositionRestored frame just sent.
+// TSF applies that payload without touching its candidate presenter, so the page
+// on screen has to follow here -- and that covers every frame the reply branch
+// sends, not just the retraction: the unit Backspace deletion shortens the raw
+// and the Ctrl+arrow unit jump moves the caret prefix, and both would otherwise
+// leave the pre-key page (and its selection) on screen.
+//   - the raw is gone: nothing to show. The selected segments may still be on
+//     screen (a segment Backspace emptied the raw but kept the word), where TSF
+//     deliberately leaves its presenter alone because ending it would send
+//     HideCandidateWnd and reset this very composition; and a Backspace that
+//     ended the word must never fall through to a rebuild that would publish the
+//     empty-input fallback candidate;
+//   - the caret prefix is empty: hide too (R4, the same rule as the ShowCandidate
+//     task and the caret-arrow path);
+//   - otherwise rebuild from the engine -- the old page holds the pre-frame
+//     items -- and re-highlight the restored pick.
+void PublishRestoredCompositionCandidates(uint64_t client_id, uint64_t activation_epoch)
+{
+    // One-shot: consume it even when this outcome hides instead of rebuilding, so
+    // a position recorded on a page that no longer exists cannot leak into a
+    // later frame.
+    const GlobalIme::RestoredSelectionHighlight restored_highlight =
+        GlobalIme::composition.take_restored_selection_highlight();
+    if (GlobalIme::composition.raw_input_with_cases.empty())
+    {
+        HideCandidateWindowAndDropItems();
+        return;
+    }
+    if (FanyImeIpc::IsCaretPrefixEmpty(g_inputSession->prefix_end(),
+                                       g_inputSession->get_pinyin_sequence_with_cases().size()))
+    {
+        HideCandidateWindowAndDropItems();
+        return;
+    }
+
+    PrepareCandidateList(client_id, activation_epoch);
+    if (restored_highlight.absolute_index >= 0)
+    {
+        // A retraction re-highlights the item the user had picked on the rebuilt
+        // page: no frequency update ran during the creating word, so a page
+        // rebuilt for the same prefix still holds the same items in the same
+        // order. A page for another prefix (the suffix was edited between the
+        // pick and the retraction) does not, and the recorded position would land
+        // on an unrelated candidate -- apply it only after the prefixes match.
+        const std::string rebuilt_page_prefix = FanyImeIpc::NormalizeCandidatePagePrefix(
+            g_inputSession->get_pinyin_sequence_with_cases(), g_inputSession->prefix_end());
+        auto &ui = Global::candidate_ui;
+        if (rebuilt_page_prefix == restored_highlight.page_prefix && ui.item_total_count > 0 && ui.page_size > 0)
+        {
+            const int position = std::min(restored_highlight.absolute_index, ui.item_total_count - 1);
+            ui.page_index = position / ui.page_size;
+            ui.selected_index_in_page = position % ui.page_size;
+            RefreshCandidatePageUi(false);
+        }
+    }
+    RequestShowCandidateWindow();
+}
+
 /**
  * @brief
  *
@@ -4783,69 +4841,13 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
             // describes the state the key left behind -- restored, unchanged, or
             // one character shorter when the caret deletion in
             // ApplyCompositionEditKey ran -- which is what the hold applies in
-            // every outcome.
-            const GlobalIme::RestoredSelectionHighlight restored_highlight =
-                GlobalIme::composition.take_restored_selection_highlight();
+            // every outcome. The candidate page follows it below.
             Global::MsgTypeToTsf = Global::DataFromServerMsgType::CompositionRestored;
             Global::candidate_ui.selected_text = BuildCreateWordPipePayload(GlobalIme::composition.raw_input_with_cases,
                                                                             GlobalIme::composition.creating_word.word) +
                                                  L'\t' + std::to_wstring(GlobalIme::composition.caret_position);
             SendCurrentDataToClient(client_id, activation_epoch, request_id);
-            if (GlobalIme::composition.raw_input_with_cases.empty())
-            {
-                // The spelling is gone. Two states land here: the raw was already
-                // empty while the selected segments stayed on screen (a segment
-                // Backspace deleted the last unit, R3), or this Backspace deleted
-                // the last character and ended the creating word -- the payload
-                // above tells the client to cancel from that empty state. TSF
-                // leaves its candidate presenter alone in the first state (ending
-                // it would send HideCandidateWnd, which resets this very
-                // composition), so the window is taken down here in both, and the
-                // second must not fall through to a rebuild that would publish
-                // the empty-input fallback candidate.
-                HideCandidateWindowAndDropItems();
-            }
-            else if (FanyImeIpc::IsCaretPrefixEmpty(g_inputSession->prefix_end(),
-                                                    g_inputSession->get_pinyin_sequence_with_cases().size()))
-            {
-                // The caret may have jumped to the start of the raw (segment
-                // edits and Ctrl+arrow land here too): an empty prefix must not
-                // wake a candidate window -- same rule as the ShowCandidate
-                // task and the caret-arrow Hide path.
-                HideCandidateWindowAndDropItems();
-            }
-            else
-            {
-                // The window may have been taken down while the caret stood at
-                // an empty prefix (caret-driven resegmentation), and even when
-                // it stayed up the page still holds the pre-retraction items.
-                // Rebuild from the engine and ask for the window explicitly,
-                // mirroring the caret-arrow RebuildFromEngine path.
-                PrepareCandidateList(client_id, activation_epoch);
-                if (restored_highlight.absolute_index >= 0)
-                {
-                    // A retraction re-highlights the item the user had picked on
-                    // the rebuilt page: no frequency update ran during the
-                    // creating word, so a page rebuilt for the same prefix still
-                    // holds the same items in the same order. A page for another
-                    // prefix (the suffix was edited between the pick and the
-                    // retraction) does not, and the recorded position would land
-                    // on an unrelated candidate -- apply it only after the
-                    // prefixes match.
-                    const std::string rebuilt_page_prefix = FanyImeIpc::NormalizeCandidatePagePrefix(
-                        g_inputSession->get_pinyin_sequence_with_cases(), g_inputSession->prefix_end());
-                    auto &ui = Global::candidate_ui;
-                    if (rebuilt_page_prefix == restored_highlight.page_prefix && ui.item_total_count > 0 &&
-                        ui.page_size > 0)
-                    {
-                        const int position = std::min(restored_highlight.absolute_index, ui.item_total_count - 1);
-                        ui.page_index = position / ui.page_size;
-                        ui.selected_index_in_page = position % ui.page_size;
-                        RefreshCandidatePageUi(false);
-                    }
-                }
-                RequestShowCandidateWindow();
-            }
+            PublishRestoredCompositionCandidates(client_id, activation_epoch);
         }
         else if (GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
         {
