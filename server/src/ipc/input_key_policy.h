@@ -167,6 +167,25 @@ constexpr bool ShouldRetreatCreatingWordSelection(bool creating_word_active, boo
            selection_history_size > 0 && (!last_selection_raw_edited || raw_length == 0);
 }
 
+// A Backspace that deletes the last raw character while a word is being created
+// keeps that word (and its snapshots): the composition stays alive showing the
+// selected segments alone, and the reply tells the client to keep composing with
+// the word instead of cancelling. That is the R3 state a segment Backspace
+// already produces, and from it the next Backspace retracts the newest selection
+// (the empty-raw override above) instead of discarding everything the user
+// picked. It needs the same client the retreat reply needs: only a negotiated,
+// non-UILess client applies the frame that keeps the word on screen -- an old
+// DLL or a UILess host cancels its own composition locally, so keeping the state
+// there would leave the two sides out of step. Without a snapshot there is
+// nothing left to retract, so an empty raw keeps ending the composition, as it
+// always did.
+constexpr bool ShouldKeepCreatingWordAfterRawEmptied(bool creating_word_active, bool ui_less,
+                                                     bool client_supports_restore, std::size_t selection_history_size)
+{
+    return HasRetreatBackspaceShape(creating_word_active, ui_less, client_supports_restore) &&
+           selection_history_size > 0;
+}
+
 // Ctrl+Backspace inside a composition deletes one segmentation unit instead of
 // one character. Only the bare Ctrl chord is the IME's: Shift, Alt and the
 // Windows keys keep their host meaning (PRD R1).

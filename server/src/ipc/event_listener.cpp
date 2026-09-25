@@ -1003,7 +1003,9 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
                 // segments stay on screen and the next Ctrl+Backspace drops one
                 // of them (R3).
                 keep_creating_word_after_empty_raw =
-                    raw.empty() && composition.creating_word.active && !composition.selection_history.empty();
+                    raw.empty() && FanyImeIpc::ShouldKeepCreatingWordAfterRawEmptied(
+                                       composition.creating_word.active, IsUiLessMode(), client_supports_restore,
+                                       composition.selection_history.size());
             }
         }
 
@@ -1032,6 +1034,17 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
         {
             raw.erase(composition.caret_position - 1, 1);
             --composition.caret_position;
+            // Deleting the last raw character must not take the accumulated word
+            // down with it: the composition stays alive showing the selected
+            // segments alone -- the same R3 state a segment Backspace produces --
+            // and the reply below tells the client to keep composing instead of
+            // cancelling. The next Backspace then retracts the newest selection
+            // from that empty raw (the empty-raw override of the edit lock)
+            // rather than discarding everything the user picked.
+            keep_creating_word_after_empty_raw =
+                raw.empty() && FanyImeIpc::ShouldKeepCreatingWordAfterRawEmptied(
+                                   composition.creating_word.active, IsUiLessMode(), client_supports_restore,
+                                   composition.selection_history.size());
         }
     }
     else if (keycode == VK_DELETE)
@@ -1090,11 +1103,13 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
 
     if (raw.empty() && !keep_creating_word_after_empty_raw)
     {
-        // TSF cancels the whole composition as soon as the last remaining
-        // character is gone, so the accumulated word and the snapshots a later
-        // Backspace could retract from must not survive here: they would let a
-        // fresh pinyin composition retract a segment of the previous one. A
-        // segment Backspace that emptied the raw keeps them on purpose (R3).
+        // Without a kept state, TSF cancels the whole composition as soon as the
+        // last remaining character is gone, so the accumulated word and the
+        // snapshots a later Backspace could retract from must not survive here:
+        // they would let a fresh pinyin composition retract a segment of the
+        // previous one. Both Backspaces that legitimately empty the raw keep them
+        // on purpose instead: the segment one through R3, the plain one because
+        // its reply tells the client to keep composing with the word alone.
         composition.clear_creating_word();
         composition.selection_history.clear();
     }

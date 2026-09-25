@@ -138,6 +138,24 @@ TEST_CASE(retreat_backspace_reply_survives_the_key_that_ends_the_word)
     REQUIRE(!ShouldAnswerRetreatBackspace(false, false, false));
 }
 
+TEST_CASE(deleting_the_last_raw_character_keeps_the_created_word)
+{
+    using FanyImeIpc::ShouldKeepCreatingWordAfterRawEmptied;
+    // The reported regression: after picking 你好 from "nihaoya" and typing more,
+    // deleting the remaining raw down to empty must leave the word on screen so
+    // the next Backspace can retract the pick, not swallow the whole composition.
+    REQUIRE(ShouldKeepCreatingWordAfterRawEmptied(true, false, true, 1));
+    // Only a client that applies the keeping frame keeps the state: an old DLL or
+    // a UILess host cancels its own composition locally.
+    REQUIRE(!ShouldKeepCreatingWordAfterRawEmptied(true, true, true, 1));
+    REQUIRE(!ShouldKeepCreatingWordAfterRawEmptied(true, false, false, 1));
+    // A word being created without a snapshot has nothing to retract: the empty
+    // raw keeps ending the composition (unchanged behavior).
+    REQUIRE(!ShouldKeepCreatingWordAfterRawEmptied(true, false, true, 0));
+    // No word being created: a plain deletion to empty ends the composition.
+    REQUIRE(!ShouldKeepCreatingWordAfterRawEmptied(false, false, true, 3));
+}
+
 TEST_CASE(candidate_page_prefix_normalizes_the_decoded_prefix)
 {
     using FanyImeIpc::NormalizeCandidatePagePrefix;
