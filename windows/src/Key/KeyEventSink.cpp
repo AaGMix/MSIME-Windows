@@ -61,7 +61,11 @@ bool ResolveKeyCaretAnchor(CMetasequoiaIME *textService, ITfContext *context, Tf
 {
     point[0] = 0;
     point[1] = Global::INVALID_Y;
+    if (!context)
+        return false;
     bool resolved = false;
+    // TF_ES_SYNC either runs the session before returning or fails, so the
+    // session never outlives the stack slots it writes to.
     auto *session = new (std::nothrow) CKeyCaretAnchorEditSession(textService, context, point, &resolved);
     if (!session)
         return false;
@@ -789,9 +793,9 @@ void CMetasequoiaIME::_ApplyCapsLockKeyDownSideEffects(bool capsLockEnabled)
     _RequestLanguageBarCapsIconRefresh();
     if (_pCompositionProcessorEngine)
     {
-        _pCompositionProcessorEngine->SendCaretStateSwitchEvent(
-            FanyImePipeEventType::IMESwitch, _pCompositionProcessorEngine->GetIMEMode(_GetThreadMgr(), _GetClientId()),
-            true, capsLockEnabled);
+        const bool imeOpen = _pCompositionProcessorEngine->GetIMEMode(_GetThreadMgr(), _GetClientId()) != FALSE;
+        _pCompositionProcessorEngine->SendCaretStateSwitchEvent(FanyImePipeEventType::IMESwitch, imeOpen, true,
+                                                                capsLockEnabled);
     }
 }
 
@@ -1762,13 +1766,20 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
         *pIsEaten = FALSE;
         return S_OK;
     }
+    const DWORD testKeyMessageTime = static_cast<DWORD>(GetMessageTime());
+    const bool repeatedTestKeyDown =
+        _capsLockTestKeyDownPending && _capsLockTestKeyDownMessageTime == testKeyMessageTime;
     _capsLockTestKeyDownPending = false;
     if (IsFreshCapsLockKeyDown(wParam, lParam))
     {
         // TestKeyDown observes the toggle before Windows applies this press.
-        const bool capsLockEnabled = ResultingCapsLockState(false, (GetKeyState(VK_CAPITAL) & 0x0001) != 0);
-        _ApplyCapsLockKeyDownSideEffects(capsLockEnabled);
-        _capsLockTestKeyDownMessageTime = static_cast<DWORD>(GetMessageTime());
+        // It may run more than once for one key event; apply the edge once.
+        if (!repeatedTestKeyDown)
+        {
+            const bool capsLockEnabled = ResultingCapsLockState(false, (GetKeyState(VK_CAPITAL) & 0x0001) != 0);
+            _ApplyCapsLockKeyDownSideEffects(capsLockEnabled);
+        }
+        _capsLockTestKeyDownMessageTime = testKeyMessageTime;
         _capsLockTestKeyDownPending = true;
     }
     PerfTimer onTestKeyDownTimer;
@@ -2678,14 +2689,20 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
         Global::wch = wch;
         Global::ModifiersDown = capturedModifiers;
 
+        // The character-set shortcut carries the caret anchor for its badge.
+        // An unresolved anchor is sent explicitly as {0, INVALID_Y}; the packet
+        // default point would otherwise read as a real screen position.
         int keyPoint[2] = {0, Global::INVALID_Y};
-        const bool includeCaretAnchor = KeystrokeState.Function == FUNCTION_TOGGLE_CHARACTER_SET;
-        const bool caretAnchorResolved =
-            includeCaretAnchor && ResolveKeyCaretAnchor(this, pContext, _tfClientId, keyPoint);
+        const bool includeCaretAnchor =
+            KeystrokeState.Function == FUNCTION_TOGGLE_CHARACTER_SET && SupportsCaretStateIndicator();
+        if (includeCaretAnchor)
+        {
+            (void)ResolveKeyCaretAnchor(this, pContext, _tfClientId, keyPoint);
+        }
 
         PerfTimer writeShmTimer;
-        WriteDataToSharedMemory(Global::Keycode, wch, Global::ModifiersDown, caretAnchorResolved ? keyPoint : nullptr,
-                                0, L"", KeyEventPayloadWriteMask(includeCaretAnchor, caretAnchorResolved));
+        WriteDataToSharedMemory(Global::Keycode, wch, Global::ModifiersDown, includeCaretAnchor ? keyPoint : nullptr, 0,
+                                L"", KeyEventPayloadWriteMask(includeCaretAnchor));
 
         PerfTimer sendKeyEventTimer;
         const KeyEventSendResult sendResult = SendKeyEventToUIProcess(&requestId);

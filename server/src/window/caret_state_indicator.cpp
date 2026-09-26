@@ -5,7 +5,6 @@
 #include "utils/window_utils.h"
 #include "webview2/windows_webview2.h"
 #include "window/candidate_skin_palette.h"
-#include "window/caret_state_indicator_policy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,12 +13,11 @@
 
 namespace
 {
-constexpr UINT kHideTimer = 1;
+constexpr UINT_PTR kHideTimer = 1;
 constexpr UINT kHideDelayMs = 1500;
-constexpr int kBaseHeightDip = 30;
-constexpr int kAdditionalCharacterWidthDip = 20;
 constexpr int kCaretGapDip = 6;
 constexpr int kCaretLineHeightDip = 24;
+constexpr int kFontSizeDip = 20;
 
 struct PaletteCache
 {
@@ -33,7 +31,9 @@ struct PaletteCache
 
 PaletteCache g_paletteCache;
 
-const CandidateSkinPalette &ResolvePalette()
+// Mirrors CandidatePresenter::ApplySkin so the badge matches the candidate
+// window. Called from Show only: Paint must stay free of disk I/O.
+void RefreshPalette()
 {
     const bool light = ResolveConfiguredTheme(GetConfiguredThemeCand()) == "light";
     const std::string skinId = GetConfiguredCandidateSkin();
@@ -41,7 +41,7 @@ const CandidateSkinPalette &ResolvePalette()
     const uint64_t revision = GetCandidateSkinReloadRevision();
     if (g_paletteCache.valid && g_paletteCache.skinId == skinId && g_paletteCache.textColor == textColor &&
         g_paletteCache.light == light && g_paletteCache.revision == revision)
-        return g_paletteCache.palette;
+        return;
 
     std::optional<CandidateSkinCatalog::Package> package;
     if (!CandidateSkinCatalog::IsBuiltIn(skinId))
@@ -49,19 +49,20 @@ const CandidateSkinPalette &ResolvePalette()
             CandidateSkinCatalog::Load(std::filesystem::path(CommonUtils::get_ime_data_path_w()) / L"skins", skinId);
     const CandidateSkinCatalog::CandidateColors *packageColors =
         package ? &(light ? package->light : package->dark) : nullptr;
-    const std::string baseSkinId = package ? package->base : skinId;
-    const CandidateSkinPalette fallbackPalette = ResolveCandidateSkinPalette(baseSkinId, light, textColor);
-    const CandidateSkinPalette resolvedPalette =
+    const std::string baseSkinId = package ? package->base : std::string{};
+    const CandidateSkinPalette resolved =
         ResolveCandidateSkinPalette(skinId, light, textColor, packageColors, baseSkinId);
+    // GDI cannot blend with what is behind the window, so a translucent skin
+    // surface is flattened onto its opaque built-in base.
+    const CandidateSkinPalette opaqueBase =
+        ResolveCandidateSkinPalette(baseSkinId.empty() ? skinId : baseSkinId, light, textColor);
     g_paletteCache = {
-        skinId, textColor, light, revision, FlattenCandidateSkinPaletteForGdi(resolvedPalette, fallbackPalette.surface),
-        true};
-    return g_paletteCache.palette;
+        skinId, textColor, light, revision, FlattenCandidateSkinPaletteForGdi(resolved, opaqueBase.surface), true};
 }
 
 struct State
 {
-    std::wstring text = L"中";
+    FanyImeUi::CaretStateBadge badge;
     UINT dpi = 96;
 };
 
@@ -74,52 +75,57 @@ int PixelSize(int dip, UINT dpi)
 
 bool PositionWindow(HWND hwnd, POINT caret, bool topmost, bool show)
 {
-    HMONITOR monitor = MonitorFromPoint(caret, MONITOR_DEFAULTTONEAREST);
-    g_state.dpi = static_cast<UINT>(std::lround(GetScaleForPoint(caret) * 96.0f));
-    const int height = PixelSize(kBaseHeightDip, g_state.dpi);
-    const int extraCharacters = (std::max)(0, static_cast<int>(g_state.text.size()) - 1);
-    const int width = g_state.text.size() == 5
+    const float scale = GetScaleForPoint(caret);
+    g_state.dpi = static_cast<UINT>(std::lround((scale > 0.0f ? scale : 1.0f) * 96.0f));
+    const int height = PixelSize(FanyImeUi::kCaretStateBadgeHeightDip, g_state.dpi);
+    const int width = g_state.badge.HasModeSlot()
                           ? PixelSize(FanyImeUi::kCaretStatePunctuationSlotWidthDip, g_state.dpi) +
                                 PixelSize(FanyImeUi::kCaretStatePunctuationModeGapDip, g_state.dpi) +
                                 PixelSize(FanyImeUi::kCaretStatePunctuationModeSlotWidthDip, g_state.dpi)
-                          : FanyImeUi::CaretStateIndicatorTextWidth(
-                                height, PixelSize(kAdditionalCharacterWidthDip, g_state.dpi), extraCharacters);
+                          : PixelSize(FanyImeUi::CaretStateBadgeWidthDip(g_state.badge), g_state.dpi);
     const int gap = PixelSize(kCaretGapDip, g_state.dpi);
     const int caretLineHeight = PixelSize(kCaretLineHeightDip, g_state.dpi);
-    MONITORINFO info{sizeof(info)};
+
     RECT work{};
+    MONITORINFO info{sizeof(info)};
+    const HMONITOR monitor = MonitorFromPoint(caret, MONITOR_DEFAULTTONEAREST);
     if (monitor && GetMonitorInfoW(monitor, &info))
         work = info.rcWork;
     else
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
 
     const std::string &position = GetConfiguredCaretStateIndicatorPosition();
-    int x = FanyImeUi::CaretStateIndicatorX(position, caret.x, width, gap);
-    const std::optional<int> placement = FanyImeUi::CaretStateIndicatorPlacementY(
-        position == "bottom", caret.y, height, caretLineHeight, gap, work.top, work.bottom);
-    if (!placement)
+    const std::optional<int> y = FanyImeUi::CaretStateIndicatorPlacementY(position == "bottom", caret.y, height,
+                                                                          caretLineHeight, gap, work.top, work.bottom);
+    if (!y)
         return false;
-    x = static_cast<int>((std::max)(work.left, (std::min)(static_cast<LONG>(x), work.right - width)));
+    const int preferredX = FanyImeUi::CaretStateIndicatorX(position, caret.x, width, gap);
+    const int x = (std::max)(static_cast<int>(work.left), (std::min)(preferredX, static_cast<int>(work.right) - width));
     const UINT flags = SWP_NOACTIVATE | (show ? SWP_SHOWWINDOW : 0);
-    return SetWindowPos(hwnd, topmost ? HWND_TOPMOST : HWND_TOP, x, *placement, width, height, flags) != FALSE;
+    return SetWindowPos(hwnd, topmost ? HWND_TOPMOST : HWND_TOP, x, *y, width, height, flags) != FALSE;
+}
+
+void DrawSlot(HDC dc, const wchar_t *text, int length, RECT rect)
+{
+    DrawTextW(dc, text, length, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 } // namespace
 
 namespace CaretStateIndicator
 {
-bool Show(HWND hwnd, const std::wstring &text, POINT caret, bool topmost)
+bool Show(HWND hwnd, const FanyImeUi::CaretStateBadge &badge, POINT caret, bool topmost)
 {
-    if (!hwnd || !IsWindow(hwnd))
+    if (!hwnd || !IsWindow(hwnd) || badge.text.empty())
         return false;
 
-    g_state.text = text;
-    // Resolve once per skin/config revision. Paint must remain disk-I/O free.
-    ResolvePalette();
+    g_state.badge = badge;
+    RefreshPalette();
     if (!PositionWindow(hwnd, caret, topmost, true))
     {
         Hide(hwnd);
         return false;
     }
+    // Re-arming restarts the countdown when switches arrive in quick succession.
     SetTimer(hwnd, kHideTimer, kHideDelayMs, nullptr);
     InvalidateRect(hwnd, nullptr, FALSE);
     return true;
@@ -141,41 +147,54 @@ void Hide(HWND hwnd)
     ShowWindow(hwnd, SW_HIDE);
 }
 
+bool HandleTimer(HWND hwnd, WPARAM timerId)
+{
+    if (timerId != kHideTimer)
+        return false;
+    Hide(hwnd);
+    return true;
+}
+
 void Paint(HWND hwnd, HDC dc)
 {
     RECT rc{};
     GetClientRect(hwnd, &rc);
-    CandidateSkinPalette fallbackPalette = ResolveCandidateSkinPalette("fluent", false, "auto");
-    const CandidateSkinPalette &palette = g_paletteCache.valid ? g_paletteCache.palette : fallbackPalette;
-    HBRUSH bg = CreateSolidBrush(FlattenCandidateColor(palette.surface, palette.surface));
-    FillRect(dc, &rc, bg);
-    DeleteObject(bg);
+    const CandidateSkinPalette palette =
+        g_paletteCache.valid ? g_paletteCache.palette : ResolveCandidateSkinPalette("fluent", false, "auto");
+    HBRUSH background = CreateSolidBrush(FlattenCandidateColor(palette.surface, palette.surface));
+    FillRect(dc, &rc, background);
+    DeleteObject(background);
     HBRUSH border = CreateSolidBrush(FlattenCandidateColor(palette.border, palette.surface));
     FrameRect(dc, &rc, border);
     DeleteObject(border);
+
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, FlattenCandidateColor(palette.text, palette.surface));
     HFONT font =
-        CreateFontW(-PixelSize(20, g_state.dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        CreateFontW(-PixelSize(kFontSizeDip, g_state.dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
-    HGDIOBJ old = SelectObject(dc, font);
-    if (g_state.text.size() == 5)
+    const HGDIOBJ previousFont = font ? SelectObject(dc, font) : nullptr;
+
+    const FanyImeUi::CaretStateBadge &badge = g_state.badge;
+    if (badge.HasModeSlot())
     {
         RECT modeRect = rc;
         modeRect.left =
             (std::max)(rc.left, rc.right - PixelSize(FanyImeUi::kCaretStatePunctuationModeSlotWidthDip, g_state.dpi));
-        RECT punctuationRect = rc;
-        punctuationRect.right = (std::max)(
-            punctuationRect.left, modeRect.left - PixelSize(FanyImeUi::kCaretStatePunctuationModeGapDip, g_state.dpi));
-        DrawTextW(dc, g_state.text.c_str(), 2, &punctuationRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        DrawTextW(dc, g_state.text.c_str() + 4, 1, &modeRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        RECT textRect = rc;
+        textRect.right =
+            (std::max)(rc.left, modeRect.left - PixelSize(FanyImeUi::kCaretStatePunctuationModeGapDip, g_state.dpi));
+        DrawSlot(dc, badge.text.c_str(), static_cast<int>(badge.text.size()), textRect);
+        DrawSlot(dc, &badge.mode, 1, modeRect);
     }
     else
     {
-        DrawTextW(dc, g_state.text.c_str(), static_cast<int>(g_state.text.size()), &rc,
-                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawSlot(dc, badge.text.c_str(), static_cast<int>(badge.text.size()), rc);
     }
-    SelectObject(dc, old);
-    DeleteObject(font);
+
+    if (previousFont)
+        SelectObject(dc, previousFont);
+    if (font)
+        DeleteObject(font);
 }
 } // namespace CaretStateIndicator

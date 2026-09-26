@@ -201,7 +201,9 @@ class CCompositionProcessorEngine
     void SyncPunctuationWithImeMode(_In_ ITfThreadMgr *pThreadMgr, TfClientId tfClientId, BOOL isOpen);
     void CommitCompositionOnExternalKeyboardClose();
     void ReleaseConfiguredImeModeDefense();
-    void SendCaretStateSwitchEvent(UINT eventType, BOOL enabled, bool capsLockEdge = false,
+    // Requests the transient caret badge for a user-initiated mode change.
+    // Never call it for programmatic compartment writes.
+    void SendCaretStateSwitchEvent(UINT eventType, bool enabled, bool capsLockEdge = false,
                                    bool capsLockEnabled = false);
 
   private:
@@ -278,11 +280,6 @@ class CCompositionProcessorEngine
     CMetasequoiaIME *_pTextService;
     BOOL _keyboardOpen;
     BOOL _keyboardOpenKnown;
-    BOOL _doubleSingleByteKnown = FALSE;
-    BOOL _lastDoubleSingleByte = FALSE;
-    BOOL _punctuationKnown = FALSE;
-    BOOL _lastPunctuation = FALSE;
-    BOOL _suppressCaretStateEvents = FALSE;
     BOOL _suppressKeyboardCloseCommit;
     // After Activate applies input.default_ime_mode, Chromium (and Electron)
     // often rewrites TF_CONVERSIONMODE_* (NATIVE / SYMBOL / FULLSHAPE) while

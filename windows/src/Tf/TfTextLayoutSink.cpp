@@ -48,7 +48,7 @@ bool ResolveCollapsedSelectionAnchor(_In_ ITfContext *context, TfEditCookie edit
         const HRESULT viewResult = context->GetActiveView(&view);
         if (SUCCEEDED(viewResult) && view &&
             SUCCEEDED(view->GetTextExt(editCookie, selection.range, &rect, &clipped)) &&
-            IsUsableCaretExtent(clipped != FALSE, rect.left, rect.top, rect.right, rect.bottom))
+            IsUsableCaretExtent(rect.left, rect.top, rect.right, rect.bottom))
         {
             *anchor = GetPhysicalTextAnchor(view, rect);
             resolved = true;

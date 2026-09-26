@@ -2143,14 +2143,17 @@ int CreateCandidateWindow(HINSTANCE hInstance)
     const int ftbCornerInset = static_cast<int>(std::lround(10.0 * static_cast<double>(scale > 0 ? scale : 1.0f)));
     const int ftbX = ftbMonitor.right - ftbWidth - ftbCornerInset;
     const int ftbY = ftbMonitor.bottom - ftbHeight - ftbTaskbarHeight - ftbCornerInset;
+    // The caret badge is optional: without its window every post is a no-op,
+    // so a creation failure must not take the input windows down with it.
     HWND hwnd_caret_state =
         CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT, szWindowClass,
                         lpWindowNameCaretState, WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, hInstance, nullptr);
-    if (!hwnd_caret_state)
-        return 1;
-    ::global_hwnd_caret_state = hwnd_caret_state;
-    SetLayeredWindowAttributes(hwnd_caret_state, 0, 245, LWA_ALPHA);
-    ShowWindow(hwnd_caret_state, SW_HIDE);
+    if (hwnd_caret_state)
+    {
+        ::global_hwnd_caret_state = hwnd_caret_state;
+        SetLayeredWindowAttributes(hwnd_caret_state, 0, 245, LWA_ALPHA);
+        ShowWindow(hwnd_caret_state, SW_HIDE);
+    }
 
     HWND hwnd_ftb = CreateWindowEx( //
         dwExStyle,                  //
@@ -3871,7 +3874,9 @@ LRESULT CALLBACK WndProcCaretStateWindow(HWND hwnd, UINT message, WPARAM wParam,
 {
     if (IsSystemLightDarkToggle(message, lParam))
     {
-        InvalidateRect(hwnd, nullptr, FALSE);
+        // The palette follows the next Show; a stale badge simply goes away.
+        CaretStateIndicator::Hide(hwnd);
+        ::is_global_wnd_caret_state_shown = false;
         return 0;
     }
 
@@ -3889,10 +3894,8 @@ LRESULT CALLBACK WndProcCaretStateWindow(HWND hwnd, UINT message, WPARAM wParam,
         return 0;
     }
     case WM_TIMER:
-        if (wParam == 1)
+        if (CaretStateIndicator::HandleTimer(hwnd, wParam))
         {
-            KillTimer(hwnd, 1);
-            CaretStateIndicator::Hide(hwnd);
             ::is_global_wnd_caret_state_shown = false;
             return 0;
         }
@@ -3900,24 +3903,22 @@ LRESULT CALLBACK WndProcCaretStateWindow(HWND hwnd, UINT message, WPARAM wParam,
     case WM_SHOW_CARET_STATE: {
         std::unique_ptr<CaretStateIndicator::ShowRequest> request(
             reinterpret_cast<CaretStateIndicator::ShowRequest *>(lParam));
-        if (!request || !FanyImeUi::ShouldShowCaretStateIndicator(GetConfiguredCaretStateIndicatorEnabled(),
-                                                                  g_is_ime_active, request ? request->caret.x : 0,
-                                                                  request ? request->caret.y : -100000))
+        if (!request ||
+            !FanyImeUi::ShouldShowCaretStateIndicator(GetConfiguredCaretStateIndicatorEnabled(), g_is_ime_active,
+                                                      request->uiLess, request->caret.x, request->caret.y))
         {
             CaretStateIndicator::Hide(hwnd);
             ::is_global_wnd_caret_state_shown = false;
             return 0;
         }
         const bool topmost = EnsureSmallWindowsTopmost(L"show-caret-state");
-        ::is_global_wnd_caret_state_shown = CaretStateIndicator::Show(hwnd, request->text, request->caret, topmost);
+        ::is_global_wnd_caret_state_shown = CaretStateIndicator::Show(hwnd, request->badge, request->caret, topmost);
         return 0;
     }
     case WM_MOVE_CARET_STATE: {
         std::unique_ptr<POINT> caret(reinterpret_cast<POINT *>(lParam));
         if (::is_global_wnd_caret_state_shown &&
-            (!caret ||
-             !FanyImeUi::ShouldShowCaretStateIndicator(GetConfiguredCaretStateIndicatorEnabled(), g_is_ime_active,
-                                                       caret->x, caret->y) ||
+            (!caret || !FanyImeUi::IsUsableCaretAnchor(caret->x, caret->y) ||
              !CaretStateIndicator::Reposition(hwnd, *caret, EnsureSmallWindowsTopmost(L"move-caret-state"))))
         {
             CaretStateIndicator::Hide(hwnd);

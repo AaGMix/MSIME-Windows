@@ -53,9 +53,9 @@ STDAPI CMetasequoiaIME::OnSetFocus(_In_ ITfDocumentMgr *pDocMgrFocus, _In_ ITfDo
                                  (pDocMgrFocus && !_IsSameComObject(pDocMgrFocus, _pDocMgrLastFocused));
     if (documentChanged)
     {
-        // Document identity owns the badge even when editors share an HWND
-        // (or expose none). Chromium may also swap documents while typing;
-        // this hide affects only the badge, never candidate/input state.
+        // The badge belongs to the document it was shown for, even when
+        // editors share an HWND (or expose none). This hides only the badge;
+        // candidate and input state follow their own focus rules below.
         SendHideCaretStateEventToUIProcessViaNamedPipe();
     }
 
@@ -163,10 +163,10 @@ STDAPI CMetasequoiaIME::OnSetFocus(_In_ ITfDocumentMgr *pDocMgrFocus, _In_ ITfDo
             {
                 _pCandidateListUIPresenter->OnSetThreadFocus();
             }
-            // A different focused document invalidates only the caret badge.
-            // Actual thread-focus loss and deactivation still own candidate
-            // teardown; doing it here can discard an active composition while
-            // Chromium swaps document managers within the same focus session.
+            else
+            {
+                _pCandidateListUIPresenter->OnKillThreadFocus();
+            }
 
             pCandidateListDocumentMgr->Release();
         }

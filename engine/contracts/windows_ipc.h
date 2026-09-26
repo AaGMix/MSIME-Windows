@@ -111,6 +111,12 @@ constexpr std::uint32_t ClientSuspended = 14;   // temporary focus route reset; 
 // ownership claim the Server would discard it as an inactive-client event.
 constexpr std::uint32_t FocusRestored = 15;
 constexpr std::uint32_t HideCaretState = 16; // focus-context boundary; never clears candidate state
+// Caret-badge notifications (FanyImeProtocol::CaretStateIndicator). keycode is
+// the resulting mode (1 = Chinese / Chinese punctuation / fullwidth); point[]
+// is the physical caret anchor or {0, INVALID_Y} when none was resolved.
+// IMESwitch: wch == VK_CAPITAL marks a Caps Lock edge and modifiers_down
+// carries the event-time Caps Lock snapshot (FanyImePipeFlags below).
+// PuncSwitch: wch is the IME open state (1 = Chinese) for the mode slot.
 constexpr std::uint32_t IMESwitch = 7;
 constexpr std::uint32_t PuncSwitch = 8;
 constexpr std::uint32_t DoubleSingleByteSwitch = 9;

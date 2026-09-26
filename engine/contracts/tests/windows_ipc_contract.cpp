@@ -29,7 +29,8 @@ int main()
     CHECK(FanyImePipeEventType::HideCaretState == 16);
     CHECK(FanyImePipeEventType::HideCaretState != FanyImePipeEventType::HideCandidateWnd);
     CHECK(!FanyImePipeEventType::IsRouteDeactivation(FanyImePipeEventType::HideCaretState));
-    CHECK(FanyImeProtocol::CaretStateLifecycle == (1u << 5));
+    CHECK(FanyImeProtocol::CaretStateIndicator == (1u << 5));
+    CHECK((FanyImeProtocol::CaretStateIndicator & FanyImeProtocol::RequiredCapabilities) == 0);
     CHECK(FanyImeProtocol::Negotiate(legacy).legacy);
     CHECK(FanyImeProtocol::Negotiate(legacy).accepted);
 
