@@ -75,6 +75,58 @@ it('supports arrow and Enter keyboard selection through the shared dropdown hand
   expect(postMessage).toHaveBeenCalledTimes(1);
 });
 
+function pressKey(target: MenuElement, key: string) {
+  const event = new Event('keydown');
+  Object.defineProperty(event, 'key', { value: key });
+  target.dispatchEvent(event);
+}
+
+function useItems(count: number): MenuElement[] {
+  const items = Array.from({ length: count }, (_, index) => {
+    const entry = new MenuElement();
+    entry.textContent = `item ${index}`;
+    entry.dataset.value = `value_${index}`;
+    entry.parent = menu;
+    return entry;
+  });
+  menu.children = items;
+  return items;
+}
+
+it('enters a multi-item menu at the first item going down and the last going up', async () => {
+  const items = useItems(4);
+  (document as unknown as { activeElement: MenuElement }).activeElement = button;
+  pressKey(button, 'ArrowDown');
+  await Promise.resolve();
+  expect(document.activeElement).toBe(items[0]);
+
+  button.focus();
+  pressKey(button, 'ArrowUp');
+  await Promise.resolve();
+  expect(document.activeElement).toBe(items[3]);
+});
+
+it('wraps arrow navigation inside the menu', () => {
+  const items = useItems(3);
+  items[2].focus();
+  pressKey(menu, 'ArrowDown');
+  expect(document.activeElement).toBe(items[0]);
+  pressKey(menu, 'ArrowUp');
+  expect(document.activeElement).toBe(items[2]);
+});
+
+it('ignores Enter when focus is not on a menu item', () => {
+  useItems(2);
+  // Were the focused element clicked blindly, this click would reach the
+  // menu's delegated handler and be taken for an item selection.
+  button.textContent = 'toggle';
+  button.parent = menu;
+  button.focus();
+  pressKey(menu, 'Enter');
+  expect(postMessage).not.toHaveBeenCalled();
+  expect(label.textContent).toBe('[ / ]');
+});
+
 it('does not select or send a disabled dropdown item', () => {
   item.attributes.set('aria-disabled', 'true');
   clickItem();
