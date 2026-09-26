@@ -74,8 +74,14 @@ std::filesystem::path prepare_resources(const std::filesystem::path &root)
             "INSERT INTO tbl_1_z VALUES('zi','z','子',10000);"
             "CREATE TABLE tbl_2_n(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
             "INSERT INTO tbl_2_n VALUES('ni''hao','nh','你好',10000),('ni''hao','nh','拟好',9000);"
+            "CREATE TABLE tbl_1_x(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+            "INSERT INTO tbl_1_x VALUES('xiao','x','笑',10000);"
+            "CREATE TABLE tbl_1_t(key TEXT,jp TEXT,value TEXT,weight INTEGER);"
+            "INSERT INTO tbl_1_t VALUES('ta','t','他',10000);"
             "CREATE TABLE wubi86(key TEXT,value TEXT,weight INTEGER);"
-            "INSERT INTO wubi86 VALUES('wq','你好',10000),('wqaa','众人',9000);");
+            "INSERT INTO wubi86 VALUES('wq','你好',10000),('wqaa','众人',9000),"
+            "('wqab','甲',8000),('wqab','乙',7000),('taaa','笔',6000),"
+            "('a','工',10000),('aaaa','工',5000),('aaab','苛',4000);");
     require(EnglishDictionary::ensure_schema(path_to_utf8(resources / assets::english_dictionary)),
             "English schema failed");
     return resources;
@@ -126,6 +132,90 @@ int main()
             InputSession mixed(SchemeType::Wubi, GetXiaoheShuangpinProfile(), paths_for(resources, root, next()));
             mixed.set_wubi_input_options(WubiInputOptions{true});
             require(type(mixed, "wq") == native, "Mixed input changed the candidates for a matched code.");
+        }
+
+        // Per-key prefix hints are not an answer: ta has no row of its own (only taaa starts with it),
+        // so mixed input still offers pinyin, while plain wubi keeps showing the hints.
+        {
+            InputSession plain(SchemeType::Wubi, GetXiaoheShuangpinProfile(), paths_for(resources, root, next()));
+            plain.set_wubi_input_options(WubiInputOptions{false});
+            const auto hints = type(plain, "ta");
+            require(std::find(hints.begin(), hints.end(), "笔") != hints.end(),
+                    "Plain wubi did not show the prefix hint for ta.");
+
+            InputSession mixed(SchemeType::Wubi, GetXiaoheShuangpinProfile(), paths_for(resources, root, next()));
+            mixed.set_wubi_input_options(WubiInputOptions{true});
+            const auto candidates = type(mixed, "ta");
+            require(std::find(candidates.begin(), candidates.end(), "他") != candidates.end(),
+                    "Prefix hints kept mixed input from offering pinyin for ta.");
+            require(mixed.answered_by_pinyin_fallback(), "ta was not answered by the pinyin fallback.");
+        }
+
+        // A word with both a short and a full code appears once, under the code actually typed.
+        {
+            InputSession session(SchemeType::Wubi, GetXiaoheShuangpinProfile(), paths_for(resources, root, next()));
+            session.set_wubi_input_options(WubiInputOptions{false});
+            const auto candidates = type(session, "a");
+            require(std::count(candidates.begin(), candidates.end(), "工") == 1,
+                    "A word with a short and a full code was listed twice.");
+            require(session.candidates().front().word == "工" && session.candidates().front().pinyin == "a",
+                    "The deduplicated word did not keep the exact-code row.");
+        }
+
+        // Only a complete four-letter code the table answered with exactly one candidate is a
+        // unique wubi code: shorter codes are incomplete, a recoded four-letter code is not unique,
+        // and a four-letter spelling only the pinyin fallback answers is not a wubi code at all.
+        {
+            InputSession unique(SchemeType::Wubi, GetXiaoheShuangpinProfile(), paths_for(resources, root, next()));
+            unique.set_wubi_input_options(WubiInputOptions{false});
+            const auto unique_candidates = type(unique, "wqaa");
+            require(unique_candidates.size() == 1, "The fixture did not answer wqaa with one candidate.");
+            require(unique.wubi_unique_four_code(), "A unique four-letter wubi code was not reported as one.");
+            require(unique.wubi_four_code_is_complete(), "A complete wubi code was not reported as complete.");
+
+            InputSession recoded(SchemeType::Wubi, GetXiaoheShuangpinProfile(), paths_for(resources, root, next()));
+            recoded.set_wubi_input_options(WubiInputOptions{false});
+            require(type(recoded, "wqab").size() == 2, "The fixture did not recode wqab.");
+            require(!recoded.wubi_unique_four_code(), "A recoded four-letter wubi code was called unique.");
+            // Completeness is deliberately not uniqueness: the recoded code still commits its first
+            // candidate when the user types past the fourth letter instead of losing that letter.
+            require(recoded.wubi_four_code_is_complete(),
+                    "A recoded four-letter wubi code was not reported as complete.");
+
+            InputSession short_code(SchemeType::Wubi, GetXiaoheShuangpinProfile(), paths_for(resources, root, next()));
+            short_code.set_wubi_input_options(WubiInputOptions{false});
+            type(short_code, "wq");
+            require(!short_code.wubi_unique_four_code(), "A two-letter code was called a complete wubi code.");
+            require(!short_code.wubi_four_code_is_complete(),
+                    "A two-letter code was reported as a complete wubi code.");
+
+            // The fixture gives xiao exactly one quanpin candidate, so candidate count alone would
+            // call it unique: the pinyin-fallback guard has to reject it on its own.
+            InputSession fallback(SchemeType::Wubi, GetXiaoheShuangpinProfile(), paths_for(resources, root, next()));
+            fallback.set_wubi_input_options(WubiInputOptions{true});
+            const auto fallback_candidates = type(fallback, "xiao");
+            require(fallback_candidates.size() == 1, "The fixture did not answer xiao with one candidate.");
+            require(fallback.answered_by_pinyin_fallback(), "xiao was not answered by the pinyin fallback.");
+            require(!fallback.wubi_unique_four_code(), "A pinyin-fallback answer was called a unique wubi code.");
+            require(!fallback.wubi_four_code_is_complete(),
+                    "A pinyin-fallback answer was reported as a complete wubi code.");
+
+            InputSession long_spelling(SchemeType::Wubi, GetXiaoheShuangpinProfile(),
+                                       paths_for(resources, root, next()));
+            long_spelling.set_wubi_input_options(WubiInputOptions{true});
+            type(long_spelling, "nihao");
+            require(!long_spelling.wubi_unique_four_code(), "A mixed-input spelling was called a complete code.");
+            require(!long_spelling.wubi_four_code_is_complete(),
+                    "A mixed-input spelling was reported as a complete code.");
+
+            // Four letters no table row matched: the table did not answer, so there is no candidate
+            // to commit and the code is not complete in the "answered by the table" sense.
+            InputSession unknown_code(SchemeType::Wubi, GetXiaoheShuangpinProfile(),
+                                      paths_for(resources, root, next()));
+            unknown_code.set_wubi_input_options(WubiInputOptions{false});
+            type(unknown_code, "wqac");
+            require(!unknown_code.wubi_four_code_is_complete(),
+                    "A four-letter code with no table candidate was reported as complete.");
         }
 
         // z is not a wubi letter. Dropping it does not refuse a spelling, it silently becomes a

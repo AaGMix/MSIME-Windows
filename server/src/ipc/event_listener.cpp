@@ -759,6 +759,10 @@ void AppendAiContext(const std::string &committed_word)
             ++cut;
         g_ai_context.erase(0, cut);
     }
+    // 同一份上屏历史也是神经整句重排的前文（青简那边叫 InputHistory）：下一次查询会随
+    // QueryRequest 下发到词典层。词典层自己按 RerankOptions::context_chars 取末尾若干字。
+    if (g_inputSession)
+        g_inputSession->set_rescoring_context(g_ai_context);
 }
 
 std::wstring BuildCreateWordPipePayload(const std::string &remaining_raw_input_with_cases,
@@ -771,6 +775,24 @@ std::wstring BuildCreateWordPipePayload(const std::string &remaining_raw_input_w
     const std::wstring word = string_to_wstring(CandidateTextForOutput(current_word));
     const std::wstring preedit = word + string_to_wstring(GlobalIme::composition.segmented_pinyin);
     return remaining + L'\t' + word + L'\t' + preedit;
+}
+
+// NeedToCreateWord 带光标变体。可选第 4 字段（offset into remaining_raw）必须以
+// CompositionRestore 协商为前提：旧 DLL 的解析器把第 2 个 '\t' 之后的尾部整个当
+// display_preedit，未协商时追加会污染 inline preedit（AC8），此时帧与旧 Server 的
+// plain builder 字节一致。协商侧前缀选词结算后光标归后缀首（0），必须显式携带，
+// 否则 DLL 按省略语义把光标镜到末尾。串尾造词流 caret 恒在末尾，不带字段。
+std::wstring BuildCreateWordPipePayloadWithCaret(bool client_supports_restore,
+                                                 const std::string &remaining_raw_input_with_cases,
+                                                 const std::string &current_word)
+{
+    std::wstring payload = BuildCreateWordPipePayload(remaining_raw_input_with_cases, current_word);
+    if (FanyImeIpc::ShouldCreateWordFrameCarryCaret(client_supports_restore, GlobalIme::composition.caret_position,
+                                                    remaining_raw_input_with_cases.size()))
+    {
+        payload += L'\t' + std::to_wstring(GlobalIme::composition.caret_position);
+    }
+    return payload;
 }
 
 // 日语模式由配置项决定，和 R 模式（中文里临时切日语）无关：TSF 侧只能看到配置，
@@ -913,25 +935,6 @@ bool IsCandidateNavigationKey(UINT keycode)
            keycode == VK_NEXT || keycode == VK_UP || keycode == VK_DOWN;
 }
 
-// Retract the last selected segment of the word being created. The engine raw
-// returns to the spelling that segment consumed, the accumulated word returns to
-// its pre-selection state, and candidates are rebuilt for the restored raw. The
-// caller must have verified that a snapshot exists.
-bool RetreatCreatingWordSelection()
-{
-    auto &composition = GlobalIme::composition;
-    if (!composition.restore_last_selection())
-    {
-        return false;
-    }
-
-    const std::string &restored_raw = composition.raw_input_with_cases;
-    g_inputSession->set_pinyin_sequence(restored_raw);
-    g_inputSession->set_pinyin_sequence_with_cases(restored_raw);
-    g_inputSession->recompute_candidates();
-    return true;
-}
-
 bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool client_supports_restore,
                              bool &composition_restored)
 {
@@ -943,6 +946,25 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
         composition.caret_position = raw.size();
     }
     composition.caret_position = (std::min)(composition.caret_position, raw.size());
+
+    // R2/R10：光标前缀重算总门控（与 Ctrl+Backspace / Ctrl+方向同一谓词族）。未协商、
+    // UILess、专用英文、特殊模式组合一律维持整串转换，光标只是显示层插入点。
+    const bool caret_resegmentation = FanyImeIpc::ShouldResegmentCompositionByCaret(
+        client_supports_restore, IsUiLessMode(), g_english_input_mode, IsSpecialModeCompositionActive(raw));
+    // 箭头与 Ctrl+方向路径不改 raw、没有 pending 序列，喂完光标重解一次即可。串尾
+    // 也必须显式喂：引擎 caret_ 只在 set_pinyin_sequence 触发的 apply_pending_sequence
+    // 里复位，箭头路径绕过它——串尾不喂 nullopt（与 set_caret(size) 在量化边界上等
+    // 价）会残留上一次前缀激活的 caret_，候选停在旧前缀上、空格结算走错前缀路径（R7）。
+    const auto resegment_by_caret = [&]() {
+        if (!caret_resegmentation)
+        {
+            return;
+        }
+        g_inputSession->set_caret(composition.caret_position < raw.size()
+                                      ? std::optional<std::size_t>(composition.caret_position)
+                                      : std::nullopt);
+        g_inputSession->recompute_candidates();
+    };
 
     // Ctrl+Left / Ctrl+Right jump the caret by one segmentation unit instead of
     // one character, consuming the same engine boundaries Ctrl+Backspace
@@ -964,6 +986,7 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
                     keycode == VK_LEFT ? FanyImeIpc::PreviousSegmentBoundary(boundaries, composition.caret_position)
                                        : FanyImeIpc::NextSegmentBoundary(boundaries, composition.caret_position);
                 composition_restored = true;
+                resegment_by_caret();
                 return true;
             }
         }
@@ -978,6 +1001,7 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
         {
             ++composition.caret_position;
         }
+        resegment_by_caret();
         return true;
     }
 
@@ -1021,28 +1045,48 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
                 // segments stay on screen and the next Ctrl+Backspace drops one
                 // of them (R3).
                 keep_creating_word_after_empty_raw =
-                    raw.empty() && composition.creating_word.active && !composition.selection_history.empty();
+                    raw.empty() && FanyImeIpc::ShouldKeepCreatingWordAfterRawEmptied(
+                                       composition.creating_word.active, IsUiLessMode(), client_supports_restore,
+                                       composition.selection_history.size());
             }
         }
 
-        if (!composition_restored && FanyImeIpc::ShouldRetreatCreatingWordSelection(
-                                         composition.creating_word.active, IsUiLessMode(), client_supports_restore,
-                                         raw.size(), composition.caret_position, composition.selection_history.size()))
+        if (!composition_restored &&
+            FanyImeIpc::ShouldRetreatCreatingWordSelection(
+                composition.creating_word.active, IsUiLessMode(), client_supports_restore, raw.size(),
+                composition.selection_history.size(), composition.last_selection_raw_edited()))
         {
             // This Backspace must not also delete the character: the retraction
-            // removes the segment and restores its raw spelling instead.
-            composition_restored = RetreatCreatingWordSelection();
+            // removes the segment and restores its raw spelling instead. The
+            // restore is state only -- the engine sequence, its candidates and
+            // the restored-caret prefix are applied exactly once by the tail
+            // below, so nothing here may rebuild them; a helper that did cost
+            // a second full candidate query on every retraction.
+            composition_restored = composition.restore_last_selection();
             if (composition_restored)
             {
                 // The retraction already replaced the raw, the word and the
-                // caret; re-applying the pre-retraction raw would undo it.
-                return true;
+                // caret; the local copy must follow it so the tail below
+                // re-applies the restored sequence with its caret prefix
+                // recompute instead of clobbering it with the stale raw.
+                raw = composition.raw_input_with_cases;
             }
         }
         else if (!composition_restored && composition.caret_position > 0)
         {
             raw.erase(composition.caret_position - 1, 1);
             --composition.caret_position;
+            // Deleting the last raw character must not take the accumulated word
+            // down with it: the composition stays alive showing the selected
+            // segments alone -- the same R3 state a segment Backspace produces --
+            // and the reply below tells the client to keep composing instead of
+            // cancelling. The next Backspace then retracts the newest selection
+            // from that empty raw (the empty-raw override of the edit lock)
+            // rather than discarding everything the user picked.
+            keep_creating_word_after_empty_raw =
+                raw.empty() && FanyImeIpc::ShouldKeepCreatingWordAfterRawEmptied(
+                                   composition.creating_word.active, IsUiLessMode(), client_supports_restore,
+                                   composition.selection_history.size());
         }
     }
     else if (keycode == VK_DELETE)
@@ -1092,22 +1136,41 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
         }
         raw.insert(raw.begin() + static_cast<std::ptrdiff_t>(composition.caret_position), input);
         ++composition.caret_position;
+        // Typing locks the newest selection (Rime's selected_before_editing):
+        // Backspace must keep deleting these fresh characters instead of
+        // retracting the selection out from under them. Caret moves never reach
+        // here and deliberately do not lock.
+        composition.note_raw_inserted();
     }
 
     if (raw.empty() && !keep_creating_word_after_empty_raw)
     {
-        // TSF cancels the whole composition as soon as the last remaining
-        // character is gone, so the accumulated word and the snapshots a later
-        // Backspace could retract from must not survive here: they would let a
-        // fresh pinyin composition retract a segment of the previous one. A
-        // segment Backspace that emptied the raw keeps them on purpose (R3).
+        // Without a kept state, TSF cancels the whole composition as soon as the
+        // last remaining character is gone, so the accumulated word and the
+        // snapshots a later Backspace could retract from must not survive here:
+        // they would let a fresh pinyin composition retract a segment of the
+        // previous one. Both Backspaces that legitimately empty the raw keep them
+        // on purpose instead: the segment one through R3, the plain one because
+        // its reply tells the client to keep composing with the word alone.
         composition.clear_creating_word();
         composition.selection_history.clear();
     }
 
     g_inputSession->set_pinyin_sequence(raw);
     g_inputSession->set_pinyin_sequence_with_cases(raw);
-    g_inputSession->recompute_candidates();
+    if (caret_resegmentation && composition.caret_position < raw.size())
+    {
+        // apply_pending_sequence() 会复位引擎光标：先让新 raw 生效，再喂光标做前缀
+        // 重解（R2/R6）。caret 在串尾时不进这里，上一次 recompute 就是现状整串解码
+        // （R7 零回归）。
+        g_inputSession->recompute_candidates();
+        g_inputSession->set_caret(composition.caret_position);
+        g_inputSession->recompute_candidates();
+    }
+    else
+    {
+        g_inputSession->recompute_candidates();
+    }
     composition.raw_input_with_cases = raw;
     return true;
 }
@@ -1160,6 +1223,10 @@ std::string BuildCurrentCandidatePage()
                               (current_scheme == SchemeType::Quanpin && GetConfiguredQuanpinHelpcodeEnabled() &&
                                GetConfiguredShowQuanpinHelpcodeInCandidateWindow()));
 
+    // 组页时读一次徽标配置，循环内不再逐条查
+    const bool show_fixed_badge = GetConfiguredCandidateFixedBadge();
+    const std::string fixed_badge_style = GetConfiguredCandidateFixedBadgeStyle();
+
     const int start = ui.current_page_start();
     const int loop = ui.current_page_count();
 
@@ -1198,7 +1265,18 @@ std::string BuildCurrentCandidatePage()
             view.badge = " ☁️";
         else if (item.source == CandidateSource::AiSuggestion)
             view.badge = " 🤖";
+        // 整句来源标签与设置页名称保持一致，方便同时比较四个来源。两家选中同一句时只剩一行，
+        // 标签归先保留下来的来源；开启去重补位后，其余来源会改为显示自己的下一条不同结果。
+        else if (item.source == CandidateSource::Generated)
+            view.badge = " 〔Trigram〕";
+        else if (item.source == CandidateSource::Fallback)
+            view.badge = " 〔Unigram〕";
+        else if (item.source == CandidateSource::NeuralDesktop)
+            view.badge = " 〔神经D〕";
+        else if (item.source == CandidateSource::NeuralKeyboard)
+            view.badge = " 〔神经K〕";
         view.fixed_position = item.fixed_position > 0;
+        ApplyFixedPositionBadge(view, show_fixed_badge, fixed_badge_style);
         EnglishIme::TranslationQuery translation_query;
         if (!translation_page && BuildTranslationQuery(item, translation_query))
         {
@@ -1593,6 +1671,8 @@ enum class TaskType
     RefreshCandidatePage,
     ResetInputSessionCache,
     ExitEnglishInputMode,
+    // 神经整句重排在后台线程里算完了，候选顺序需要就地更新一次。
+    ApplyRescoredOrder,
 };
 
 struct Task
@@ -1778,6 +1858,44 @@ std::pair<std::string, std::string> RankingKeysForCandidate(const WordItem &item
 std::queue<Task> taskQueue;
 std::mutex queueMutex;
 
+// 顶字推送后的 HideCandidate 抑制标记：CommitCandidateAndContinue 会让 DLL 提交文本并
+// 结束旧组合，TSF 随之发来 HideCandidateWnd；若 HideCandidate 处理器照常 ClearState，
+// 会把服务端刚重建好的余码组合（如「数据」顶字后剩下的 x）抹掉，用户后续按键从空组合
+// 开始组词——这正是「顶字后 x 没进组词」的根因。所有值都只在 worker 线程读写。
+// 顶字与四码唯一自动上屏都会推送，每次推送成功记一笔、每个 HideCandidate 消费一笔；
+// 不能在下一个按键时撤销：快打时下一个字母常常先于 DLL 应用推送到达服务端，那时撤销
+// 标记，随后到来的 HideCandidateWnd 就会把余码清掉。推送被 DLL 丢弃（焦点/组合纪元已变）
+// 时不会有对应的 HideCandidateWnd，所以另设一个时限，过期的记账不再压制真正的清理。
+constexpr ULONGLONG kTopCommitHideSuppressMs = 1000;
+uint64_t g_topCommitRemainderClient = 0;
+uint64_t g_topCommitRemainderEpoch = 0;
+uint32_t g_topCommitPendingHides = 0;
+ULONGLONG g_topCommitLastPushMs = 0;
+
+void NoteTopCommitPushed(uint64_t client_id, uint64_t activation_epoch)
+{
+    if (client_id != g_topCommitRemainderClient || activation_epoch != g_topCommitRemainderEpoch)
+    {
+        g_topCommitPendingHides = 0;
+    }
+    g_topCommitRemainderClient = client_id;
+    g_topCommitRemainderEpoch = activation_epoch;
+    ++g_topCommitPendingHides;
+    g_topCommitLastPushMs = GetTickCount64();
+}
+
+// 消费一笔推送记账；返回这个 HideCandidate 是否对应一次仍在时限内的顶字/自动上屏推送。
+bool ConsumeTopCommitPendingHide(uint64_t client_id, uint64_t activation_epoch)
+{
+    if (g_topCommitPendingHides == 0 || client_id != g_topCommitRemainderClient ||
+        activation_epoch != g_topCommitRemainderEpoch)
+    {
+        return false;
+    }
+    --g_topCommitPendingHides;
+    return GetTickCount64() - g_topCommitLastPushMs <= kTopCommitHideSuppressMs;
+}
+
 void PrepareCandidateList(uint64_t client_id, uint64_t activation_epoch);
 void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t request_id);
 void ClearState();
@@ -1785,6 +1903,7 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
 void WaitForCandidateRenderSync(UINT keycode);
 void ApplyCloudCandidate(const std::string &candidate, const std::string &pinyin, uint64_t generation,
                          const std::optional<metasequoia::OnlineQuery> &query);
+void ApplyRescoredOrder();
 void ApplyAiCandidate(const std::string &candidate, const std::string &identity, uint64_t generation,
                       const std::optional<metasequoia::OnlineQuery> &query);
 void ApplyEnglishCandidates(std::vector<WordItem> candidates, const std::string &input, uint64_t generation);
@@ -1830,6 +1949,11 @@ void WorkerThread()
         {
             // Every task carrying an owner is rejected after a focus/session
             // transition, including UI-originated candidate actions.
+            // 这条丢弃无其他日志；排查丢键时先看这里（2026-09 曾疑似顶字丢键，探针证实
+            // 该路径并未触发，日志留作以后定位任务消失的入口）。
+            CAND_DIAG_LOGF(L"task stale-dropped type={} client={} task_epoch={} current_epoch={}",
+                           static_cast<int>(task.type), task.client_id, task.activation_epoch,
+                           GetActivePipeClient().epoch);
             continue;
         }
 
@@ -1863,6 +1987,13 @@ void WorkerThread()
             CAND_DIAG_LOGF(L"task ShowCandidate client={} epoch={} request={} caret=({},{}) input_units={}",
                            task.client_id, task.activation_epoch, task.pipe_data.request_id, Global::Point[0],
                            Global::Point[1], GlobalIme::composition.raw_input_with_cases.size());
+            if (FanyImeIpc::IsCaretPrefixEmpty(g_inputSession->prefix_end(),
+                                               g_inputSession->get_pinyin_sequence_with_cases().size()))
+            {
+                // R4：光标前缀为空时 DLL 的 Show 事件不得唤醒一个空候选窗。
+                HideCandidateWindowAndDropItems();
+                break;
+            }
             PrepareCandidateList(task.client_id, task.activation_epoch);
             RequestShowCandidateWindow();
             break;
@@ -1873,6 +2004,18 @@ void WorkerThread()
             const ULONGLONG queue_elapsed_ms = task.enqueued_at_ms == 0 ? 0 : GetTickCount64() - task.enqueued_at_ms;
             CAND_DIAG_LOGF(L"task HideCandidate client={} epoch={} request={} queued_ms={}", task.client_id,
                            task.activation_epoch, task.pipe_data.request_id, queue_elapsed_ms);
+            // 顶字/自动上屏推送引发的 TSF HideCandidateWnd：余码组合还活着，绝不能 ClearState，
+            // 否则用户刚敲下的那个字母就从服务端组合里消失了。无论组合是否为空都消费一笔记账，
+            // 组合为空（用户没有抢敲）时照常走下面的清理。
+            const bool pushed_hide = ConsumeTopCommitPendingHide(task.client_id, task.activation_epoch);
+            const bool top_commit_remainder_alive = pushed_hide && !g_inputSession->get_pinyin_sequence().empty();
+            if (top_commit_remainder_alive)
+            {
+                CAND_DIAG_LOGF(L"task HideCandidate suppressed (top-commit remainder alive) client={} epoch={}",
+                               task.client_id, task.activation_epoch);
+                RequestShowCandidateWindow();
+                break;
+            }
             // Only a hide this thread delivered late can belong to a keystroke the
             // user has already typed past — that is the one worth holding briefly,
             // because a show for a later keystroke is right behind it. A hide
@@ -1916,6 +2059,11 @@ void WorkerThread()
                 DIAG_LOGF(L"[key-latency] side=server stage=queue request={} client={} epoch={} elapsed_ms={}",
                           task.pipe_data.request_id, task.client_id, task.activation_epoch, queue_elapsed_ms);
             }
+            // 顶字后第 4 码丢失的定位探针：DLL 侧 keydown-sent 已确认发出，若这里没打出来，
+            // 说明任务根本没进队列（reader 未收到/未入队）；打出来了但组合没变，才是 HandleImeKey 内部问题。
+            CAND_DIAG_LOGF(L"task ImeKeyEvent dispatch request={} keycode=0x{:X} wch=U+{:04X} epoch={}",
+                           task.pipe_data.request_id, task.pipe_data.keycode, static_cast<unsigned>(task.pipe_data.wch),
+                           task.activation_epoch);
             HandleImeKey(task.client_id, task.activation_epoch, task.pipe_data.request_id);
             break;
         }
@@ -2370,6 +2518,11 @@ void WorkerThread()
             }
             break;
         }
+
+        case TaskType::ApplyRescoredOrder: {
+            ApplyRescoredOrder();
+            break;
+        }
         }
     }
 
@@ -2424,6 +2577,19 @@ void EnqueueCloudCandidate(const std::string &candidate, const std::string &piny
         task.online_query = origin.engine_query;
         task.client_id = origin.client_id;
         task.activation_epoch = origin.activation_epoch;
+        taskQueue.push(std::move(task));
+    }
+    pipe_queueCv.notify_one();
+}
+
+// 后台线程算完了一批整句重排。它不知道自己算的是不是当前这次输入——那要在任务线程上、拿着
+// g_inputSession 才判断得了——所以这里只负责把「去看一眼」排进队列，判断留给 ApplyRescoredOrder。
+void EnqueueRescoredCandidates()
+{
+    {
+        std::lock_guard lock(queueMutex);
+        Task task;
+        task.type = TaskType::ApplyRescoredOrder;
         taskQueue.push(std::move(task));
     }
     pipe_queueCv.notify_one();
@@ -3023,6 +3189,11 @@ void MainPipeClientThread(HANDLE clientPipe, uint64_t handlerId)
         switch (pipeData.event_type)
         {
         case FanyImePipeEventType::KeyEvent: {
+            // 与 worker 侧的 dispatch 探针配对：reader 收到键包即记，两边对照可把丢键
+            // 精确到「reader 未收到」还是「worker 未派发」。request_id 是 DLL 侧分配的，
+            // 可直接与 [msime][issue47] 的 keydown-sent request 对齐。
+            CAND_DIAG_LOGF(L"main-pipe KeyEvent received request={} keycode=0x{:X} wch=U+{:04X}", pipeData.request_id,
+                           pipeData.keycode, static_cast<unsigned>(pipeData.wch));
             EnqueueTask(TaskType::ImeKeyEvent, pipeData, activation.epoch);
             break;
         }
@@ -3697,7 +3868,11 @@ void PrepareCandidateList(uint64_t client_id, uint64_t activation_epoch)
             items.resize(24);
     }
 
-    if (items.empty() && !g_english_input_mode)
+    // R4：光标前缀为空时不造「整串假候选」——前缀为空就该没有候选（候选窗由调用方
+    // 收起）。caret 未设置时 prefix_end 等于串长，此分支永不触发，现状零差异。
+    if (items.empty() && !g_english_input_mode &&
+        !FanyImeIpc::IsCaretPrefixEmpty(g_inputSession->prefix_end(),
+                                        g_inputSession->get_pinyin_sequence_with_cases().size()))
     {
         items.emplace_back(pinyin, pinyin, 1, CandidateSource::Fallback);
     }
@@ -3822,6 +3997,53 @@ void ApplyCloudCandidate(const std::string &candidate, const std::string &pinyin
     Global::candidate_ui.select_first_on_page();
     Global::candidate_ui.clear_page();
     RefreshCandidatePageUi(true);
+}
+
+// 候选列表当初是按词格的静态顺序发出去的，因为打分那会儿还没算完。现在算完了：把引擎的候选缓存
+// 丢掉重查一次，这一次 quanpin::make_neural_reranker 能在结果表里查到顺序，整句就落到它该在的位
+// 置上。重查本身不碰模型，走的还是词格那条快路。
+//
+// 后台线程算的可能已经是上一次输入的了（用户没停手），所以这里不认「哪一批」，只看重查出来的词
+// 序有没有真的变：没变就一个字节都不动 UI。这既挡掉了过期结果，也挡掉了模型弃权的情况。
+void ApplyRescoredOrder()
+{
+    if (!g_inputSession || g_translation_candidates_active)
+        return;
+    // 造词界面和译文页各自占着 items，重排不该去动它们。
+    if (GlobalIme::composition.creating_word.active)
+        return;
+    if (Global::candidate_ui.items.empty())
+        return;
+    const FanyImeIpc::CandidateUiOwner owner = SnapshotCandidateUiOwner();
+    if (!owner || !IsPipeActivationCurrent(owner.client_id, owner.activation_epoch))
+        return;
+
+    const std::vector<WordItem> before = g_inputSession->get_candidates();
+    // 云/AI 候选只活在 series cache 里，reset_cache 会把它们一起清掉，而它们的请求早已回来、不会
+    // 再发一次——不补回来，重排一落地它们就从列表里消失了。重查不推进在线请求的 generation，
+    // 所以用当前的 online_query 原样回填即可；回填时若同一句已被整句候选占了，引擎自己会拒绝。
+    std::vector<WordItem> online_items;
+    std::copy_if(before.begin(), before.end(), std::back_inserter(online_items), [](const WordItem &item) {
+        return item.source == CandidateSource::CloudSuggestion || item.source == CandidateSource::AiSuggestion;
+    });
+    g_inputSession->reset_cache();
+    g_inputSession->recompute_candidates();
+    if (!online_items.empty())
+    {
+        if (const auto query = g_inputSession->online_query())
+        {
+            for (const WordItem &item : online_items)
+                g_inputSession->apply_online_candidate(*query, item.word, item.source);
+        }
+    }
+    const std::vector<WordItem> &after = g_inputSession->get_candidates();
+    if (after.size() == before.size() &&
+        std::equal(before.begin(), before.end(), after.begin(),
+                   [](const WordItem &a, const WordItem &b) { return a.word == b.word; }))
+        return;
+
+    PrepareCandidateList(owner.client_id, owner.activation_epoch);
+    RequestShowCandidateWindow();
 }
 
 void ApplyAiCandidate(const std::string &candidate, const std::string &identity, uint64_t generation,
@@ -4169,6 +4391,73 @@ void HandleTranslationCommitKey(uint64_t client_id, uint64_t activation_epoch, u
     SendCurrentDataToClient(client_id, activation_epoch, request_id);
 }
 
+// 真顶字与自动上屏的推送负载："<消费字符数>\t<上屏文本>"。TSF 拿这个数字裁自己的
+// 组合缓冲，所以服务端看到的是四码、用户已抢敲第五个字母时，第五个字母不会被旧快照覆盖。
+// 消费数就是五笔完整码的字母数（engine/schemes/wubi_scheme.h 的 kMaxCodeLength）。
+constexpr std::size_t kWubiCompleteCodeLength = 4;
+std::wstring BuildWubiCommitAndContinuePayload(const std::wstring &text)
+{
+    return std::to_wstring(kWubiCompleteCodeLength) + L"\t" + text;
+}
+
+// Bring the candidate page in step with the CompositionRestored frame just sent.
+// TSF applies that payload without touching its candidate presenter, so the page
+// on screen has to follow here -- and that covers every frame the reply branch
+// sends, not just the retraction: the unit Backspace deletion shortens the raw
+// and the Ctrl+arrow unit jump moves the caret prefix, and both would otherwise
+// leave the pre-key page (and its selection) on screen.
+//   - the raw is gone: nothing to show. The selected segments may still be on
+//     screen (a segment Backspace emptied the raw but kept the word), where TSF
+//     deliberately leaves its presenter alone because ending it would send
+//     HideCandidateWnd and reset this very composition; and a Backspace that
+//     ended the word must never fall through to a rebuild that would publish the
+//     empty-input fallback candidate;
+//   - the caret prefix is empty: hide too (R4, the same rule as the ShowCandidate
+//     task and the caret-arrow path);
+//   - otherwise rebuild from the engine -- the old page holds the pre-frame
+//     items -- and re-highlight the restored pick.
+void PublishRestoredCompositionCandidates(uint64_t client_id, uint64_t activation_epoch)
+{
+    // One-shot: consume it even when this outcome hides instead of rebuilding, so
+    // a position recorded on a page that no longer exists cannot leak into a
+    // later frame.
+    const GlobalIme::RestoredSelectionHighlight restored_highlight =
+        GlobalIme::composition.take_restored_selection_highlight();
+    if (GlobalIme::composition.raw_input_with_cases.empty())
+    {
+        HideCandidateWindowAndDropItems();
+        return;
+    }
+    if (FanyImeIpc::IsCaretPrefixEmpty(g_inputSession->prefix_end(),
+                                       g_inputSession->get_pinyin_sequence_with_cases().size()))
+    {
+        HideCandidateWindowAndDropItems();
+        return;
+    }
+
+    PrepareCandidateList(client_id, activation_epoch);
+    if (restored_highlight.absolute_index >= 0)
+    {
+        // A retraction re-highlights the item the user had picked on the rebuilt
+        // page: no frequency update ran during the creating word, so a page
+        // rebuilt for the same prefix still holds the same items in the same
+        // order. A page for another prefix (the suffix was edited between the
+        // pick and the retraction) does not, and the recorded position would land
+        // on an unrelated candidate -- apply it only after the prefixes match.
+        const std::string rebuilt_page_prefix = FanyImeIpc::NormalizeCandidatePagePrefix(
+            g_inputSession->get_pinyin_sequence_with_cases(), g_inputSession->prefix_end());
+        auto &ui = Global::candidate_ui;
+        if (rebuilt_page_prefix == restored_highlight.page_prefix && ui.item_total_count > 0 && ui.page_size > 0)
+        {
+            const int position = std::min(restored_highlight.absolute_index, ui.item_total_count - 1);
+            ui.page_index = position / ui.page_size;
+            ui.selected_index_in_page = position % ui.page_size;
+            RefreshCandidatePageUi(false);
+        }
+    }
+    RequestShowCandidateWindow();
+}
+
 /**
  * @brief
  *
@@ -4244,6 +4533,12 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
 
     const std::string input_before_key =
         g_inputSession ? g_inputSession->get_pinyin_sequence_with_cases() : std::string{};
+    // 顶字要的是「插入之前」的原始串长度与光标位置：ApplyCompositionEditKey 会把第五个字母插进
+    // 本地 raw 并把光标推到 5，之后再问就分不清「用户又敲了一个字母」和「本来就停在别处」。引擎
+    // 随后会把 raw 裁回四码，这个快照是唯一能区分两者的地方（raw_length_before_key == 4 且光标
+    // 在末尾 = 用户正在往后打，不是回来改码）。
+    const std::size_t raw_length_before_key = input_before_key.size();
+    const std::size_t caret_before_key = GlobalIme::composition.caret_position;
     const bool shift_only = (Global::ModifiersDown & 0b00000111u) == 0b00000001u;
     const bool chinese_scheme = g_inputSession && (g_inputSession->current_scheme_type() == SchemeType::Quanpin ||
                                                    g_inputSession->current_scheme_type() == SchemeType::Shuangpin);
@@ -4364,9 +4659,15 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     /* 先处理一下通用的按键，包括所有可能的按键，如普通的拼音字符按键、空格、Tab
      * 等等，然后再在下面处理其中的特殊的按键 */
     bool composition_restored = false;
-    const bool client_supports_restore =
-        (Global::Keycode == VK_BACK || Global::Keycode == VK_LEFT || Global::Keycode == VK_RIGHT) &&
-        ClientNegotiatedCompositionRestore(client_id);
+    // The client arms its Backspace reply hold from its own creating-word mirror,
+    // which mirrors the state before this key. Capture that shape here so the
+    // reply below can still answer a Backspace that ends the word (the post-key
+    // shape is gone by then, and the hold would otherwise burn its full timeout).
+    bool retreat_backspace_shape_before_key = false;
+    // 前缀重算让所有编辑键（含字母/Delete）都需要协商结果；段操作（Ctrl+Backspace /
+    // Ctrl+方向）的键位与修饰键条件仍由各自的 chord 判定把守，这里放宽键位限制不影
+    // 响它们。
+    const bool client_supports_restore = is_composition_edit_key && ClientNegotiatedCompositionRestore(client_id);
     const bool r_mode_prefix_backspace = g_r_mode_triggered && Global::Keycode == VK_BACK && input_before_key.empty();
     if (r_mode_prefix_backspace)
     {
@@ -4374,6 +4675,10 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     }
     else if (is_composition_edit_key && !r_mode_trigger_key)
     {
+        retreat_backspace_shape_before_key =
+            Global::Keycode == VK_BACK &&
+            FanyImeIpc::HasRetreatBackspaceShape(GlobalIme::composition.creating_word.active, IsUiLessMode(),
+                                                 client_supports_restore);
         ApplyCompositionEditKey(Global::Keycode, Global::Wch, Global::ModifiersDown, client_supports_restore,
                                 composition_restored);
     }
@@ -4436,6 +4741,122 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         // Keep preedit identical to the typed Y-prefixed English.
         GlobalIme::composition.segmented_pinyin = GlobalIme::composition.raw_input_with_cases;
     }
+
+    // 五笔四码唯一自动上屏：敲满四码且码表只给一个候选时，直接走与空格完全相同的提交路径，
+    // 用户不必再按一次空格。判定只发生在字母键插入之后（上面的 ApplyCompositionEditKey）：
+    // 退格、方向键、composition_restored 等路径都不会到这里，所以「打满第四键就上屏」只有
+    // 这一个入口。这是无条件行为，不读配置。
+    const bool letter_key = Global::Keycode >= 'A' && Global::Keycode <= 'Z';
+    if (!g_english_input_mode && letter_key &&
+        FanyImeIpc::ShouldAutoCommitCompleteWubiCode(g_inputSession->wubi_unique_four_code(),
+                                                     GlobalIme::composition.creating_word.active))
+    {
+        // 候选页是异步发布的：此刻 ui.items / ui.page_words 可能还停在第 3 码那一拍，而提交
+        // 路径读的正是这两份数据。先按当前组合同步重建一次，否则会把上一拍的候选上屏。
+        // forced_index_in_page = 0 让结算不进入渲染等待（与鼠标点击同类），自动上屏的语义
+        // 是「这个码只有一个候选」，必须显式取 0 而不是跟随页内选择。
+        PrepareCandidateList(client_id, activation_epoch);
+        Global::candidate_ui.select_first_on_page();
+        ProcessSelectionKey(VK_SPACE, client_id, activation_epoch, /*forced_index_in_page=*/0);
+        if (Global::MsgTypeToTsf == Global::DataFromServerMsgType::Normal)
+        {
+            // 真上屏只能靠 worker 管道推送：字母键在默认 raw 预编辑样式下不读请求-回复管道，
+            // 回一帧 Normal 既不会上屏，还会被 TSF 当成「不属于本次请求」的帧缓存起来，
+            // 而本函数返回前 Server 已经清掉组合，两边就此分叉。推送携带消费的 4 个字符，
+            // TSF 裁自己的缓冲；快打时用户已多敲的字母因此不会被旧快照覆盖。
+            if (SendToTsfWorkerThreadClientViaNamedpipe(
+                    client_id, activation_epoch,
+                    Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidateAndContinue,
+                    BuildWubiCommitAndContinuePayload(Global::candidate_ui.selected_text)))
+            {
+                ClearState();
+                // 推送同样会引来 HideCandidateWnd；用户若已抢敲下一个字母，那时服务端组合
+                // 就是这个字母，不能被这次 Hide 清掉。
+                NoteTopCommitPushed(client_id, activation_epoch);
+            }
+        }
+        // UILess 与 pinyin 预编辑样式会为字母键等一帧回复（上限 50ms）：给它们一帧免得空等；
+        // raw 样式不读回复，塞一帧反而变成死帧。
+        if (IsUiLessMode() || GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
+        {
+            SendCurrentDataToClient(client_id, activation_epoch, request_id);
+        }
+        return;
+    }
+
+    // 真顶字：完整四码（不论是否唯一）之后再敲一个字母时，先上屏该码的首选候选，再把这个字母
+    // 留作下一次组合的开头——用户已经在打下一个字，字母绝不能丢。它不看自动上屏开关：开关
+    // 只决定「唯一码要不要多敲一键才上屏」，不决定丢不丢输入。判定复用同一份引擎事实，
+    // 但不要求唯一；上屏取候选 0（首选），不进入 30ms 渲染等待。
+    if (!g_english_input_mode && letter_key && raw_length_before_key == kWubiCompleteCodeLength &&
+        caret_before_key == raw_length_before_key &&
+        FanyImeIpc::ShouldCommitCompleteWubiCodeOnNextKey(g_inputSession->wubi_four_code_is_complete(),
+                                                          /*key_is_letter=*/true, /*caret_at_end=*/true,
+                                                          GlobalIme::composition.creating_word.active))
+    {
+        PrepareCandidateList(client_id, activation_epoch);
+        Global::candidate_ui.select_first_on_page();
+        ProcessSelectionKey(VK_SPACE, client_id, activation_epoch, /*forced_index_in_page=*/0);
+        const std::wstring committed_text = Global::candidate_ui.selected_text;
+
+        // 用刚敲下的这个字母重建服务端组合。ProcessSelectionKey 已经把引擎与组合清空，这里
+        // 把字母写回去；引擎此刻的 raw 仍是被裁回的四码，所以必须显式设置而不是继续追加。
+        // 大小写照 ApplyCompositionEditKey 的同一套规则取，保持 preedit 与用户敲键一致。
+        char next_char = static_cast<char>(Global::Keycode + ('a' - 'A'));
+        if (Global::Wch >= L'A' && Global::Wch <= L'Z')
+        {
+            next_char = static_cast<char>(Global::Wch);
+        }
+        else if (Global::Wch >= L'a' && Global::Wch <= L'z')
+        {
+            next_char = static_cast<char>(Global::Wch);
+        }
+        const std::string next_raw(1, next_char);
+        GlobalIme::composition.clear_creating_word();
+        GlobalIme::composition.selection_history.clear();
+        g_inputSession->set_pinyin_sequence(next_raw);
+        g_inputSession->set_pinyin_sequence_with_cases(next_raw);
+        g_inputSession->recompute_candidates();
+        GlobalIme::composition.raw_input_with_cases = g_inputSession->get_pinyin_sequence_with_cases();
+        GlobalIme::composition.segmented_pinyin = g_inputSession->get_pinyin_segmentation_with_cases();
+        GlobalIme::composition.caret_position = GlobalIme::composition.raw_input_with_cases.size();
+        PrepareCandidateList(client_id, activation_epoch);
+        // 组合被提交时 TSF 会送 HideCandidateWnd 把候选窗藏起来；顶字重建的新组合必须
+        // 显式把窗口再请出来，否则后续整词的候选（xyyf 的统计）用户永远看不到。
+        RequestShowCandidateWindow();
+
+        // 推送与用户下一个按键是两条独立路径：TSF 裁的是它自己那一刻的缓冲，所以「服务端说
+        // 消费 4 个、TSF 手里已经有 5 个」时，第 5 个自然留下来继续组词。服务端的组合也正好
+        // 是同一批多出来的字母，两边都从同一条按键流派生，不会错位。不要 ClearState：重建的
+        // 组合正是下一次按键要用的状态。
+        if (Global::MsgTypeToTsf == Global::DataFromServerMsgType::Normal)
+        {
+            // 推送会让 DLL 结束旧组合，TSF 随之发来 HideCandidateWnd；标记本客户端的余码
+            // 组合仍然存活，HideCandidate 处理器据此跳过 ClearState。推送失败就不会有这次 Hide，
+            // 也就不记账。
+            if (SendToTsfWorkerThreadClientViaNamedpipe(
+                    client_id, activation_epoch,
+                    Global::DataFromServerMsgTypeToTsfWorkerThread::CommitCandidateAndContinue,
+                    BuildWubiCommitAndContinuePayload(committed_text)))
+            {
+                NoteTopCommitPushed(client_id, activation_epoch);
+            }
+        }
+        // UILess 与 pinyin 预编辑样式会为字母键等一帧回复（上限 50ms）。这里绝不能回 Normal
+        // （SendCurrentDataToClient 会 ClearState，把刚重建的组合再清掉），只能回渲染帧。
+        if (IsUiLessMode())
+        {
+            SendUiLessCompositionToClient(client_id, activation_epoch, request_id);
+        }
+        else if (GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
+        {
+            Global::MsgTypeToTsf = Global::DataFromServerMsgType::Preedit;
+            Global::candidate_ui.selected_text = GetPreedit();
+            SendCurrentDataToClient(client_id, activation_epoch, request_id);
+        }
+        return;
+    }
+
     //
     // 先判断要不要触发云联想
     // 判断依据：
@@ -4465,6 +4886,13 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         UpdateAiInput(ai_eligible ? g_inputSession->get_pinyin_segmentation() : std::string{}, client_id,
                       activation_epoch);
     }
+
+    // The shape the key leaves behind: a Backspace that keeps the creating word
+    // alive still owes the client's hold a frame even when nothing was restored
+    // (a plain deletion behind the edit lock, or a no-op).
+    const bool retreat_backspace_shape_after_key =
+        Global::Keycode == VK_BACK && FanyImeIpc::HasRetreatBackspaceShape(GlobalIme::composition.creating_word.active,
+                                                                           IsUiLessMode(), client_supports_restore);
 
     //
     // 普通的拼音字符，发送 preedit 到 TSF 端
@@ -4506,7 +4934,8 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
                 SendUiLessCompositionToClient(client_id, activation_epoch, request_id);
             }
         }
-        else if (composition_restored)
+        else if (FanyImeIpc::ShouldAnswerRetreatBackspace(composition_restored, retreat_backspace_shape_before_key,
+                                                          retreat_backspace_shape_after_key))
         {
             // Unlike an ordinary deletion, the retraction and the unit caret
             // jump are not mirrored by TSF on its own: for a deletion TSF
@@ -4514,19 +4943,26 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
             // it applies the caret field. It must therefore be sent in both
             // preedit styles, and the trailing caret field pins the
             // authoritative caret.
+            //
+            // Every Backspace the client may be holding for gets this frame --
+            // retreat, plain character deletion behind the edit lock, or a
+            // no-op behind an empty history: the DLL arms its hold from the
+            // creating-word mirror it saw before the key (word_for_creating_word),
+            // and without this frame the default raw preedit style would send no
+            // reply at all, burning the hold's full 50 ms timeout. The pre-key
+            // shape keeps that promise for the Backspace that deletes the last
+            // raw character and ends the word: the post-key shape is gone by
+            // then, while the client is still holding. The payload then
+            // describes the state the key left behind -- restored, unchanged, or
+            // one character shorter when the caret deletion in
+            // ApplyCompositionEditKey ran -- which is what the hold applies in
+            // every outcome. The candidate page follows it below.
             Global::MsgTypeToTsf = Global::DataFromServerMsgType::CompositionRestored;
             Global::candidate_ui.selected_text = BuildCreateWordPipePayload(GlobalIme::composition.raw_input_with_cases,
                                                                             GlobalIme::composition.creating_word.word) +
                                                  L'\t' + std::to_wstring(GlobalIme::composition.caret_position);
             SendCurrentDataToClient(client_id, activation_epoch, request_id);
-            if (GlobalIme::composition.raw_input_with_cases.empty() && GlobalIme::composition.creating_word.active)
-            {
-                // The raw spelling is gone but the selected segments are still
-                // on screen. TSF leaves its candidate presenter alone in this
-                // state (ending it would send HideCandidateWnd, which resets
-                // this very composition), so the window is taken down here.
-                HideCandidateWindowAndDropItems();
-            }
+            PublishRestoredCompositionCandidates(client_id, activation_epoch);
         }
         else if (GlobalSettings::getTsfPreeditStyle() == GlobalSettings::TsfPreeditStyle::Pinyin)
         {
@@ -4571,7 +5007,31 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         }
         else
         {
-            RefreshCandidatePageUi(true);
+            // R2/R4：前缀重算生效时光标移动会改变候选内容——前缀为空则收起候选窗，
+            // 其余（含移回串尾）一律从引擎重读重建页面。移回串尾时引擎已按整串重算，
+            // 但页面 items 还是旧前缀候选，只刷新页面会让那批旧候选参与结算（真机回归：
+            // ni'hao'ya 右移回串尾后空格只上屏「你好」+「ya」）。整串解码（未启用或未协商）
+            // 维持只刷新页面的现状（R7/AC8 零差异）。
+            const std::string caret_raw = g_inputSession->get_pinyin_sequence_with_cases();
+            const std::size_t prefix_end = g_inputSession->prefix_end();
+            const bool caret_resegmentation = FanyImeIpc::ShouldResegmentCompositionByCaret(
+                client_supports_restore, IsUiLessMode(), g_english_input_mode,
+                IsSpecialModeCompositionActive(caret_raw));
+            switch (FanyImeIpc::ResolveCaretArrowCandidatePublish(caret_resegmentation, prefix_end, caret_raw.size()))
+            {
+            case FanyImeIpc::CaretArrowCandidatePublish::Hide:
+                HideCandidateWindowAndDropItems();
+                break;
+            case FanyImeIpc::CaretArrowCandidatePublish::RebuildFromEngine:
+                // 窗口可能因之前的前缀为空状态被收起（单音节后缀从 caret=0 右移两次），
+                // 必须显式请求显示；PrepareCandidateList 末尾自带 RefreshCandidatePageUi(false)。
+                PrepareCandidateList(client_id, activation_epoch);
+                RequestShowCandidateWindow();
+                break;
+            case FanyImeIpc::CaretArrowCandidatePublish::RefreshPageOnly:
+                RefreshCandidatePageUi(true);
+                break;
+            }
         }
     }
     else if (IsCandidateNavigationKey(Global::Keycode) && !is_unicode_plus)
@@ -4952,8 +5412,26 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
         }
         // 这次选择之前是否已经在造词。下面的造词收尾会清掉这个标志，之后就问不出来了。
         const bool was_creating_word = GlobalIme::composition.creating_word.active;
+        // R5 前缀选词：候选来自光标前缀时，advance 消耗的正是前缀本身，剩余 raw 就是
+        // 后缀。必须在 advance 之前判定（advance 会缩短 raw）；结算把会话光标复位为
+        // 「后缀整串转换」（nullopt），组合态光标归后缀首，之后由编辑键按新光标重新
+        // 接管前缀语义。该状态只可能由门控内的编辑键产生（未协商/UILess 的光标从不
+        // 进会话），因此无需重复门控。云/英文/表情等特殊候选在上方提前返回，不会进入
+        // 这里。
+        // 用户眼前这一页的身份也取在 advance 之前：撤销重建的页面只有前缀一致时才
+        // 装着同一批候选，记录的位置才有意义。
+        const std::string selection_page_prefix = FanyImeIpc::NormalizeCandidatePagePrefix(
+            g_inputSession->get_pinyin_sequence_with_cases(), g_inputSession->prefix_end());
+        const bool caret_prefix_selection =
+            g_inputSession->prefix_end() < g_inputSession->get_pinyin_sequence_with_cases().size();
         auto selection_transition =
             g_inputSession->advance_composition_after_selection(curWordPinyin, curWord, curWordItem.canonical_pinyin);
+        if (caret_prefix_selection)
+        {
+            g_inputSession->set_caret(std::nullopt);
+            g_inputSession->recompute_candidates();
+            GlobalIme::composition.caret_position = 0;
+        }
         // A cloud suggestion is an already-composed result returned for the
         // current query.  It must commit as one candidate even when the
         // returned query spelling is shorter than the raw input (for example
@@ -4967,8 +5445,13 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
             // Snapshot the state the user is leaving before this selection
             // overwrites it. The engine's current raw cannot serve as the
             // snapshot: it still contains the remaining suffix, which the user
-            // may delete before asking to retract this segment.
-            GlobalIme::composition.push_selection_snapshot(selection_transition.consumed_raw_input_with_cases);
+            // may delete before asking to retract this segment. The picked
+            // candidate position travels with it, together with the page prefix
+            // it was recorded on, so a retraction can put that item back under
+            // the highlight.
+            GlobalIme::composition.push_selection_snapshot(selection_transition.consumed_raw_input_with_cases,
+                                                           Global::candidate_ui.page_index * page_size + index,
+                                                           selection_page_prefix);
             /* 打开造词开关 */
             GlobalIme::composition.creating_word.active = true;
             Global::MsgTypeToTsf = Global::DataFromServerMsgType::NeedToCreateWord;
@@ -4990,8 +5473,9 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
             GlobalIme::composition.creating_word.word = creating_word_progress.word;
             GlobalIme::composition.creating_word.preedit = creating_word_progress.preedit;
             /* 更新一下中间态的造词时 tsf 端所需的数据 */
-            Global::candidate_ui.selected_text = BuildCreateWordPipePayload(
-                g_inputSession->get_pinyin_sequence_with_cases(), GlobalIme::composition.creating_word.word);
+            Global::candidate_ui.selected_text = BuildCreateWordPipePayloadWithCaret(
+                ClientNegotiatedCompositionRestore(client_id), g_inputSession->get_pinyin_sequence_with_cases(),
+                GlobalIme::composition.creating_word.word);
             if (creating_word_progress.completed)
             { /* 最终的造词 */
 #ifdef FANY_DEBUG
@@ -5059,6 +5543,11 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
         }
         else
         {
+            // 组合继续时同步剩余 raw。HandleImeKey 在选词之前就写过它，不同步的话下一次
+            // 编辑键里「raw 变了且 caret==0 → 光标移到串尾」的判定会误触发：前缀选词后
+            // caret 已按造词帧的 caret 字段归 0，DLL 光标停在后缀首，Server 却跳到串尾，
+            // 之后的插入与移动两侧分叉。
+            GlobalIme::composition.raw_input_with_cases = g_inputSession->get_pinyin_sequence_with_cases();
             /* TODO: 这里到 main 线程的时候，可能下面的那个清理状态的操作已经执行了，因此，这里可能会导致 string
              * 越界的问题 */
             RequestShowCandidateWindow();

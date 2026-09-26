@@ -59,6 +59,23 @@ cloud_candidates = true
 clean_mode = false
 
 #
+# 整句联想：多音节输入时把整串拼音解码成一句，四个来源各一个开关，另有去重补位开关，默认全关，
+# 打开后才会在候选里出现对应整句。词格/Google 是传统 ngram 来源；神经两档是
+# chinese-ime-lm 的 Transformer，还需模型文件在数据目录里，desktop 更准也更慢。
+#
+[association]
+# 词格整句联想（kenlm 三元模型打分）
+sentence_wordlattice = false
+# Google 解码器整句联想
+sentence_google = false
+# 神经网络模型整句（效果优先 / desktop）：内部生成最多 12 条 Trigram 备选并挑选，不依赖 sentence_wordlattice 开关
+sentence_neural_desktop = false
+# 神经网络模型整句（速度优先 / keyboard）：同上；与 desktop 同时开启时各自独立给出结果
+sentence_neural_keyboard = false
+# 某个模型的首选与已有候选重复时，改为显示该模型排名最高的下一条不同结果
+sentence_show_next_on_duplicate = false
+
+#
 # 腾讯云机器翻译（竖排候选项本地词库未命中时的补全）
 #
 [tencent_tmt]
@@ -141,6 +158,10 @@ candidate_skin = "willow_green"
 #   pinyin -> 显示分词预编辑（与候选框当前行为一致）
 #   empty  -> 隐藏顶部预编辑行
 candidate_window_preedit_style = "pinyin"
+# 固定排位候选词是否显示徽标
+candidate_fixed_badge = true
+# 固定排位候选词徽标样式，可选："paperclip", "pushpin", "dot"
+candidate_fixed_badge_style = "paperclip"
 # TSF 行内预编辑样式，可选："raw", "pinyin", "empty"
 #   raw    -> 原始按键序列
 #   pinyin -> 分词后的拼音序列（Server 回包 Preedit）
@@ -198,7 +219,7 @@ shuangpin_preedit_mode = "shuangpin"
 # 双拼方案，可选："xiaohe", "ziranma", "shoudao", "microsoft"
 # shuangpin_schema = "xiaohe"
 shuangpin_schema = "xiaohe"
-# 五笔方案，可选："wubi86", "wubi98"
+# 五笔方案，当前仅支持 "wubi86"；98 版待词库发布后另开任务接线
 wubi_schema = "wubi86"
 # 日语方案，当前支持："romaji"
 japanese_schema = "romaji"

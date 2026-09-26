@@ -5,6 +5,7 @@
 #include "../schemes/japanese_romaji_scheme.h"
 #include "../quanpin/quanpin_utils.h"
 #include "../shuangpin/shuangpin_query.h"
+#include <algorithm>
 #include <stdexcept>
 
 namespace
@@ -187,6 +188,23 @@ int ImeSession::cache_dynamic_candidate(const std::string &pinyin, const std::st
     return provider_registry_.cache_dynamic_candidate(current_scheme_type(), pinyin, word, source);
 }
 
+std::vector<WordItem> ImeSession::query_raw_candidates(const std::string &raw_input,
+                                                       const std::string &raw_input_with_cases)
+{
+    // A throwaway scheme instance: set_raw_input on the live scheme would clobber its key
+    // strokes, and a prefix query must leave the composition exactly as it found it.
+    const std::unique_ptr<IInputScheme> query_scheme = create_scheme(scheme_->type());
+    query_scheme->set_raw_input(raw_input, raw_input_with_cases);
+    QueryRequest request = query_scheme->build_request();
+    apply_request_options(request);
+    ApplyShuangpinHelpcodeSegmentation(request, shuangpin_profile_);
+    if (!request.valid)
+    {
+        return {};
+    }
+    return provider_registry_.resolve(request.scheme).query(request);
+}
+
 void ImeSession::replace_japanese_raw_input(const std::string &raw_input, const std::string &raw_input_with_cases)
 {
     if (scheme_->type() != SchemeType::JapaneseRomaji)
@@ -262,17 +280,23 @@ bool ImeSession::expand_initial_candidates()
     return provider_registry_.expand_initial_candidates(state_.request, state_.candidates);
 }
 
+void ImeSession::apply_request_options(QueryRequest &request) const
+{
+    request.enable_shuangpin_helpcode = enable_shuangpin_helpcode_;
+    request.enable_quanpin_helpcode = enable_quanpin_helpcode_;
+    request.enable_quanpin_autocorrect_transposition =
+        (quanpin_autocorrect_types_ & quanpin::kAutocorrectTransposition) != 0;
+    request.enable_quanpin_autocorrect_neighbor = (quanpin_autocorrect_types_ & quanpin::kAutocorrectNeighbor) != 0;
+    request.fuzzy_pinyin = fuzzy_pinyin_;
+    request.sentence_association = sentence_association_;
+    request.rescoring_context = rescoring_context_;
+}
+
 void ImeSession::refresh_candidates()
 {
     state_.preedit = scheme_->get_preedit();
     state_.request = scheme_->build_request();
-    state_.request.enable_shuangpin_helpcode = enable_shuangpin_helpcode_;
-    state_.request.enable_quanpin_helpcode = enable_quanpin_helpcode_;
-    state_.request.enable_quanpin_autocorrect_transposition =
-        (quanpin_autocorrect_types_ & quanpin::kAutocorrectTransposition) != 0;
-    state_.request.enable_quanpin_autocorrect_neighbor =
-        (quanpin_autocorrect_types_ & quanpin::kAutocorrectNeighbor) != 0;
-    state_.request.fuzzy_pinyin = fuzzy_pinyin_;
+    apply_request_options(state_.request);
     ApplyShuangpinHelpcodeSegmentation(state_.request, shuangpin_profile_);
 
     state_.answered_by_pinyin_fallback = false;
@@ -289,7 +313,13 @@ void ImeSession::refresh_candidates()
     }
 
     state_.candidates = provider_registry_.resolve(state_.request.scheme).query(state_.request);
-    const bool wubi_table_answered = !state_.candidates.empty() && !composition_uses_pinyin_fallback_;
+    // The wubi provider also returns longer codes that start with the input (per-key hints), and a
+    // one-to-three letter prefix almost always has some. Only a row for exactly this code means the
+    // table answered it; hints alone must not keep mixed input from offering pinyin.
+    const bool wubi_table_answered =
+        !composition_uses_pinyin_fallback_ &&
+        std::any_of(state_.candidates.begin(), state_.candidates.end(),
+                    [this](const WordItem &item) { return item.pinyin == state_.request.normalized_input; });
 
     if (wubi_scheme_ != nullptr)
     {
@@ -306,19 +336,20 @@ void ImeSession::refresh_candidates()
         QuanpinScheme pinyin;
         pinyin.set_raw_input(state_.request.raw_input, state_.request.raw_input_with_cases);
         QueryRequest fallback = pinyin.build_request();
-        fallback.enable_quanpin_helpcode = enable_quanpin_helpcode_;
-        fallback.enable_quanpin_autocorrect_transposition =
-            (quanpin_autocorrect_types_ & quanpin::kAutocorrectTransposition) != 0;
-        fallback.enable_quanpin_autocorrect_neighbor =
-            (quanpin_autocorrect_types_ & quanpin::kAutocorrectNeighbor) != 0;
-        fallback.fuzzy_pinyin = fuzzy_pinyin_;
+        apply_request_options(fallback);
         // The same physical keys produced these letters, so the strokes carry over rather than
         // reaching the provider empty.
         fallback.key_strokes = state_.request.key_strokes;
         if (fallback.valid)
         {
-            state_.candidates = provider_registry_.resolve(fallback.scheme).query(fallback);
-            state_.answered_by_pinyin_fallback = !state_.candidates.empty();
+            // Pinyin that finds nothing leaves the wubi prefix hints in place instead of emptying them,
+            // unless pinyin already owns this composition: its rest must not switch back to wubi.
+            std::vector<WordItem> pinyin_candidates = provider_registry_.resolve(fallback.scheme).query(fallback);
+            state_.answered_by_pinyin_fallback = !pinyin_candidates.empty();
+            if (state_.answered_by_pinyin_fallback || composition_uses_pinyin_fallback_)
+            {
+                state_.candidates = std::move(pinyin_candidates);
+            }
             composition_uses_pinyin_fallback_ = composition_uses_pinyin_fallback_ || state_.answered_by_pinyin_fallback;
             if (state_.answered_by_pinyin_fallback)
             {

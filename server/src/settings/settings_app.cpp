@@ -376,6 +376,12 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
             {"paging_page_up_down", GetConfiguredPagingPageUpDownEnabled()},
             {"paging_mouse_wheel", GetConfiguredPagingMouseWheelEnabled()},
             {"candidate_arrow_navigation", GetConfiguredCandidateArrowNavigationEnabled()}}},
+          {"association",
+           {{"sentence_wordlattice", GetConfiguredAssocSentenceWordLattice()},
+            {"sentence_google", GetConfiguredAssocSentenceGoogle()},
+            {"sentence_neural_desktop", GetConfiguredAssocSentenceNeuralDesktop()},
+            {"sentence_neural_keyboard", GetConfiguredAssocSentenceNeuralKeyboard()},
+            {"sentence_show_next_on_duplicate", GetConfiguredAssocSentenceShowNextOnDuplicate()}}},
           {"keybindings",
            {{"switch_language_shift", GetConfiguredSwitchLanguageShiftEnabled()},
             {"switch_language_ctrl", GetConfiguredSwitchLanguageCtrlEnabled()},
@@ -401,6 +407,8 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
             {"candidate_window_follow_cursor", GetConfiguredCandidateWindowFollowCursor()},
             {"candidate_skin", GetConfiguredCandidateSkin()},
             {"candidate_window_preedit_style", GetConfiguredCandidateWindowPreeditStyle()},
+            {"candidate_fixed_badge", GetConfiguredCandidateFixedBadge()},
+            {"candidate_fixed_badge_style", GetConfiguredCandidateFixedBadgeStyle()},
             {"tsf_preedit_style", GetConfiguredTsfPreeditStyle()},
             {"theme_mode", GetConfiguredThemeMode()},
             {"theme_settings", GetConfiguredThemeSettings()},
@@ -616,6 +624,10 @@ bool ApplyConfigUpdate(const json::object &data)
         return SetConfiguredCandidateSkin(json::value_to<std::string>(data.at("value")));
     if (path == "appearance.candidate_window_preedit_style")
         return SetConfiguredCandidateWindowPreeditStyle(json::value_to<std::string>(data.at("value")));
+    if (path == "appearance.candidate_fixed_badge")
+        return SetConfiguredCandidateFixedBadge(json::value_to<bool>(data.at("value")));
+    if (path == "appearance.candidate_fixed_badge_style")
+        return SetConfiguredCandidateFixedBadgeStyle(json::value_to<std::string>(data.at("value")));
     if (path == "appearance.page_size")
         return SetConfiguredCandidatePageSize(static_cast<int>(data.at("value").as_int64()));
     if (path == "appearance.font")
@@ -687,6 +699,16 @@ bool ApplyConfigUpdate(const json::object &data)
         return SetConfiguredKaomojiMixedInputEnabled(json::value_to<bool>(data.at("value")));
     if (path == "general.cloud_candidates")
         return SetConfiguredCloudCandidatesEnabled(json::value_to<bool>(data.at("value")));
+    if (path == "association.sentence_wordlattice")
+        return SetConfiguredAssocSentenceWordLattice(json::value_to<bool>(data.at("value")));
+    if (path == "association.sentence_google")
+        return SetConfiguredAssocSentenceGoogle(json::value_to<bool>(data.at("value")));
+    if (path == "association.sentence_neural_desktop")
+        return SetConfiguredAssocSentenceNeuralDesktop(json::value_to<bool>(data.at("value")));
+    if (path == "association.sentence_neural_keyboard")
+        return SetConfiguredAssocSentenceNeuralKeyboard(json::value_to<bool>(data.at("value")));
+    if (path == "association.sentence_show_next_on_duplicate")
+        return SetConfiguredAssocSentenceShowNextOnDuplicate(json::value_to<bool>(data.at("value")));
     if (path == "utility.unicode_mode")
         return SetConfiguredUnicodeModeEnabled(json::value_to<bool>(data.at("value")));
     if (path == "utility.quick_phrase")

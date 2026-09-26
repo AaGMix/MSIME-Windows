@@ -3,6 +3,7 @@
 #include "composition_state.h"
 #include "input_session_types.h"
 #include "scheme_type.h"
+#include "sentence_association_options.h"
 #include "../providers/provider_registry.h"
 #include "../schemes/input_scheme.h"
 #include "../schemes/wubi_scheme.h"
@@ -25,6 +26,15 @@ class ImeSession
     {
         fuzzy_pinyin_ = options;
     }
+    void set_sentence_association(const SentenceAssociationOptions &options)
+    {
+        sentence_association_ = options;
+    }
+    // 本会话最近上屏的文本，随查询下发给神经重排当前文。
+    void set_rescoring_context(std::string context)
+    {
+        rescoring_context_ = std::move(context);
+    }
     void set_wubi_input_options(metasequoia::WubiInputOptions options);
     void replace_shuangpin_raw_input(const std::string &raw_input, const std::string &raw_input_with_cases);
     void replace_quanpin_raw_input(const std::string &raw_input, const std::string &raw_input_with_cases);
@@ -34,6 +44,12 @@ class ImeSession
     // has to shorten the live composition, and under the wubi fallback the pinyin-shaped
     // caller would otherwise address a scheme that is not the active one and be ignored.
     void replace_active_raw_input(const std::string &raw_input, const std::string &raw_input_with_cases);
+    // Runs one standalone candidate query for the given raw input without touching the live
+    // composition: the active scheme's raw/key strokes and state_'s request/candidates stay put.
+    // Query options (helpcode, autocorrect, fuzzy) match refresh_candidates exactly. The caret
+    // driven prefix decoding in InputSession uses this to decode a prefix while the composition
+    // still owns the full raw string.
+    std::vector<WordItem> query_raw_candidates(const std::string &raw_input, const std::string &raw_input_with_cases);
     void reset();
     void reset_cache();
     int create_word(std::string pinyin, std::string word);
@@ -51,6 +67,12 @@ class ImeSession
     {
         return state_.answered_by_pinyin_fallback;
     }
+    // Forwarded from the live wubi scheme so a session with no wubi scheme answers false. The
+    // composition knows whether its raw input is a full four-letter code; only the scheme holds it.
+    bool wubi_code_is_complete() const
+    {
+        return wubi_scheme_ != nullptr && wubi_scheme_->has_complete_code();
+    }
     const std::vector<WordItem> &get_candidates() const;
     bool expand_initial_candidates();
 
@@ -61,6 +83,9 @@ class ImeSession
     }
 
   private:
+    // Shared option injection for refresh_candidates() and query_raw_candidates(); the two must
+    // not drift or a prefix query would answer with different candidates than the live pipeline.
+    void apply_request_options(QueryRequest &request) const;
     void refresh_candidates();
     void bind_wubi_scheme();
     SchemeType candidate_scheme() const;
@@ -75,6 +100,8 @@ class ImeSession
     bool enable_quanpin_helpcode_ = false;
     unsigned quanpin_autocorrect_types_ = 0;
     metasequoia::FuzzyPinyinOptions fuzzy_pinyin_;
+    SentenceAssociationOptions sentence_association_;
+    std::string rescoring_context_;
     metasequoia::WubiInputOptions wubi_options_;
     // Resolved when the scheme changes rather than on every keystroke.
     WubiScheme *wubi_scheme_ = nullptr;

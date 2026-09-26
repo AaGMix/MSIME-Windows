@@ -12,7 +12,7 @@ class WubiScheme : public IInputScheme
     QueryRequest build_request() const override;
     std::string get_preedit() const override;
     SchemeType type() const override;
-    void set_raw_input(const std::string &raw_input, const std::string &raw_input_with_cases);
+    void set_raw_input(const std::string &raw_input, const std::string &raw_input_with_cases) override;
     // A wubi code is four letters, and a fifth is normally refused. Mixed input lifts that only
     // once the table has failed the code in hand, so a spelling long enough to need it -- nihao,
     // women, zhongguo -- can be finished. A code the table answers keeps the four-letter limit and
@@ -23,6 +23,14 @@ class WubiScheme : public IInputScheme
     // into a different one -- zhongguo would arrive as hongguo and zi as i. Unlike the length, this
     // follows the setting rather than the last query, since the letter can open a composition.
     void set_mixed_pinyin_allowed(bool allowed);
+    // A complete wubi code is the four letters the table is indexed by. Mixed input only lifts the
+    // length limit after the table has already failed the code in hand, so "complete" stays the
+    // fixed four letters rather than max_code_length() (32 while extended input is on): a longer
+    // spelling is a pinyin fallback and is never a complete wubi code.
+    bool has_complete_code() const
+    {
+        return raw_input_.size() == kMaxCodeLength;
+    }
 
   private:
     static constexpr size_t kMaxCodeLength = 4;

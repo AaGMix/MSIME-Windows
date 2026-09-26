@@ -124,6 +124,12 @@ bool g_english_candidates_enabled = false;
 bool g_candidate_translations_enabled = true;
 int g_english_mixed_input_min_chars = kEnglishMixedInputMinCharsDefault;
 bool g_cloud_candidates_enabled = true;
+// 整句候选来源与去重补位开关，默认全关。
+bool g_assoc_sentence_wordlattice = false;
+bool g_assoc_sentence_google = false;
+bool g_assoc_sentence_neural_desktop = false;
+bool g_assoc_sentence_neural_keyboard = false;
+bool g_assoc_sentence_show_next_on_duplicate = false;
 bool g_emoji_mixed_input_enabled = false;
 bool g_kaomoji_mixed_input_enabled = false;
 bool g_unicode_mode_enabled = true;
@@ -159,6 +165,8 @@ std::string g_ui_backend = "d2d";
 std::string g_ui_backend_active = "d2d";
 std::string g_candidate_skin = "fluent";
 std::string g_candidate_window_preedit_style = "pinyin";
+bool g_candidate_fixed_badge = true;
+std::string g_candidate_fixed_badge_style = "paperclip";
 std::string g_theme_mode = "system";
 std::string g_theme_settings = "follow";
 std::string g_theme_cand = "follow";
@@ -211,6 +219,13 @@ bool IsValidCandidateSkinId(const std::string &skin)
     return std::all_of(skin.begin(), skin.end(), [](unsigned char ch) {
         return std::islower(ch) || std::isdigit(ch) || ch == '.' || ch == '_' || ch == '-';
     });
+}
+
+// 固定排位徽标样式白名单。存枚举名而非字面 emoji：TOML/日志/diff 里不出现图形字符，
+// 日后新增样式只改这里和展示层的映射。
+bool IsValidCandidateFixedBadgeStyle(const std::string &style)
+{
+    return style == "paperclip" || style == "pushpin" || style == "dot";
 }
 
 const std::vector<std::string_view> &AiAssistantProviders()
@@ -1064,6 +1079,11 @@ bool LoadImeConfig()
                     : kEnglishMixedInputMinCharsDefault;
         }
         g_cloud_candidates_enabled = tbl["general"]["cloud_candidates"].value_or(true);
+        g_assoc_sentence_wordlattice = tbl["association"]["sentence_wordlattice"].value_or(false);
+        g_assoc_sentence_google = tbl["association"]["sentence_google"].value_or(false);
+        g_assoc_sentence_neural_desktop = tbl["association"]["sentence_neural_desktop"].value_or(false);
+        g_assoc_sentence_neural_keyboard = tbl["association"]["sentence_neural_keyboard"].value_or(false);
+        g_assoc_sentence_show_next_on_duplicate = tbl["association"]["sentence_show_next_on_duplicate"].value_or(false);
         g_emoji_mixed_input_enabled = tbl["general"]["emoji_mixed_input"].value_or(false);
         g_kaomoji_mixed_input_enabled = tbl["general"]["kaomoji_mixed_input"].value_or(false);
         g_unicode_mode_enabled = tbl["utility"]["unicode_mode"].value_or(true);
@@ -1162,6 +1182,13 @@ bool LoadImeConfig()
             const std::string preedit_style =
                 tbl["appearance"]["candidate_window_preedit_style"].value_or(std::string("pinyin"));
             g_candidate_window_preedit_style = preedit_style == "empty" ? "empty" : "pinyin";
+        }
+        g_candidate_fixed_badge = tbl["appearance"]["candidate_fixed_badge"].value_or(true);
+        {
+            // 非法样式一律回退到默认徽标，避免手改配置后出现无法删除的畸形标记
+            const std::string badge_style =
+                tbl["appearance"]["candidate_fixed_badge_style"].value_or(std::string("paperclip"));
+            g_candidate_fixed_badge_style = IsValidCandidateFixedBadgeStyle(badge_style) ? badge_style : "paperclip";
         }
         {
             const std::string theme_mode = tbl["appearance"]["theme_mode"].value_or(std::string("system"));
@@ -3101,6 +3128,40 @@ bool SetConfiguredCandidateWindowPreeditStyle(const std::string &style)
     return true;
 }
 
+bool GetConfiguredCandidateFixedBadge()
+{
+    return g_candidate_fixed_badge;
+}
+
+bool SetConfiguredCandidateFixedBadge(bool enabled)
+{
+    if (!WriteConfiguredValue("appearance", "candidate_fixed_badge", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_candidate_fixed_badge = enabled;
+    return true;
+}
+
+const std::string &GetConfiguredCandidateFixedBadgeStyle()
+{
+    return g_candidate_fixed_badge_style;
+}
+
+bool SetConfiguredCandidateFixedBadgeStyle(const std::string &style)
+{
+    if (!IsValidCandidateFixedBadgeStyle(style))
+    {
+        return false;
+    }
+    if (!WriteConfiguredValue("appearance", "candidate_fixed_badge_style", EscapeTomlBasicString(style)))
+    {
+        return false;
+    }
+    g_candidate_fixed_badge_style = style;
+    return true;
+}
+
 namespace
 {
 std::string NormalizeThemeMode(const std::string &mode)
@@ -3421,6 +3482,77 @@ bool SetConfiguredCloudCandidatesEnabled(bool enabled)
         return false;
     }
     g_cloud_candidates_enabled = enabled;
+    return true;
+}
+
+// 整句候选来源与去重补位开关的 getter / setter。写入 [association] 段，值域为布尔。
+bool GetConfiguredAssocSentenceWordLattice()
+{
+    return g_assoc_sentence_wordlattice;
+}
+bool SetConfiguredAssocSentenceWordLattice(bool enabled)
+{
+    if (!WriteConfiguredValue("association", "sentence_wordlattice", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_assoc_sentence_wordlattice = enabled;
+    return true;
+}
+
+bool GetConfiguredAssocSentenceGoogle()
+{
+    return g_assoc_sentence_google;
+}
+bool SetConfiguredAssocSentenceGoogle(bool enabled)
+{
+    if (!WriteConfiguredValue("association", "sentence_google", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_assoc_sentence_google = enabled;
+    return true;
+}
+
+bool GetConfiguredAssocSentenceNeuralDesktop()
+{
+    return g_assoc_sentence_neural_desktop;
+}
+bool SetConfiguredAssocSentenceNeuralDesktop(bool enabled)
+{
+    if (!WriteConfiguredValue("association", "sentence_neural_desktop", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_assoc_sentence_neural_desktop = enabled;
+    return true;
+}
+
+bool GetConfiguredAssocSentenceNeuralKeyboard()
+{
+    return g_assoc_sentence_neural_keyboard;
+}
+bool SetConfiguredAssocSentenceNeuralKeyboard(bool enabled)
+{
+    if (!WriteConfiguredValue("association", "sentence_neural_keyboard", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_assoc_sentence_neural_keyboard = enabled;
+    return true;
+}
+
+bool GetConfiguredAssocSentenceShowNextOnDuplicate()
+{
+    return g_assoc_sentence_show_next_on_duplicate;
+}
+bool SetConfiguredAssocSentenceShowNextOnDuplicate(bool enabled)
+{
+    if (!WriteConfiguredValue("association", "sentence_show_next_on_duplicate", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_assoc_sentence_show_next_on_duplicate = enabled;
     return true;
 }
 

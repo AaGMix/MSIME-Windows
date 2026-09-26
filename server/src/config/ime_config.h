@@ -281,6 +281,17 @@ bool GetConfiguredKaomojiMixedInputEnabled();
 bool SetConfiguredKaomojiMixedInputEnabled(bool enabled);
 bool GetConfiguredCloudCandidatesEnabled();
 bool SetConfiguredCloudCandidatesEnabled(bool enabled);
+// 整句候选来源与去重补位开关（[association] 段），默认全关。
+bool GetConfiguredAssocSentenceWordLattice();
+bool SetConfiguredAssocSentenceWordLattice(bool enabled);
+bool GetConfiguredAssocSentenceGoogle();
+bool SetConfiguredAssocSentenceGoogle(bool enabled);
+bool GetConfiguredAssocSentenceNeuralDesktop();
+bool SetConfiguredAssocSentenceNeuralDesktop(bool enabled);
+bool GetConfiguredAssocSentenceNeuralKeyboard();
+bool SetConfiguredAssocSentenceNeuralKeyboard(bool enabled);
+bool GetConfiguredAssocSentenceShowNextOnDuplicate();
+bool SetConfiguredAssocSentenceShowNextOnDuplicate(bool enabled);
 bool GetConfiguredUnicodeModeEnabled();
 bool SetConfiguredUnicodeModeEnabled(bool enabled);
 bool GetConfiguredQuickPhraseEnabled();
@@ -344,6 +355,11 @@ const std::string &GetConfiguredCandidateWindowLayout();
 bool SetConfiguredCandidateWindowLayout(const std::string &layout);
 bool GetConfiguredCandidateWindowFollowCursor();
 bool SetConfiguredCandidateWindowFollowCursor(bool enabled);
+// 固定排位候选词徽标：总开关 + 样式枚举（"paperclip" | "pushpin" | "dot"）。
+bool GetConfiguredCandidateFixedBadge();
+bool SetConfiguredCandidateFixedBadge(bool enabled);
+const std::string &GetConfiguredCandidateFixedBadgeStyle();
+bool SetConfiguredCandidateFixedBadgeStyle(const std::string &style);
 // "d2d" | "webview2" — candidate, floating toolbar, and tray menu renderer.
 // Changing this writes config immediately; the process snapshot does not switch
 // until the IME server is restarted.

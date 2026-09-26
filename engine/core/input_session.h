@@ -133,6 +133,19 @@ class InputSession
 
     void handle_engine_key(ImeKeyCode vk, ImeModifierMask modifiers_down, ImeCharacter wch);
     void recompute_candidates();
+    // Moves the caret without editing the raw string. nullopt = end of string (full-string
+    // decoding, the default). The value is clamped to [0, editing_text().size()]. Setting it
+    // only updates state; candidates re-decode by the new boundary on the next
+    // recompute_candidates() or key handling.
+    void set_caret(std::optional<std::size_t> caret);
+    // Raw length consumed by the current decode: the caret moved onto the last complete
+    // syllable-unit boundary at or before it (floor). The caret being unset, or a scheme
+    // without the unit model (segment_raw_boundaries() empty), decodes the whole string and
+    // this equals the raw length.
+    std::size_t prefix_end() const;
+    // raw[prefix_end, size) with its original casing: the pending input this decode did not
+    // consume. Empty unless the caret prefix is strictly shorter than the raw string.
+    std::string pending_suffix() const;
     SchemeType current_scheme_type() const;
 
     void reset_state();
@@ -160,6 +173,18 @@ class InputSession
     std::vector<std::size_t> segment_raw_boundaries() const;
     std::string get_quanpin() const;
     bool is_all_complete_pure_pinyin() const;
+    // The current composition is a complete four-letter wubi code answered by the wubi table with
+    // exactly one candidate. Hosts decide whether to auto-commit on this; the engine only reports
+    // the fact. A four-letter spelling answered by the pinyin fallback is deliberately not one:
+    // session.h's answered_by_pinyin_fallback comment explains that a code the table did not answer
+    // is not a unique wubi code, and committing it would take away the fifth letter mixed input
+    // exists to allow.
+    bool wubi_unique_four_code() const;
+    // The current composition is a complete four-letter wubi code the wubi table answered (not a
+    // pinyin fallback), regardless of how many candidates it has. Hosts use it to commit the first
+    // candidate when the user types past the fourth letter: a complete code that keeps growing must
+    // not silently swallow the extra letters. See wubi_unique_four_code for the uniqueness part.
+    bool wubi_four_code_is_complete() const;
     bool has_active_helpcode() const;
 
     void set_pinyin_sequence(const std::string &pinyin_sequence);
@@ -183,6 +208,14 @@ class InputSession
     void set_fuzzy_pinyin_options(metasequoia::FuzzyPinyinOptions options)
     {
         engine_.set_fuzzy_pinyin_options(options);
+    }
+    void set_sentence_association(const SentenceAssociationOptions &options)
+    {
+        engine_.set_sentence_association(options);
+    }
+    void set_rescoring_context(std::string context)
+    {
+        engine_.set_rescoring_context(std::move(context));
     }
     void set_chinese_punctuation_enabled(bool enabled)
     {
@@ -219,6 +252,18 @@ class InputSession
     KeyResult edit_at_caret(Command command);
     KeyResult replace_editing_text(std::string text, std::size_t caret);
     std::optional<std::size_t> caret_;
+    // Last complete unit boundary at or before the caret; only consumes segment_raw_boundaries()
+    // (segmentation contract #187). caret unset or no unit model yields the full raw length.
+    std::size_t quantized_prefix_end() const;
+    // Decodes the quantized caret prefix into prefix_candidates_ when it is strictly shorter
+    // than the raw string, caching by prefix so unchanged keystrokes skip the extra query.
+    void refresh_prefix_candidates();
+    std::vector<WordItem> prefix_candidates_;
+    // Lowercased prefix the cache was built from; also feeds mixed-candidate association so
+    // English/emoji suggestions follow the string being converted.
+    std::string prefix_query_input_;
+    // True while candidates()/mixed assembly must read prefix_candidates_ instead of engine_.
+    bool prefix_candidates_active_ = false;
     std::optional<std::string> update_local_candidates();
     void update_mixed_candidates();
     void apply_candidate_positions(std::vector<WordItem> &items);

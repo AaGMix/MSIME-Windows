@@ -134,6 +134,22 @@ int main()
                 "A replacement cloud candidate was rejected.");
         require(quanpin.candidates()[1].word == "呢" && !has_word(quanpin, "泥"),
                 "Replacing a cloud candidate left the previous cloud row visible.");
+        // 神经整句重排落地时宿主会 reset_cache + recompute 重查一次：云/AI 行只在 series cache 里，
+        // 会被一并清掉，宿主要拿当前 online_query 回填。重查不能推进请求 generation，否则回填会被拒。
+        quanpin.reset_cache();
+        quanpin.recompute_candidates();
+        require(!has_word(quanpin, "呢") && !has_word(quanpin, "拟"),
+                "reset_cache no longer drops online rows; the host re-apply in ApplyRescoredOrder is redundant.");
+        const auto recomputed_query = quanpin.online_query();
+        require(recomputed_query &&
+                    quanpin.apply_online_candidate(*recomputed_query, "呢", CandidateSource::CloudSuggestion) &&
+                    quanpin.apply_online_candidate(*recomputed_query, "拟", CandidateSource::AiSuggestion),
+                "Online rows could not be restored after a cache reset and recompute.");
+        require(quanpin.apply_online_candidate(*query, "尼", CandidateSource::CloudSuggestion),
+                "Recomputing candidates invalidated an in-flight online query.");
+        require(quanpin.apply_online_candidate(*query, "呢", CandidateSource::CloudSuggestion) &&
+                    quanpin.candidates()[1].word == "呢" && quanpin.candidates()[2].word == "拟",
+                "Restored online rows did not return to slots two and three.");
         const auto candidate_count = quanpin.candidates().size();
         require(!quanpin.apply_online_candidate(*query, "你", CandidateSource::CloudSuggestion) &&
                     quanpin.candidates().size() == candidate_count,

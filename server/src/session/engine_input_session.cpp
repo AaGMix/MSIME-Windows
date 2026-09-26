@@ -1,6 +1,7 @@
 #include "engine_input_session.h"
 #include "config/ime_config.h"
 #include "engine/common/helpcode_utils.h"
+#include "engine/core/sentence_association_options.h"
 #include "engine/quanpin/quanpin_utils.h"
 
 EngineInputSession::EngineInputSession(SchemeType scheme, const ShuangpinProfile &profile)
@@ -38,6 +39,14 @@ void EngineInputSession::ApplyConfiguration()
     // converted quanpin syllables for shuangpin. Re-read on every key so setting
     // changes take effect immediately.
     session_.set_fuzzy_pinyin_options(GetConfiguredFuzzyPinyinOptions());
+    // 整句候选来源与去重补位选项，每次击键重读，改设置立即生效。
+    SentenceAssociationOptions association;
+    association.word_lattice = GetConfiguredAssocSentenceWordLattice();
+    association.google = GetConfiguredAssocSentenceGoogle();
+    association.neural_desktop = GetConfiguredAssocSentenceNeuralDesktop();
+    association.neural_keyboard = GetConfiguredAssocSentenceNeuralKeyboard();
+    association.show_next_on_duplicate = GetConfiguredAssocSentenceShowNextOnDuplicate();
+    session_.set_sentence_association(association);
     session_.set_shuangpin_preedit_uses_raw(GetConfiguredShuangpinPreeditMode() == "shuangpin");
 }
 
@@ -129,9 +138,24 @@ bool EngineInputSession::is_all_complete_pure_pinyin() const
     return session_.is_all_complete_pure_pinyin();
 }
 
+bool EngineInputSession::wubi_unique_four_code() const
+{
+    return session_.wubi_unique_four_code();
+}
+
+bool EngineInputSession::wubi_four_code_is_complete() const
+{
+    return session_.wubi_four_code_is_complete();
+}
+
 bool EngineInputSession::has_active_helpcode() const
 {
     return session_.has_active_helpcode();
+}
+
+void EngineInputSession::set_rescoring_context(std::string context)
+{
+    return session_.set_rescoring_context(std::move(context));
 }
 
 void EngineInputSession::set_pinyin_sequence(const std::string &pinyin_sequence)
@@ -142,6 +166,21 @@ void EngineInputSession::set_pinyin_sequence(const std::string &pinyin_sequence)
 void EngineInputSession::set_pinyin_sequence_with_cases(const std::string &pinyin_sequence)
 {
     return session_.set_pinyin_sequence_with_cases(pinyin_sequence);
+}
+
+void EngineInputSession::set_caret(std::optional<std::size_t> caret)
+{
+    return session_.set_caret(caret);
+}
+
+std::size_t EngineInputSession::prefix_end() const
+{
+    return session_.prefix_end();
+}
+
+std::string EngineInputSession::pending_suffix() const
+{
+    return session_.pending_suffix();
 }
 
 int EngineInputSession::store_user_phrase(std::string pinyin, std::string word)

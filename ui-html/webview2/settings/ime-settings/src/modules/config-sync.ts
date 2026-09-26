@@ -55,6 +55,8 @@ function applyConfigData(data: Record<string, any>, target?: string): void {
           cand_text_color: data?.appearance?.cand_text_color,
           page_size: data?.appearance?.page_size,
           candidate_window_follow_cursor: data?.appearance?.candidate_window_follow_cursor,
+          candidate_fixed_badge: data?.appearance?.candidate_fixed_badge,
+          candidate_fixed_badge_style: data?.appearance?.candidate_fixed_badge_style,
           ui_backend: data?.appearance?.ui_backend,
           system_fonts: data?.appearance?.system_fonts
         }
@@ -183,6 +185,21 @@ function applyConfigData(data: Record<string, any>, target?: string): void {
   }
   if (typeof data?.general?.cloud_candidates === 'boolean') {
     applyToggleState('cloudCandidatesToggleBtn', data.general.cloud_candidates);
+  }
+  if (typeof data?.association?.sentence_wordlattice === 'boolean') {
+    applyToggleState('sentenceWordLatticeToggleBtn', data.association.sentence_wordlattice);
+  }
+  if (typeof data?.association?.sentence_google === 'boolean') {
+    applyToggleState('sentenceGoogleToggleBtn', data.association.sentence_google);
+  }
+  if (typeof data?.association?.sentence_neural_desktop === 'boolean') {
+    applyToggleState('sentenceNeuralDesktopToggleBtn', data.association.sentence_neural_desktop);
+  }
+  if (typeof data?.association?.sentence_neural_keyboard === 'boolean') {
+    applyToggleState('sentenceNeuralKeyboardToggleBtn', data.association.sentence_neural_keyboard);
+  }
+  if (typeof data?.association?.sentence_show_next_on_duplicate === 'boolean') {
+    applyToggleState('sentenceShowNextOnDuplicateToggleBtn', data.association.sentence_show_next_on_duplicate);
   }
   if (typeof data?.utility?.unicode_mode === 'boolean') {
     applyToggleState('unicodeModeToggleBtn', data.utility.unicode_mode);

@@ -345,6 +345,23 @@ export function setupInput(): void {
   setupToggleButton('cloudCandidatesToggleBtn', (active) => {
     updateConfig('general.cloud_candidates', active);
   });
+  // 四个整句来源和一个去重补位开关，默认全关。两个神经来源会自行在词格中生成最多 12 条
+  // 内部备选；补位打开后，某来源的首选重复时沿该来源自己的排名寻找下一条不同结果。
+  setupToggleButton('sentenceWordLatticeToggleBtn', (active) => {
+    updateConfig('association.sentence_wordlattice', active);
+  });
+  setupToggleButton('sentenceGoogleToggleBtn', (active) => {
+    updateConfig('association.sentence_google', active);
+  });
+  setupToggleButton('sentenceNeuralDesktopToggleBtn', (active) => {
+    updateConfig('association.sentence_neural_desktop', active);
+  });
+  setupToggleButton('sentenceNeuralKeyboardToggleBtn', (active) => {
+    updateConfig('association.sentence_neural_keyboard', active);
+  });
+  setupToggleButton('sentenceShowNextOnDuplicateToggleBtn', (active) => {
+    updateConfig('association.sentence_show_next_on_duplicate', active);
+  });
 }
 
 function setupFrequencyOptions(): void {

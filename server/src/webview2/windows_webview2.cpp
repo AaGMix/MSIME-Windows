@@ -3880,6 +3880,25 @@ HRESULT OnControllerCreatedSettingsWnd(            //
                                     PostSettingsConfig();
                                 }
                             }
+                            else if (path == "appearance.candidate_fixed_badge")
+                            {
+                                const bool value = json::value_to<bool>(data.at("value"));
+                                if (SetConfiguredCandidateFixedBadge(value))
+                                {
+                                    // 徽标在组页时拼进词条，不刷新的话要等下次上屏才看得见改动
+                                    FanyNamedPipe::EnqueueRefreshCandidatePageTask();
+                                    PostSettingsConfig();
+                                }
+                            }
+                            else if (path == "appearance.candidate_fixed_badge_style")
+                            {
+                                const std::string value = json::value_to<std::string>(data.at("value"));
+                                if (SetConfiguredCandidateFixedBadgeStyle(value))
+                                {
+                                    FanyNamedPipe::EnqueueRefreshCandidatePageTask();
+                                    PostSettingsConfig();
+                                }
+                            }
                             else if (path == "appearance.page_size")
                             {
                                 const int value = static_cast<int>(data.at("value").as_int64());
@@ -4288,6 +4307,46 @@ HRESULT OnControllerCreatedSettingsWnd(            //
                                     PostSettingsConfig();
                                 }
                             }
+                            else if (path == "association.sentence_wordlattice")
+                            {
+                                const bool value = json::value_to<bool>(data.at("value"));
+                                if (SetConfiguredAssocSentenceWordLattice(value))
+                                {
+                                    PostSettingsConfig();
+                                }
+                            }
+                            else if (path == "association.sentence_google")
+                            {
+                                const bool value = json::value_to<bool>(data.at("value"));
+                                if (SetConfiguredAssocSentenceGoogle(value))
+                                {
+                                    PostSettingsConfig();
+                                }
+                            }
+                            else if (path == "association.sentence_neural_desktop")
+                            {
+                                const bool value = json::value_to<bool>(data.at("value"));
+                                if (SetConfiguredAssocSentenceNeuralDesktop(value))
+                                {
+                                    PostSettingsConfig();
+                                }
+                            }
+                            else if (path == "association.sentence_neural_keyboard")
+                            {
+                                const bool value = json::value_to<bool>(data.at("value"));
+                                if (SetConfiguredAssocSentenceNeuralKeyboard(value))
+                                {
+                                    PostSettingsConfig();
+                                }
+                            }
+                            else if (path == "association.sentence_show_next_on_duplicate")
+                            {
+                                const bool value = json::value_to<bool>(data.at("value"));
+                                if (SetConfiguredAssocSentenceShowNextOnDuplicate(value))
+                                {
+                                    PostSettingsConfig();
+                                }
+                            }
                             else if (path == "utility.unicode_mode")
                             {
                                 const bool value = json::value_to<bool>(data.at("value"));
@@ -4659,6 +4718,12 @@ void PostSettingsConfig()
             {"paging_page_up_down", GetConfiguredPagingPageUpDownEnabled()},
             {"paging_mouse_wheel", GetConfiguredPagingMouseWheelEnabled()},
             {"candidate_arrow_navigation", GetConfiguredCandidateArrowNavigationEnabled()}}},
+          {"association",
+           {{"sentence_wordlattice", GetConfiguredAssocSentenceWordLattice()},
+            {"sentence_google", GetConfiguredAssocSentenceGoogle()},
+            {"sentence_neural_desktop", GetConfiguredAssocSentenceNeuralDesktop()},
+            {"sentence_neural_keyboard", GetConfiguredAssocSentenceNeuralKeyboard()},
+            {"sentence_show_next_on_duplicate", GetConfiguredAssocSentenceShowNextOnDuplicate()}}},
           {"keybindings",
            {{"switch_language_shift", GetConfiguredSwitchLanguageShiftEnabled()},
             {"switch_language_ctrl", GetConfiguredSwitchLanguageCtrlEnabled()},
@@ -4688,6 +4753,8 @@ void PostSettingsConfig()
             {"candidate_window_follow_cursor", GetConfiguredCandidateWindowFollowCursor()},
             {"candidate_skin", GetConfiguredCandidateSkin()},
             {"candidate_window_preedit_style", GetConfiguredCandidateWindowPreeditStyle()},
+            {"candidate_fixed_badge", GetConfiguredCandidateFixedBadge()},
+            {"candidate_fixed_badge_style", GetConfiguredCandidateFixedBadgeStyle()},
             {"tsf_preedit_style", GetConfiguredTsfPreeditStyle()},
             {"theme_mode", GetConfiguredThemeMode()},
             {"theme_settings", GetConfiguredThemeSettings()},

@@ -341,6 +341,10 @@ void InputSession::reset_cache()
     engine_.reset_cache();
     if (canonical_phrase_engine_)
         canonical_phrase_engine_->reset_cache();
+    // 前缀候选是按文本缓存的，不跟着引擎缓存失效：只清缓存键，让下一次
+    // refresh_prefix_candidates 按新权重/选项重查；保留当前列表，避免 caret
+    // 激活期间出现空候选窗。
+    prefix_query_input_.clear();
 }
 
 const std::vector<WordItem> &InputSession::get_candidates() const
@@ -449,6 +453,39 @@ bool InputSession::is_all_complete_pure_pinyin() const
     return !segmentation.empty() && quanpin::is_complete_pinyin_input(segmentation);
 }
 
+bool InputSession::wubi_unique_four_code() const
+{
+    // Both modes spell words rather than codes. No host sets either one on a wubi session today, so
+    // this pair is here for a future host that does, the same shape as the guard in
+    // create_position_context's neighbourhood (input_session.cpp:471).
+    if (dedicated_english_mode_ || local_input_mode_ != LocalInputMode::None)
+    {
+        return false;
+    }
+    // wubi_candidates_are_native() already covers "this is a wubi session", and
+    // engine_.wubi_code_is_complete() is false for every other scheme.
+    if (!wubi_candidates_are_native() || !engine_.wubi_code_is_complete())
+    {
+        return false;
+    }
+    // candidates() is the wubi table rows for this code plus any joined user dictionary entries, so
+    // size one is a genuinely unique code.
+    return candidates().size() == 1;
+}
+
+bool InputSession::wubi_four_code_is_complete() const
+{
+    // Same guards as wubi_unique_four_code minus the candidate count: hosts commit the first
+    // candidate on the next key whether or not the code has one candidate or many. The candidate
+    // list must not be empty: a four-letter spelling no table row matched was not answered by the
+    // table at all, and committing the raw fallback as text would be worse than leaving it.
+    if (dedicated_english_mode_ || local_input_mode_ != LocalInputMode::None)
+    {
+        return false;
+    }
+    return wubi_candidates_are_native() && engine_.wubi_code_is_complete() && !candidates().empty();
+}
+
 bool InputSession::has_active_helpcode() const
 {
     if (is_wubi() || is_japanese())
@@ -489,7 +526,8 @@ int InputSession::store_user_phrase_from_canonical_pinyin(std::string pinyin, st
     return canonical_phrase_engine_->create_word_from_canonical_pinyin(std::move(pinyin), std::move(word));
 }
 
-// 整句候选（词格 CandidateSource::Generated、Google 解码器 CandidateSource::Fallback）
+// 整句候选（词格 CandidateSource::Generated、Google 解码器 CandidateSource::Fallback、
+// 神经整句 NeuralDesktop / NeuralKeyboard）
 // 是猜出来的，词库里没有它那一行，所以调频对它无效：update_weight_by_pinyin_and_word
 // 改的是 SQLite 里已存在的行，找不到行就什么也不做，用户于是发现自己选多少次都提不上来。
 // 选中即落库才是对的处理：存成用户词组之后，下次同样的输入它以 UserDatabase 候选出现，

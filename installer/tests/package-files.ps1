@@ -37,6 +37,9 @@ try {
         'MetasequoiaImeDict/source/mozc_dictionary_oss/README.txt',
         'language-model/sc.lm',
         'language-model/NOTICE.md',
+        'neural-model/sentence-model-desktop.safetensors',
+        'neural-model/sentence-model.safetensors',
+        'neural-model/NOTICE.md',
         'ui-html/webview2/shared/runtime.js',
         'ui-html/webview2/candwnd/index.html',
         'ui-html/webview2/menu/index.html',
@@ -51,6 +54,8 @@ try {
     & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -TargetVersion '2026.9.1' -IncludeSymbols
     foreach ($file in @('app_data/html/webview2/shared/runtime.js', 'app_data/dictionary-manifest.json',
                          'app_data/sc.lm', 'app_data/libime-lm-NOTICE.md', 'app_data/dict_pinyin.dat',
+                         'app_data/sentence-model-desktop.safetensors', 'app_data/sentence-model.safetensors',
+                         'app_data/chinese-ime-lm-NOTICE.md',
                          'tsf_dll/32/MetasequoiaImeTsf.dll', 'tsf_dll/32/MetasequoiaImeTsf.pdb',
                          'tsf_dll/64/MetasequoiaImeTsf.dll', 'tsf_dll/64/MetasequoiaImeTsf.pdb',
                          'server_exe/MetasequoiaImeServer.pdb',
@@ -112,6 +117,13 @@ try {
     try { & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture } catch { $rejected = $_.Exception.Message -match 'dict_pinyin\.dat' }
     if (-not $rejected) { throw 'Missing pinyin decoder model was accepted' }
     [IO.File]::WriteAllText($pinyinModelFixture, 'fixture')
+    # 神经整句模型同理：缺文件时 shared_sentence_model 返回 nullptr，设置页开关能开但不出候选。
+    $neuralModelFixture = Join-Path $fixture 'neural-model/sentence-model-desktop.safetensors'
+    Remove-Item $neuralModelFixture -Force
+    $rejected = $false
+    try { & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture } catch { $rejected = $_.Exception.Message -match 'safetensors' }
+    if (-not $rejected) { throw 'Missing neural sentence model was accepted' }
+    [IO.File]::WriteAllText($neuralModelFixture, 'fixture')
     Remove-Item (Join-Path $fixture 'ui-html/webview2/shared') -Recurse -Force
     $rejected = $false
     try { & (Join-Path $installer 'Prepare-PackageFiles.ps1') -RepoRoot $fixture -TsfDirectory windows -ServerDirectory server -UiHtmlDirectory ui-html -NoticesDirectory . } catch { $rejected = $true }

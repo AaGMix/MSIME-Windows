@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <iterator>
 #include <limits>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -314,35 +316,176 @@ std::vector<LatticePath> decode_word_lattice(const Segments &syllables, const Wo
 
 void merge_lattice_candidates(std::vector<WordItem> &candidates, const Segments &syllables,
                               const WordLatticeLookup &lookup, const std::string &typed_pinyin,
-                              const WordLatticeOptions &options)
+                              const WordLatticeOptions &options, const std::vector<SourcedLatticeReranker> &rerankers)
 {
     if (!lookup || syllables.size() < 2)
         return;
     if (!has_only_complete_pinyin_segments(syllables))
         return;
 
-    const auto paths = decode_word_lattice(syllables, lookup, options);
+    auto paths = decode_word_lattice(syllables, lookup, options);
     if (paths.empty())
         return;
+
+    // n-best 是解码的中间产物，不是要给用户看的东西：整个 n-best 铺出来，候选区会被一批
+    // 只差一个字的整句占满。这里只留各来源的首选，n-best 的其余部分仅供重排挑选。
+    // 每个重排器都从相同的静态顺序开始，不能让前一个模型的结论变成后一个的输入。保留完整顺序，
+    // 这样首选与已有候选重复时可以从该来源自己的次选继续补位。
+    std::optional<std::vector<LatticePath>> desktop_paths;
+    std::optional<std::vector<LatticePath>> keyboard_paths;
+    std::vector<std::pair<std::vector<LatticePath>, CandidateSource>> other_ranked_sources;
+    bool keyboard_enabled = false;
+    for (const SourcedLatticeReranker &entry : rerankers)
+    {
+        if (entry.source == CandidateSource::NeuralKeyboard)
+            keyboard_enabled = true;
+
+        std::vector<LatticePath> reranked_paths = paths;
+        if (!entry.rerank || !entry.rerank(reranked_paths))
+            continue;
+
+        if (entry.source == CandidateSource::NeuralDesktop)
+            desktop_paths = std::move(reranked_paths);
+        else if (entry.source == CandidateSource::NeuralKeyboard)
+            keyboard_paths = std::move(reranked_paths);
+        else
+            other_ranked_sources.emplace_back(std::move(reranked_paths), entry.source);
+    }
+
+    const auto source_prefers = [](const std::optional<std::vector<LatticePath>> &ranked_paths,
+                                   const std::string &sentence) {
+        return ranked_paths && !ranked_paths->empty() && ranked_paths->front().sentence == sentence;
+    };
+    const auto unigram_position = std::find_if(candidates.begin(), candidates.end(), [](const WordItem &item) {
+        return item.source == CandidateSource::Fallback;
+    });
+    const bool unigram_consensus =
+        unigram_position != candidates.end() &&
+        ((options.include_lattice_best && paths.front().sentence == unigram_position->word) ||
+         source_prefers(keyboard_paths, unigram_position->word) ||
+         source_prefers(desktop_paths, unigram_position->word));
 
     std::unordered_set<std::string> already;
     for (const auto &item : candidates)
         already.insert(item.word);
 
-    std::vector<WordItem> extra;
-    for (const auto &path : paths)
-    {
-        if (!already.insert(path.sentence).second)
-            continue;
+    const auto first_distinct = [&](const std::vector<LatticePath> &ranked_paths) -> const LatticePath * {
+        for (const LatticePath &path : ranked_paths)
+        {
+            if (already.find(path.sentence) != already.end())
+            {
+                if (options.show_next_on_duplicate)
+                    continue;
+                break;
+            }
+            return &path;
+        }
+        return nullptr;
+    };
+    const auto select_distinct = [&](const std::vector<LatticePath> &ranked_paths,
+                                     CandidateSource source) -> std::optional<WordItem> {
+        const LatticePath *path = first_distinct(ranked_paths);
+        if (path == nullptr)
+            return std::nullopt;
+        already.insert(path->sentence);
         // Often negative (log-space). Ranking is insert order, not weight.
-        const auto weight = static_cast<std::int64_t>(path.log_prob * 1000.0);
-        extra.emplace_back(typed_pinyin, path.sentence, weight, CandidateSource::Generated, path.key);
+        const auto weight = static_cast<std::int64_t>(path->log_prob * 1000.0);
+        return WordItem(typed_pinyin, path->sentence, weight, source, path->key);
+    };
+
+    // Existing rows include Unigram, so Trigram avoids it before the neural models choose their rows.
+    std::optional<WordItem> trigram_item;
+    std::optional<WordItem> keyboard_item;
+    std::optional<WordItem> desktop_item;
+    if (options.include_lattice_best)
+        trigram_item = select_distinct(paths, CandidateSource::Generated);
+    const bool trigram_consensus = trigram_item && trigram_item->word == paths.front().sentence &&
+                                   (source_prefers(keyboard_paths, paths.front().sentence) ||
+                                    source_prefers(desktop_paths, paths.front().sentence));
+    bool keyboard_before_desktop = false;
+    if (keyboard_paths && desktop_paths)
+    {
+        // Compare each model's best row after excluding Unigram and Trigram, but before the neural
+        // models exclude each other. Keyboard owns a shared best; otherwise desktop keeps its own
+        // best and is displayed first.
+        const LatticePath *keyboard_best = first_distinct(*keyboard_paths);
+        const LatticePath *desktop_best = first_distinct(*desktop_paths);
+        keyboard_before_desktop =
+            keyboard_best != nullptr && desktop_best != nullptr && keyboard_best->sentence == desktop_best->sentence;
+        if (keyboard_before_desktop)
+        {
+            keyboard_item = select_distinct(*keyboard_paths, CandidateSource::NeuralKeyboard);
+            desktop_item = select_distinct(*desktop_paths, CandidateSource::NeuralDesktop);
+        }
+        else
+        {
+            desktop_item = select_distinct(*desktop_paths, CandidateSource::NeuralDesktop);
+            keyboard_item = select_distinct(*keyboard_paths, CandidateSource::NeuralKeyboard);
+        }
     }
+    else if (keyboard_paths)
+    {
+        keyboard_item = select_distinct(*keyboard_paths, CandidateSource::NeuralKeyboard);
+    }
+    // When both neural modes are enabled, desktop waits for keyboard to finish. Otherwise desktop
+    // could briefly claim keyboard's best distinct row and then visibly change on the next query.
+    else if (desktop_paths && !keyboard_enabled)
+        desktop_item = select_distinct(*desktop_paths, CandidateSource::NeuralDesktop);
+
+    std::vector<WordItem> other_items;
+    for (const auto &[ranked_paths, source] : other_ranked_sources)
+    {
+        if (auto item = select_distinct(ranked_paths, source))
+            other_items.push_back(std::move(*item));
+    }
+
+    std::optional<WordItem> promoted_unigram;
+    if (unigram_consensus)
+    {
+        promoted_unigram = std::move(*unigram_position);
+        candidates.erase(unigram_position);
+    }
+
+    // Consensus from another source promotes Unigram first and Trigram ahead of neural rows. A
+    // shared neural best belongs to keyboard; when the neural best rows differ, desktop goes first.
+    std::vector<WordItem> extra;
+    if (promoted_unigram)
+        extra.push_back(std::move(*promoted_unigram));
+    if (trigram_consensus)
+        extra.push_back(std::move(*trigram_item));
+    if (keyboard_before_desktop)
+    {
+        if (keyboard_item)
+            extra.push_back(std::move(*keyboard_item));
+        if (desktop_item)
+            extra.push_back(std::move(*desktop_item));
+    }
+    else
+    {
+        if (desktop_item)
+            extra.push_back(std::move(*desktop_item));
+        if (keyboard_item)
+            extra.push_back(std::move(*keyboard_item));
+    }
+    extra.insert(extra.end(), std::make_move_iterator(other_items.begin()), std::make_move_iterator(other_items.end()));
+    if (trigram_item && !trigram_consensus)
+        extra.push_back(std::move(*trigram_item));
     if (extra.empty())
         return;
 
     const size_t insert_at = generated_sentence_insert_position(candidates, syllables);
     candidates.insert(candidates.begin() + static_cast<std::ptrdiff_t>(insert_at), extra.begin(), extra.end());
+}
+
+void merge_lattice_candidates(std::vector<WordItem> &candidates, const Segments &syllables,
+                              const WordLatticeLookup &lookup, const std::string &typed_pinyin,
+                              const WordLatticeOptions &options, const LatticeReranker &rerank,
+                              CandidateSource rerank_source)
+{
+    std::vector<SourcedLatticeReranker> rerankers;
+    if (rerank)
+        rerankers.push_back({rerank, rerank_source});
+    merge_lattice_candidates(candidates, syllables, lookup, typed_pinyin, options, rerankers);
 }
 
 } // namespace quanpin
